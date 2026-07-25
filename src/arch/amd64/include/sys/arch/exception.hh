@@ -4,6 +4,13 @@
 
 namespace sys::arch::exception
 {
+    struct frame_t {
+        u64 x[31]{};
+        u64 vector{};
+        u64 stack_pointer{};
+        u64 instruction_pointer{};
+        u64 status{};
+    };
     inline void initialize_current_el() noexcept {}
 
     [[nodiscard]]

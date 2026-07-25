@@ -9,6 +9,10 @@
 #include <sys/arch/exception.hh>
 #include <sys/arch/smp.hh>
 #include <sys/arch/timer.hh>
+#include <sys/arch/thread/context.hh>
+#include <sys/arch/thread/entry.hh>
+#include <sys/arch/space/address_space.hh>
+#include <sys/arch/syscall/entry.hh>
 
 namespace sys::arch
 {

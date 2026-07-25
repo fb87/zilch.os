@@ -4,15 +4,15 @@
 
 namespace sys::abi::v1
 {
-    enum class Syscall : u32
+    enum class syscall : word_t
     {
-        ipc_call = 0U,
-        ipc_send = 1U,
-        ipc_receive = 2U,
-        thread_control = 3U,
-        space_control = 4U,
-        interrupt_control = 5U,
-        memory_control = 6U,
-        hypervisor_control = 7U
+        ipc = 0U,
     };
+
+    enum class ipc_operation : word_t
+    {
+        call = 0U,
+    };
+
+    inline constexpr capability_id_t debug_endpoint = 1U;
 } // namespace sys::abi::v1

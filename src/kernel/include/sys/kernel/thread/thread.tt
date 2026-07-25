@@ -1,0 +1,2 @@
+#include "thread.hh"
+static_assert(sizeof(sys::kernel::thread::thread) > 0U);

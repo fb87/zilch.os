@@ -53,42 +53,15 @@ sys_arm64_vectors_el2:
   b \common
 .endm
 
-vector_stub el1_vector_0, el1_common, 0
-vector_stub el1_vector_1, el1_common, 1
-vector_stub el1_vector_2, el1_common, 2
-vector_stub el1_vector_3, el1_common, 3
-vector_stub el1_vector_4, el1_common, 4
-vector_stub el1_vector_5, el1_common, 5
-vector_stub el1_vector_6, el1_common, 6
-vector_stub el1_vector_7, el1_common, 7
-vector_stub el1_vector_8, el1_common, 8
-vector_stub el1_vector_9, el1_common, 9
-vector_stub el1_vector_10, el1_common, 10
-vector_stub el1_vector_11, el1_common, 11
-vector_stub el1_vector_12, el1_common, 12
-vector_stub el1_vector_13, el1_common, 13
-vector_stub el1_vector_14, el1_common, 14
-vector_stub el1_vector_15, el1_common, 15
-
-vector_stub el2_vector_0, el2_common, 0
-vector_stub el2_vector_1, el2_common, 1
-vector_stub el2_vector_2, el2_common, 2
-vector_stub el2_vector_3, el2_common, 3
-vector_stub el2_vector_4, el2_common, 4
-vector_stub el2_vector_5, el2_common, 5
-vector_stub el2_vector_6, el2_common, 6
-vector_stub el2_vector_7, el2_common, 7
-vector_stub el2_vector_8, el2_common, 8
-vector_stub el2_vector_9, el2_common, 9
-vector_stub el2_vector_10, el2_common, 10
-vector_stub el2_vector_11, el2_common, 11
-vector_stub el2_vector_12, el2_common, 12
-vector_stub el2_vector_13, el2_common, 13
-vector_stub el2_vector_14, el2_common, 14
-vector_stub el2_vector_15, el2_common, 15
+.irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+  vector_stub el1_vector_\n, el1_common, \n
+.endr
+.irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+  vector_stub el2_vector_\n, el2_common, \n
+.endr
 
 .macro save_and_call level
-  sub sp, sp, #272
+  sub sp, sp, #288
   stp x0, x1, [sp, #0]
   stp x2, x3, [sp, #16]
   stp x4, x5, [sp, #32]
@@ -97,7 +70,7 @@ vector_stub el2_vector_15, el2_common, 15
   stp x10, x11, [sp, #80]
   stp x12, x13, [sp, #96]
   stp x14, x15, [sp, #112]
-  ldp x0, x1, [sp, #272]
+  ldp x0, x1, [sp, #288]
   stp x0, x1, [sp, #128]
   stp x18, x19, [sp, #144]
   stp x20, x21, [sp, #160]
@@ -107,9 +80,29 @@ vector_stub el2_vector_15, el2_common, 15
   stp x28, x29, [sp, #224]
   str x30, [sp, #240]
   str x16, [sp, #248]
+  mrs x0, sp_el0
+  str x0, [sp, #256]
+.if \level == 1
+  mrs x0, elr_el1
+  mrs x1, spsr_el1
+.else
+  mrs x0, elr_el2
+  mrs x1, spsr_el2
+.endif
+  stp x0, x1, [sp, #264]
   mov x0, sp
   mov x1, #\level
   bl sys_arm64_exception_handler
+  ldr x0, [sp, #256]
+  msr sp_el0, x0
+  ldp x0, x1, [sp, #264]
+.if \level == 1
+  msr elr_el1, x0
+  msr spsr_el1, x1
+.else
+  msr elr_el2, x0
+  msr spsr_el2, x1
+.endif
   ldr x30, [sp, #240]
   ldp x28, x29, [sp, #224]
   ldp x26, x27, [sp, #208]
@@ -126,7 +119,7 @@ vector_stub el2_vector_15, el2_common, 15
   ldp x4, x5, [sp, #32]
   ldp x2, x3, [sp, #16]
   ldp x0, x1, [sp, #0]
-  add sp, sp, #288
+  add sp, sp, #304
   eret
 .endm
 
@@ -135,3 +128,31 @@ el1_common:
   save_and_call 1
 el2_common:
   save_and_call 2
+
+.global sys_arm64_enter_el0
+.type sys_arm64_enter_el0, %function
+sys_arm64_enter_el0:
+  mov x16, x0
+  ldr x17, [x16, #256]
+  msr sp_el0, x17
+  ldp x17, x18, [x16, #264]
+  msr elr_el1, x17
+  msr spsr_el1, x18
+  ldp x0, x1, [x16, #0]
+  ldp x2, x3, [x16, #16]
+  ldp x4, x5, [x16, #32]
+  ldp x6, x7, [x16, #48]
+  ldp x8, x9, [x16, #64]
+  ldp x10, x11, [x16, #80]
+  ldp x12, x13, [x16, #96]
+  ldp x14, x15, [x16, #112]
+  ldp x18, x19, [x16, #144]
+  ldp x20, x21, [x16, #160]
+  ldp x22, x23, [x16, #176]
+  ldp x24, x25, [x16, #192]
+  ldp x26, x27, [x16, #208]
+  ldp x28, x29, [x16, #224]
+  ldr x30, [x16, #240]
+  mov x16, xzr
+  mov x17, xzr
+  eret

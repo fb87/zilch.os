@@ -3,6 +3,7 @@
 #include <sys/arch/arch.hh>
 #include <sys/kernel/address_space.hh>
 #include <sys/kernel/capability.hh>
+#include <sys/kernel/thread/scheduler.hh>
 #include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/interrupt.hh>
 #include <sys/kernel/ipc.hh>
@@ -46,6 +47,7 @@ namespace sys::kernel
             arch::cpu::halt();
         }
         platform::timer::initialize();
+        arch::memory::initialize_cpu();
         scheduler::initialize_cpu();
         arch::smp::mark_online();
         arch::irq::enable();
@@ -64,6 +66,7 @@ namespace sys::kernel
                    static_cast<unsigned int>(arch::cpu::current_id()));
             arch::cpu::halt();
         }
+        arch::memory::initialize();
         scheduler::initialize();
         scheduler::initialize_cpu();
 
@@ -88,13 +91,6 @@ namespace sys::kernel
         pr_info("timer: initializing\n");
         platform::timer::initialize();
         pr_info("timer: initialized\n");
-        const u32 configured_cpus = platform::firmware::boot_info.cpu_count;
-        if (!scheduler_test::initialize(configured_cpus)) {
-            pr_err("scheduler test setup failed\n");
-            arch::cpu::halt();
-        }
-        pr_info("scheduler: per-cpu run queues ready workers=%u\n",
-                static_cast<unsigned int>(scheduler_test::worker_count));
         arch::smp::mark_online();
         pr_info("smp: boot CPU online\n");
 
@@ -110,6 +106,12 @@ namespace sys::kernel
                 static_cast<unsigned int>(arch::smp::online_count()),
                 static_cast<unsigned int>(expected),
                 online ? "online" : "timeout");
+        if constexpr (arch::space::user_available) {
+            thread::initialize_user_threads();
+            pr_info("user: address-spaces=%u threads=%u syscall=sys_ipc\n",
+                    static_cast<unsigned int>(thread::user_thread_count),
+                    static_cast<unsigned int>(thread::user_thread_count));
+        }
         if constexpr (arch::hypervisor::active) {
             pr_info("exceptions=EL1 hypervisor=EL2 gic=GICv3 timer=virtual@%uHz\n",
                     static_cast<unsigned int>(platform::timer::ticks_per_second));
@@ -165,28 +167,11 @@ namespace sys::kernel
                 timers_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected));
 
-        constexpr u64 scheduler_verification_ticks =
-            static_cast<u64>(scheduler_test::worker_count)
-            * static_cast<u64>(scheduler_test::report_count_per_worker)
-            * 4U;
-        const u64 scheduler_deadline =
-            platform::timer::ticks(0U) + scheduler_verification_ticks;
-
-        bool scheduler_online = false;
-        while (platform::timer::ticks(0U) < scheduler_deadline) {
-            scheduler_online = scheduler_test::complete();
-            if (scheduler_online) {
-                break;
-            }
-            arch::cpu::relax();
+        if constexpr (arch::space::user_available) {
+            pr_info("user: entering thread=0 in user mode with private address space\n");
+            thread::enter_first_user_thread();
         }
-
-        pr_info("scheduler threads=%u status=%s cpus=%u switches=%llu\n",
-                static_cast<unsigned int>(scheduler_test::worker_count),
-                scheduler_online ? "verified" : "timeout",
-                static_cast<unsigned int>(expected),
-                static_cast<unsigned long long>(scheduler::schedules(0U)));
-        pr_info("scheduler demo=running-forever\n");
         arch::cpu::halt();
+
     }
 } // namespace sys::kernel

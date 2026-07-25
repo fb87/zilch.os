@@ -8,6 +8,9 @@ namespace sys::arch::exception
     {
         u64 x[31];
         u64 vector;
+        u64 stack_pointer;
+        u64 instruction_pointer;
+        u64 status;
     };
 
     extern "C" char sys_arm64_vectors_el1[];
@@ -29,33 +32,16 @@ namespace sys::arch::exception
     [[nodiscard]] inline u64 syndrome(u32 level) noexcept
     {
         u64 value = 0U;
-        if (level == 2U) {
-            __asm__ volatile("mrs %0, esr_el2" : "=r"(value));
-        } else {
-            __asm__ volatile("mrs %0, esr_el1" : "=r"(value));
-        }
+        if (level == 2U) __asm__ volatile("mrs %0, esr_el2" : "=r"(value));
+        else __asm__ volatile("mrs %0, esr_el1" : "=r"(value));
         return value;
     }
 
     [[nodiscard]] inline u64 fault_address(u32 level) noexcept
     {
         u64 value = 0U;
-        if (level == 2U) {
-            __asm__ volatile("mrs %0, far_el2" : "=r"(value));
-        } else {
-            __asm__ volatile("mrs %0, far_el1" : "=r"(value));
-        }
-        return value;
-    }
-
-    [[nodiscard]] inline u64 return_address(u32 level) noexcept
-    {
-        u64 value = 0U;
-        if (level == 2U) {
-            __asm__ volatile("mrs %0, elr_el2" : "=r"(value));
-        } else {
-            __asm__ volatile("mrs %0, elr_el1" : "=r"(value));
-        }
+        if (level == 2U) __asm__ volatile("mrs %0, far_el2" : "=r"(value));
+        else __asm__ volatile("mrs %0, far_el1" : "=r"(value));
         return value;
     }
 } // namespace sys::arch::exception

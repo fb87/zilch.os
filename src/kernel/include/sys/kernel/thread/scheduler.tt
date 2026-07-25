@@ -1,0 +1,2 @@
+#include "scheduler.hh"
+static_assert(sys::kernel::thread::user_thread_count == 10U);

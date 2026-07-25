@@ -1,0 +1,2 @@
+#include "address_space.hh"
+static_assert(sizeof(sys::kernel::space::address_space) > 0U);
