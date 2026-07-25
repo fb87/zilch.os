@@ -1,0 +1,9 @@
+[system]
+name = "zilch-minimal"
+abi = "sys-v1"
+
+[[program]]
+name = "init"
+path = "/bin/init"
+role = "root-task"
+required = true

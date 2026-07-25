@@ -1,0 +1,85 @@
+             VMA              LMA     Size Align Out     In      Symbol
+               0                0   100000     1 . = 0x00100000
+          100000           100000        c     4 .multiboot
+          100000           100000        c     4         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.multiboot)
+          101000           101000      4a9  4096 .text
+          101000           101000       de     8         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text.boot)
+          101000           101000        0     1                 _start
+          10108d           10108d        0     1                 long_mode_entry
+          1010c0           1010c0        0     1                 gdt64
+          1010d8           1010d8        0     1                 gdt64_ptr
+          1010d8           1010d8        0     1                 gdt64_end
+          1010e0           1010e0        d    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v18arch_opsEv)
+          1010e0           1010e0        d     1                 sys::arch::v1::arch_ops()
+          1010f0           1010f0        8    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_111current_cpuEv)
+          1010f0           1010f0        8     1                 sys::arch::v1::(anonymous namespace)::current_cpu()
+          101100           101100        8    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_15relaxEv)
+          101100           101100        8     1                 sys::arch::v1::(anonymous namespace)::relax()
+          101110           101110        a    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_14haltEv)
+          101110           101110        a     1                 sys::arch::v1::(anonymous namespace)::halt()
+          101120           101120       16    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_112save_disableEv)
+          101120           101120       16     1                 sys::arch::v1::(anonymous namespace)::save_disable()
+          101140           101140       15    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_17restoreEm)
+          101140           101140       15     1                 sys::arch::v1::(anonymous namespace)::restore(unsigned long)
+          101160           101160        b    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_116unsupported_initEv)
+          101160           101160        b     1                 sys::arch::v1::(anonymous namespace)::unsupported_init()
+          101170           101170       15    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_17tlb_allEv)
+          101170           101170       15     1                 sys::arch::v1::(anonymous namespace)::tlb_all()
+          101190           101190       1b    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_118unsupported_stage2EmPm)
+          101190           101190       1b     1                 sys::arch::v1::(anonymous namespace)::unsupported_stage2(unsigned long, unsigned long*)
+          1011b0           1011b0       14    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_115unsupported_runEm)
+          1011b0           1011b0       14     1                 sys::arch::v1::(anonymous namespace)::unsupported_run(unsigned long)
+          1011d0           1011d0        d    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112platform_opsEv)
+          1011d0           1011d0        d     1                 sys::platform::v1::platform_ops()
+          1011e0           1011e0       6d    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14initEv)
+          1011e0           1011e0       6d     1                 sys::platform::v1::(anonymous namespace)::init()
+          101250           101250       3b    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14putcEc)
+          101250           101250       3b     1                 sys::platform::v1::(anonymous namespace)::putc(char)
+          101290           101290        b    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_18irq_initEv)
+          101290           101290        b     1                 sys::platform::v1::(anonymous namespace)::irq_init()
+          1012a0           1012a0        8    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_13ackEv)
+          1012a0           1012a0        8     1                 sys::platform::v1::(anonymous namespace)::ack()
+          1012b0           1012b0       11    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_18completeEj)
+          1012b0           1012b0       11     1                 sys::platform::v1::(anonymous namespace)::complete(unsigned int)
+          1012d0           1012d0        d    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14bootEv)
+          1012d0           1012d0        d     1                 sys::platform::v1::(anonymous namespace)::boot()
+          1012e0           1012e0       23    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14outbEth)
+          1012e0           1012e0       23     1                 sys::platform::v1::(anonymous namespace)::outb(unsigned short, unsigned char)
+          101310           101310       20    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_13inbEt)
+          101310           101310       20     1                 sys::platform::v1::(anonymous namespace)::inb(unsigned short)
+          101330           101330       8f    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/kernel/built-in.o:(.text._ZN3sys6kernel5startEv)
+          101330           101330       8f     1                 sys::kernel::start()
+          1013c0           1013c0       39    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/kernel/built-in.o:(.text._ZN3sys6kernel12_GLOBAL__N_14putsEPKc)
+          1013c0           1013c0       39     1                 sys::kernel::(anonymous namespace)::puts(char const*)
+          101400           101400       23    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/kernel/built-in.o:(.text._ZN3sys6kernel12_GLOBAL__N_14putcEc)
+          101400           101400       23     1                 sys::kernel::(anonymous namespace)::putc(char)
+          101430           101430       64    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/kernel/built-in.o:(.text._ZN3sys6kernel12_GLOBAL__N_13hexEm)
+          101430           101430       64     1                 sys::kernel::(anonymous namespace)::hex(unsigned long)
+          1014a0           1014a0        9    16         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/kernel/built-in.o:(.text.sys_kernel_entry)
+          1014a0           1014a0        9     1                 sys_kernel_entry
+          102000           102000      160  4096 .rodata
+          102000           102000       68     8         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.rodata._ZN3sys4arch2v112_GLOBAL__N_13opsE)
+          102000           102000       68     1                 sys::arch::v1::(anonymous namespace)::ops
+          102068           102068       40     8         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.rodata._ZN3sys8platform2v112_GLOBAL__N_13opsE)
+          102068           102068       40     1                 sys::platform::v1::(anonymous namespace)::ops
+          1020a8           1020a8       92     1         <internal>:(.rodata.str1.1)
+          102140           102140       20     8         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/platform/qemu-amd64-q35/built-in.o:(.rodata._ZN3sys8platform2v112_GLOBAL__N_14infoE)
+          102140           102140       20     1                 sys::platform::v1::(anonymous namespace)::info
+          103000           103000     7000  4096 .bss
+          103000           103000        0     1         __bss_start = .
+          103000           103000     7000  4096         /var/home/dao/work/zilch-ng/build/amd64/qemu-amd64-q35/arch/amd64/built-in.o:(.bss)
+          103000           103000        0     1                 pml4
+          104000           104000        0     1                 pdpt
+          105000           105000        0     1                 pd
+          106000           106000        0     1                 boot_stack32
+          10a000           10a000        0     1                 boot_stack32_top
+          10a000           10a000        0     1         __bss_end = .
+          10a000           10a000    10000    16 .stack
+          10a000           10a000    10000     1         . += 0x10000
+          11a000           11a000        0     1         __boot_stack_top = .
+               0                0      540     8 .symtab
+               0                0      540     8         <internal>:(.symtab)
+               0                0       40     1 .shstrtab
+               0                0       40     1         <internal>:(.shstrtab)
+               0                0      539     1 .strtab
+               0                0      539     1         <internal>:(.strtab)

@@ -1,0 +1,96 @@
+             VMA              LMA     Size Align Out     In      Symbol
+               0                0 40080000     1 . = 0x40080000
+        40080000         40080000      34c  4096 .text
+        40080000         40080000       70     8         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text.boot)
+        40080000         40080000        0     1                 $x
+        40080000         40080000        0     1                 _start
+        40080058         40080058        0     1                 $d
+        40080070         40080070        c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v18arch_opsEv)
+        40080070         40080070        0     1                 $x
+        40080070         40080070        c     1                 sys::arch::v1::arch_ops()
+        4008007c         4008007c       18     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_111current_cpuEv)
+        4008007c         4008007c       18     1                 sys::arch::v1::(anonymous namespace)::current_cpu()
+        4008007c         4008007c        0     1                 $x
+        40080094         40080094        8     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_15relaxEv)
+        40080094         40080094        8     1                 sys::arch::v1::(anonymous namespace)::relax()
+        40080094         40080094        0     1                 $x
+        4008009c         4008009c        c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_14haltEv)
+        4008009c         4008009c        c     1                 sys::arch::v1::(anonymous namespace)::halt()
+        4008009c         4008009c        0     1                 $x
+        400800a8         400800a8       1c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_112save_disableEv)
+        400800a8         400800a8       1c     1                 sys::arch::v1::(anonymous namespace)::save_disable()
+        400800a8         400800a8        0     1                 $x
+        400800c4         400800c4       18     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_17restoreEm)
+        400800c4         400800c4       18     1                 sys::arch::v1::(anonymous namespace)::restore(unsigned long)
+        400800c4         400800c4        0     1                 $x
+        400800dc         400800dc        8     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_116unsupported_initEv)
+        400800dc         400800dc        8     1                 sys::arch::v1::(anonymous namespace)::unsupported_init()
+        400800dc         400800dc        0     1                 $x
+        400800e4         400800e4       14     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_17tlb_allEv)
+        400800e4         400800e4       14     1                 sys::arch::v1::(anonymous namespace)::tlb_all()
+        400800e4         400800e4        0     1                 $x
+        400800f8         400800f8       18     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_118unsupported_stage2EmPm)
+        400800f8         400800f8       18     1                 sys::arch::v1::(anonymous namespace)::unsupported_stage2(unsigned long, unsigned long*)
+        400800f8         400800f8        0     1                 $x
+        40080110         40080110       14     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.text._ZN3sys4arch2v112_GLOBAL__N_115unsupported_runEm)
+        40080110         40080110       14     1                 sys::arch::v1::(anonymous namespace)::unsupported_run(unsigned long)
+        40080110         40080110        0     1                 $x
+        40080124         40080124        c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112platform_opsEv)
+        40080124         40080124        0     1                 $x
+        40080124         40080124        c     1                 sys::platform::v1::platform_ops()
+        40080130         40080130        4     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14initEv)
+        40080130         40080130        4     1                 sys::platform::v1::(anonymous namespace)::init()
+        40080130         40080130        0     1                 $x
+        40080134         40080134       48     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14putcEc)
+        40080134         40080134       48     1                 sys::platform::v1::(anonymous namespace)::putc(char)
+        40080134         40080134        0     1                 $x
+        4008017c         4008017c        8     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_18irq_initEv)
+        4008017c         4008017c        8     1                 sys::platform::v1::(anonymous namespace)::irq_init()
+        4008017c         4008017c        0     1                 $x
+        40080184         40080184        8     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_13ackEv)
+        40080184         40080184        8     1                 sys::platform::v1::(anonymous namespace)::ack()
+        40080184         40080184        0     1                 $x
+        4008018c         4008018c       10     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_18completeEj)
+        4008018c         4008018c       10     1                 sys::platform::v1::(anonymous namespace)::complete(unsigned int)
+        4008018c         4008018c        0     1                 $x
+        4008019c         4008019c        c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.text._ZN3sys8platform2v112_GLOBAL__N_14bootEv)
+        4008019c         4008019c        c     1                 sys::platform::v1::(anonymous namespace)::boot()
+        4008019c         4008019c        0     1                 $x
+        400801a8         400801a8       a0     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/kernel/built-in.o:(.text._ZN3sys6kernel5startEv)
+        400801a8         400801a8        0     1                 $x
+        400801a8         400801a8       a0     1                 sys::kernel::start()
+        40080248         40080248       48     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/kernel/built-in.o:(.text._ZN3sys6kernel12_GLOBAL__N_14putsEPKc)
+        40080248         40080248       48     1                 sys::kernel::(anonymous namespace)::puts(char const*)
+        40080248         40080248        0     1                 $x
+        40080290         40080290       2c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/kernel/built-in.o:(.text._ZN3sys6kernel12_GLOBAL__N_14putcEc)
+        40080290         40080290       2c     1                 sys::kernel::(anonymous namespace)::putc(char)
+        40080290         40080290        0     1                 $x
+        400802bc         400802bc       84     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/kernel/built-in.o:(.text._ZN3sys6kernel12_GLOBAL__N_13hexEm)
+        400802bc         400802bc       84     1                 sys::kernel::(anonymous namespace)::hex(unsigned long)
+        400802bc         400802bc        0     1                 $x
+        40080340         40080340        c     4         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/kernel/built-in.o:(.text.sys_kernel_entry)
+        40080340         40080340        0     1                 $x
+        40080340         40080340        c     1                 sys_kernel_entry
+        40081000         40081000      170  4096 .rodata
+        40081000         40081000       68     8         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/arch/arm64/built-in.o:(.rodata._ZN3sys4arch2v112_GLOBAL__N_13opsE)
+        40081000         40081000       68     1                 sys::arch::v1::(anonymous namespace)::ops
+        40081000         40081000        0     1                 $d
+        40081068         40081068       40     8         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.rodata._ZN3sys8platform2v112_GLOBAL__N_13opsE)
+        40081068         40081068       40     1                 sys::platform::v1::(anonymous namespace)::ops
+        40081068         40081068        0     1                 $d
+        400810a8         400810a8       a4     1         <internal>:(.rodata.str1.1)
+        40081150         40081150       20     8         /var/home/dao/work/zilch-ng/build/arm64/qemu-arm64-virt/platform/qemu-arm64-virt/built-in.o:(.rodata._ZN3sys8platform2v112_GLOBAL__N_14infoE)
+        40081150         40081150       20     1                 sys::platform::v1::(anonymous namespace)::info
+        40081150         40081150        0     1                 $d
+        40082000         40082000        0  4096 .bss
+        40082000         40082000        0     1         __bss_start = .
+        40082000         40082000        0     1         __bss_end = .
+        40082000         40082000    10000    16 .stack
+        40082000         40082000    10000     1         . += 0x10000
+        40092000         40092000        0     1         __boot_stack_top = .
+               0                0      678     8 .symtab
+               0                0      678     8         <internal>:(.symtab)
+               0                0       35     1 .shstrtab
+               0                0       35     1         <internal>:(.shstrtab)
+               0                0      4c4     1 .strtab
+               0                0      4c4     1         <internal>:(.strtab)
