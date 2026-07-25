@@ -6,14 +6,19 @@
 .extern __bss_start
 .extern __bss_end
 .extern __cpu_stacks_start
+.extern __hypervisor_stacks_start
 
-.macro select_cpu_stack
+.macro load_cpu_stack symbol, destination
   mrs x9, mpidr_el1
   and x9, x9, #0xff
-  ldr x10, =__cpu_stacks_start
+  ldr x10, =\symbol
   add x9, x9, #1
   lsl x9, x9, #14
-  add x10, x10, x9
+  add \destination, x10, x9
+.endm
+
+.macro select_kernel_stack
+  load_cpu_stack __cpu_stacks_start, x10
   mov sp, x10
 .endm
 
@@ -22,10 +27,18 @@
   cmp x11, #(2 << 2)
   b.ne \target
 
-  /* Keep the incoming EL2 vector table so firmware PSCI HVC remains usable. */
-  /* EL1h uses SP_EL1, not the SP selected while executing at EL2. */
-  mov x11, sp
-  msr sp_el1, x11
+  /* EL2 must use memory distinct from the live EL1 kernel stack. */
+  load_cpu_stack __hypervisor_stacks_start, x10
+  mov sp, x10
+
+  /* EL1h uses its dedicated per-CPU kernel stack through SP_EL1. */
+  load_cpu_stack __cpu_stacks_start, x10
+  msr sp_el1, x10
+
+  /* Zilch owns EL2 vectors; platform PSCI remains available through SMC. */
+  adr x11, sys_arm64_vectors_el2
+  msr vbar_el2, x11
+  isb
 
   /* Enable the GIC system-register interface for EL1. */
   mov x11, #0xf
@@ -33,6 +46,8 @@
   isb
 
   msr cntvoff_el2, xzr
+  mov x11, #3
+  msr cnthctl_el2, x11
   mov x11, #(1 << 31)
   msr hcr_el2, x11
   mov x11, #0x3c5
@@ -44,12 +59,11 @@
 .endm
 
 _start:
-  select_cpu_stack
   enter_el1 .Lboot_el1
 
 .Lboot_el1:
-  /* Re-select SP after EL transition so direct EL1 and EL2 boot agree. */
-  select_cpu_stack
+  /* Direct EL1 boot and EL2 boot converge on the kernel stack. */
+  select_kernel_stack
 
   ldr x0, =__bss_start
   ldr x1, =__bss_end
@@ -66,11 +80,10 @@ _start:
   b .Lboot_halt
 
 _secondary_start:
-  select_cpu_stack
   enter_el1 .Lsecondary_el1
 
 .Lsecondary_el1:
-  select_cpu_stack
+  select_kernel_stack
   bl sys_kernel_secondary_entry
 .Lsecondary_halt:
   wfe

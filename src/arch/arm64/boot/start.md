@@ -15,10 +15,11 @@ Provide the minimum assembly bridge required to enter the C++ kernel on the boot
 
 ## Responsibilities
 
-- Select a dedicated stack from the CPU affinity ID.
+- Select distinct per-CPU kernel and hypervisor stacks from the CPU affinity ID.
 - Normalize EL2 entry to EL1h.
-- Initialize `SP_EL1` before returning to EL1h.
-- Preserve the incoming EL2 vector table so firmware PSCI HVC remains available.
+- Initialize `SP_EL1` with the kernel stack before returning to EL1h.
+- Keep `SP_EL2` on a separate hypervisor stack so EL2 exceptions cannot overwrite live EL1 frames.
+- Install Zilch EL2 vectors while preserving firmware PSCI through the SMC conduit.
 - Enable the GIC system-register interface for EL1.
 - Clear BSS on the boot CPU only.
 - Call the C++ boot or secondary entry point.
@@ -28,7 +29,8 @@ Provide the minimum assembly bridge required to enter the C++ kernel on the boot
 - C++ is never entered with an uninitialized stack.
 - Secondary CPUs do not clear BSS.
 - Both direct EL1 entry and EL2 entry reach the same EL1 C++ execution model.
-- Zilch does not take ownership of EL2 until an EL2 monitor can forward PSCI calls.
+- EL1 and EL2 stack ranges never overlap.
+- PSCI remains on SMC; HVC is reserved for the Zilch hypervisor ABI.
 
 ## Non-responsibilities
 

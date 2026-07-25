@@ -36,6 +36,11 @@ namespace sys::kernel
                 static_cast<unsigned int>(arch::cpu::current_id()),
                 static_cast<unsigned int>(arch::exception::current_el()));
         arch::exception::initialize_current_el();
+        if (!arch::hypervisor::initialize_cpu()) {
+            pr_err("hypervisor self-test failed cpu=%u\n",
+                   static_cast<unsigned int>(arch::cpu::current_id()));
+            arch::cpu::halt();
+        }
         const error_t interrupt_result = platform::interrupt::initialize_cpu();
         if (interrupt_result != error_t::success) {
             arch::cpu::halt();
@@ -54,6 +59,11 @@ namespace sys::kernel
         platform::console::initialize();
         arch::cpu::initialize_boot_cpu();
         arch::exception::initialize_current_el();
+        if (!arch::hypervisor::initialize_cpu()) {
+            pr_err("hypervisor self-test failed cpu=%u\n",
+                   static_cast<unsigned int>(arch::cpu::current_id()));
+            arch::cpu::halt();
+        }
         scheduler::initialize();
         scheduler::initialize_cpu();
 
@@ -100,8 +110,16 @@ namespace sys::kernel
                 static_cast<unsigned int>(arch::smp::online_count()),
                 static_cast<unsigned int>(expected),
                 online ? "online" : "timeout");
-        pr_info("exceptions=EL1 el2=firmware gic=GICv3 timer=virtual@%uHz\n",
-                static_cast<unsigned int>(platform::timer::ticks_per_second));
+        if constexpr (arch::hypervisor::active) {
+            pr_info("exceptions=EL1 hypervisor=EL2 gic=GICv3 timer=virtual@%uHz\n",
+                    static_cast<unsigned int>(platform::timer::ticks_per_second));
+            pr_info("hypervisor cpus=%u/%u hvc=verified\n",
+                    static_cast<unsigned int>(arch::hypervisor::verified_count()),
+                    static_cast<unsigned int>(expected));
+        } else {
+            pr_info("exceptions=kernel hypervisor=inactive timer=%uHz\n",
+                    static_cast<unsigned int>(platform::timer::ticks_per_second));
+        }
 
         arch::irq::enable();
         pr_info("status=interrupts-enabled\n");

@@ -1,3 +1,4 @@
 #include "hypervisor.hh"
 
-static_assert(true, "module test placeholder");
+static_assert(sys::arch::hypervisor::available);
+static_assert(sys::arch::hypervisor::abi_version != 0U);

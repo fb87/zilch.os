@@ -13,5 +13,10 @@ SECTIONS
     . += 4 * 0x4000;
     __cpu_stacks_end = .;
   }
+  .hypervisor_stacks (NOLOAD) : ALIGN(16384) {
+    __hypervisor_stacks_start = .;
+    . += 4 * 0x4000;
+    __hypervisor_stacks_end = .;
+  }
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.init_array*) *(.fini_array*) }
 }

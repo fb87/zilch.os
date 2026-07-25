@@ -11,6 +11,14 @@ extern "C" void sys_arm64_exception_handler(
     sys::u64 level) noexcept
 {
     const sys::u64 vector = frame->vector;
+    const sys::u64 syndrome =
+        sys::arch::exception::syndrome(static_cast<sys::u32>(level));
+
+    if (level == 2U &&
+        sys::arch::hypervisor::dispatch(*frame, syndrome)) {
+        return;
+    }
+
     if ((vector & 0x3U) == 1U) {
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
@@ -36,7 +44,7 @@ extern "C" void sys_arm64_exception_handler(
     pr_err("exception el=%llu vector=%llu esr=%llx far=%llx elr=%llx\n",
            static_cast<unsigned long long>(level),
            static_cast<unsigned long long>(vector),
-           static_cast<unsigned long long>(sys::arch::exception::syndrome(static_cast<sys::u32>(level))),
+           static_cast<unsigned long long>(syndrome),
            static_cast<unsigned long long>(sys::arch::exception::fault_address(static_cast<sys::u32>(level))),
            static_cast<unsigned long long>(sys::arch::exception::return_address(static_cast<sys::u32>(level))));
     sys::arch::cpu::halt();
