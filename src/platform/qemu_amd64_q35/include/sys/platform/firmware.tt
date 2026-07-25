@@ -1,0 +1,3 @@
+#include "firmware.hh"
+
+static_assert(true, "module test placeholder");

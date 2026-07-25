@@ -1,0 +1,3 @@
+#include "capability.hh"
+
+static_assert(true, "module test placeholder");

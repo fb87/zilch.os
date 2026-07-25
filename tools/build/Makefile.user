@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+USER_OBJDIR := $(OBJTREE)/user
+USER_ELF := $(USER_OBJDIR)/init.elf
+USER_MAP := $(USER_OBJDIR)/init.map
+USER_SOURCES := \
+    src/user/init/main.cc \
+    src/user/lib/libsys/syscall.cc \
+    src/user/lib/libruntime/runtime.cc \
+    src/user/runtime/startup/process_entry.cc
+USER_OBJECTS := $(addprefix $(USER_OBJDIR)/,$(USER_SOURCES:.cc=.o))
+USER_CRT := $(USER_OBJDIR)/src/user/runtime/crt/$(ARCH)/start.o
+USER_LDSCRIPT := $(SRCTREE)/src/user/runtime/linker/user-$(ARCH).ld
+USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) \
+    -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi
+USER_CXXFLAGS := $(KBUILD_CXXFLAGS)
+USER_AFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) -ffreestanding
+
+.PHONY: userspace
+userspace: $(USER_ELF)
+
+$(USER_ELF): $(USER_CRT) $(USER_OBJECTS) $(USER_LDSCRIPT)
+	@mkdir -p $(dir $@)
+	@printf '  ULD     %s\n' '$@'
+	@$(LD) $(LD_EMULATION) -T $(USER_LDSCRIPT) --gc-sections --build-id=none \
+		-Map=$(USER_MAP) -o $@ $(USER_CRT) $(USER_OBJECTS)
+
+$(USER_OBJDIR)/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(USER_OBJDIR)/src/user/runtime/crt/$(ARCH)/%.o: $(SRCTREE)/src/user/runtime/crt/$(ARCH)/%.S
+	@mkdir -p $(dir $@)
+	@printf '  UAS     %s\n' '$@'
+	@$(CC) $(USER_AFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+-include $(USER_OBJECTS:.o=.d) $(USER_CRT:.o=.d)

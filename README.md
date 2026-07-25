@@ -1,45 +1,36 @@
-# Zilch L4 Microkernel Skeleton
+# Zilch L4 microkernel
 
-A dual-architecture, dual-platform, restricted C++20 L4-style microkernel and
-userspace skeleton.
+A restricted-C++20, header-oriented L4 microkernel skeleton for ARM64/QEMU virt and AMD64/QEMU q35.
 
-Supported pairs:
+## Repository convention
 
-- `ARCH=arm64 PLATFORM=qemu-arm64-virt`
-- `ARCH=amd64 PLATFORM=qemu-amd64-q35`
+- `include/abi/`: stable C-compatible kernel/userspace ABI (`.h`)
+- `include/sys/`: shared restricted-C++ contracts (`.hh`)
+- `src/`: product implementation, colocated module docs and tests
+- `tools/`: build, run, release, image and future collection tooling
+- `out/`: all generated artifacts
 
-Build a complete development bundle for one target:
+A module is represented by `module.hh`, `module.md`, and `module.tt`. Linkage anchors use `module.cc`; architecture startup uses `.S`.
+
+## Build
 
 ```sh
 make arm64
 make amd64
-```
-
-Each build produces:
-
-```text
-build/<arch>/<platform>/
-├── zilch.elf
-├── zilch.bin
-├── zilch.map
-├── user/init.elf
-├── user/init.map
-└── image/earlyfs.tar
-```
-
-Run either kernel with the unified runner:
-
-```sh
-./scripts/run.sh build/arm64/qemu-arm64-virt/zilch.elf
-./scripts/run.sh build/amd64/qemu-amd64-q35/zilch.elf
-```
-
-The current kernel boot path reaches its diagnostic marker. Userspace is built
-and packaged now, but kernel-side ELF loading, root-task address-space creation,
-capability bootstrap, and PL3 entry remain planned milestones.
-
-Create a dual-target source/system release:
-
-```sh
+make format-check
 make release VERSION=0.1.0
 ```
+
+## File conventions
+
+- `.cc`: C++ translation unit
+- `.hh`: C++ interface or inline implementation
+- `.S`: preprocessed assembly
+- `.md`: colocated module design
+- `.tt`: colocated module tests
+
+The tree intentionally contains no project-owned `.h` headers.
+
+## Kernel logging
+
+`printk`, `pr_info`, `pr_warn`, `pr_err`, and `pr_debug` retain a printf-like call interface. The freestanding implementation uses compile-time C++ argument dispatch rather than `va_list`, avoiding early-boot variadic ABI dependencies. Supported conversions are `%c`, `%s`, `%d`, `%i`, `%u`, `%x`, `%X`, `%p`, and `%%`, with optional `l`, `ll`, or `z` length markers.

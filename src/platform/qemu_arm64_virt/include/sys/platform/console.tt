@@ -1,0 +1,3 @@
+#include "console.hh"
+
+static_assert(true, "module test placeholder");

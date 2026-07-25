@@ -1,0 +1,141 @@
+#pragma once
+
+#include <sys/arch/arch.hh>
+#include <sys/kernel/address_space.hh>
+#include <sys/kernel/capability.hh>
+#include <sys/kernel/hypervisor.hh>
+#include <sys/kernel/interrupt.hh>
+#include <sys/kernel/ipc.hh>
+#include <sys/kernel/printk.hh>
+#include <sys/kernel/scheduler.hh>
+#include <sys/kernel/thread.hh>
+#include <sys/platform/platform.hh>
+
+namespace sys::kernel
+{
+    inline constexpr const char* name = "zilch";
+    inline constexpr u16 version_major = 0U;
+    inline constexpr u16 version_minor = 2U;
+    inline constexpr u16 version_patch = 0U;
+
+    inline void verify_contracts() noexcept
+    {
+        static_assert(arch::v1::compatible(arch::version));
+        static_assert(platform::v1::compatible(platform::version));
+        static_assert(arch::v1::valid_page_geometry(
+            arch::memory::page_shift,
+            arch::memory::virtual_address_bits,
+            arch::memory::physical_address_bits));
+    }
+
+    [[noreturn]] inline void start_secondary() noexcept
+    {
+        platform::console::initialize();
+        pr_info("smp: secondary entered cpu=%u el=%u\n",
+                static_cast<unsigned int>(arch::cpu::current_id()),
+                static_cast<unsigned int>(arch::exception::current_el()));
+        arch::exception::initialize_current_el();
+        const error_t interrupt_result = platform::interrupt::initialize_cpu();
+        if (interrupt_result != error_t::success) {
+            arch::cpu::halt();
+        }
+        platform::timer::initialize();
+        arch::smp::mark_online();
+        arch::irq::enable();
+        arch::cpu::halt();
+    }
+
+    [[noreturn]] inline void start() noexcept
+    {
+        verify_contracts();
+
+        platform::console::initialize();
+        arch::cpu::initialize_boot_cpu();
+        arch::exception::initialize_current_el();
+        scheduler::initialize();
+
+        pr_info("%s L4 microkernel %u.%u.%u\n", name,
+                static_cast<unsigned int>(version_major),
+                static_cast<unsigned int>(version_minor),
+                static_cast<unsigned int>(version_patch));
+        pr_info("arch=%s platform=%s word_bits=%u el=%u\n",
+                arch::name,
+                platform::name,
+                static_cast<unsigned int>(word_bits),
+                static_cast<unsigned int>(arch::exception::current_el()));
+
+        pr_info("gic: initializing distributor and boot CPU interface\n");
+        const error_t interrupt_result = platform::interrupt::initialize();
+        if (interrupt_result != error_t::success) {
+            pr_err("interrupt initialization failed=%d\n", static_cast<int>(interrupt_result));
+            arch::cpu::halt();
+        }
+
+        pr_info("gic: initialized\n");
+        pr_info("timer: initializing\n");
+        platform::timer::initialize();
+        pr_info("timer: initialized\n");
+        arch::smp::mark_online();
+        pr_info("smp: boot CPU online\n");
+
+        const error_t smp_result = arch::smp::boot_secondary_cpus();
+        if (smp_result != error_t::success) {
+            pr_err("secondary CPU startup failed=%d\n", static_cast<int>(smp_result));
+            arch::cpu::halt();
+        }
+
+        const u32 expected = platform::firmware::boot_info.cpu_count;
+        const bool online = arch::smp::wait_until_online(expected, 1000000U);
+        pr_info("smp cpus=%u/%u status=%s\n",
+                static_cast<unsigned int>(arch::smp::online_count()),
+                static_cast<unsigned int>(expected),
+                online ? "online" : "timeout");
+        pr_info("exceptions=EL1 el2=firmware gic=GICv3 timer=virtual@%uHz\n",
+                static_cast<unsigned int>(platform::timer::ticks_per_second));
+
+        arch::irq::enable();
+        pr_info("status=interrupts-enabled\n");
+
+        platform::interrupt::send_ipi_all_others(
+            platform::interrupt::reschedule_ipi);
+
+        bool ipi_online = false;
+        for (u64 spins = 1000000U; spins != 0U; --spins) {
+            ipi_online = true;
+            for (u32 cpu_id = 1U; cpu_id < expected; ++cpu_id) {
+                if (arch::smp::reschedule_ipis(cpu_id) == 0U) {
+                    ipi_online = false;
+                    break;
+                }
+            }
+            if (ipi_online) {
+                break;
+            }
+            arch::cpu::relax();
+        }
+
+        pr_info("ipi reschedule=%s targets=%u\n",
+                ipi_online ? "verified" : "timeout",
+                static_cast<unsigned int>(expected - 1U));
+
+        bool timers_online = false;
+        for (u64 spins = 1000000U; spins != 0U; --spins) {
+            timers_online = true;
+            for (u32 cpu_id = 0U; cpu_id < expected; ++cpu_id) {
+                if (platform::timer::ticks(cpu_id) == 0U) {
+                    timers_online = false;
+                    break;
+                }
+            }
+            if (timers_online) {
+                break;
+            }
+            arch::cpu::relax();
+        }
+
+        pr_info("timer per-cpu=%s cpus=%u\n",
+                timers_online ? "verified" : "timeout",
+                static_cast<unsigned int>(expected));
+        arch::cpu::halt();
+    }
+} // namespace sys::kernel

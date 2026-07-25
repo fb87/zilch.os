@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+src := $(SRCTREE)/$(obj)
+out := $(OBJTREE)/$(obj)
+obj-y :=
+include $(src)/Makefile
+subdir-y := $(patsubst %/,%,$(filter %/,$(obj-y)))
+local-y := $(filter-out %/,$(obj-y))
+local-objs := $(addprefix $(out)/,$(local-y))
+subdir-objs := $(addsuffix /built-in.o,$(addprefix $(out)/,$(subdir-y)))
+builtin := $(out)/built-in.o
+.PHONY: __build
+__build: $(builtin)
+	@:
+$(builtin): $(local-objs) $(subdir-objs)
+	@mkdir -p $(dir $@)
+	@printf '  LD      %s\n' '$@'
+	@$(LD) -r -o $@ $^
+$(out)/%.o: $(src)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  CXX     %s\n' '$@'
+	@$(CXX) $(KBUILD_CPPFLAGS) $(KBUILD_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(out)/%.o: $(src)/%.S
+	@mkdir -p $(dir $@)
+	@printf '  AS      %s\n' '$@'
+	@$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_AFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(out)/%/built-in.o: FORCE
+	@$(MAKE) -s --no-print-directory -f $(SRCTREE)/tools/build/Makefile.build obj=$(obj)/$* __build
+.PHONY: FORCE
+FORCE:
+-include $(local-objs:.o=.d)

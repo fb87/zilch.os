@@ -1,0 +1,3 @@
+#include "ipc.hh"
+
+static_assert(true, "module test placeholder");

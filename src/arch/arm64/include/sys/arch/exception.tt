@@ -1,0 +1,3 @@
+#include "exception.hh"
+
+static_assert(sizeof(sys::arch::exception::frame_t) == 288U);
