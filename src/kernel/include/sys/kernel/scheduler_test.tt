@@ -1,0 +1,4 @@
+#include <sys/kernel/scheduler_test.hh>
+
+static_assert(sys::kernel::scheduler_test::worker_count == 10U);
+static_assert(sys::kernel::scheduler_test::report_count_per_worker == 3U);

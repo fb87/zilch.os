@@ -2,11 +2,29 @@
 
 #include <stdarg.h>
 
+#include <sys/arch/irq.hh>
+#include <sys/arch/cpu.hh>
 #include <sys/platform/platform.hh>
 #include <sys/types.hh>
 
 namespace sys::printk
 {
+    inline volatile u32 raw_lock{};
+
+    inline void lock() noexcept
+    {
+        while (__atomic_exchange_n(&raw_lock, 1U, __ATOMIC_ACQUIRE) != 0U) {
+            while (__atomic_load_n(&raw_lock, __ATOMIC_RELAXED) != 0U) {
+                arch::cpu::relax();
+            }
+        }
+    }
+
+    inline void unlock() noexcept
+    {
+        __atomic_store_n(&raw_lock, 0U, __ATOMIC_RELEASE);
+    }
+
     enum class length_t : u8 {
         none,
         l,
@@ -177,11 +195,18 @@ namespace sys::printk
         return static_cast<int>(count);
     }
 
-    inline int printk(const char* format, ...) noexcept {
+    inline int printk(const char* format, ...) noexcept
+    {
+        const arch::irq::irq_state_t irq_state = arch::irq::save_and_disable();
+        lock();
+
         va_list arguments;
         va_start(arguments, format);
         const int result = vprintk(format, arguments);
         va_end(arguments);
+
+        unlock();
+        arch::irq::restore(irq_state);
         return result;
     }
 } // namespace sys::printk

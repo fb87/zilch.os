@@ -8,6 +8,7 @@
 #include <sys/kernel/ipc.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
+#include <sys/kernel/scheduler_test.hh>
 #include <sys/kernel/thread.hh>
 #include <sys/platform/platform.hh>
 
@@ -40,6 +41,7 @@ namespace sys::kernel
             arch::cpu::halt();
         }
         platform::timer::initialize();
+        scheduler::initialize_cpu();
         arch::smp::mark_online();
         arch::irq::enable();
         arch::cpu::halt();
@@ -53,6 +55,7 @@ namespace sys::kernel
         arch::cpu::initialize_boot_cpu();
         arch::exception::initialize_current_el();
         scheduler::initialize();
+        scheduler::initialize_cpu();
 
         pr_info("%s L4 microkernel %u.%u.%u\n", name,
                 static_cast<unsigned int>(version_major),
@@ -75,6 +78,13 @@ namespace sys::kernel
         pr_info("timer: initializing\n");
         platform::timer::initialize();
         pr_info("timer: initialized\n");
+        const u32 configured_cpus = platform::firmware::boot_info.cpu_count;
+        if (!scheduler_test::initialize(configured_cpus)) {
+            pr_err("scheduler test setup failed\n");
+            arch::cpu::halt();
+        }
+        pr_info("scheduler: per-cpu run queues ready workers=%u\n",
+                static_cast<unsigned int>(scheduler_test::worker_count));
         arch::smp::mark_online();
         pr_info("smp: boot CPU online\n");
 
@@ -136,6 +146,29 @@ namespace sys::kernel
         pr_info("timer per-cpu=%s cpus=%u\n",
                 timers_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected));
+
+        constexpr u64 scheduler_verification_ticks =
+            static_cast<u64>(scheduler_test::worker_count)
+            * static_cast<u64>(scheduler_test::report_count_per_worker)
+            * 4U;
+        const u64 scheduler_deadline =
+            platform::timer::ticks(0U) + scheduler_verification_ticks;
+
+        bool scheduler_online = false;
+        while (platform::timer::ticks(0U) < scheduler_deadline) {
+            scheduler_online = scheduler_test::complete();
+            if (scheduler_online) {
+                break;
+            }
+            arch::cpu::relax();
+        }
+
+        pr_info("scheduler threads=%u status=%s cpus=%u switches=%llu\n",
+                static_cast<unsigned int>(scheduler_test::worker_count),
+                scheduler_online ? "verified" : "timeout",
+                static_cast<unsigned int>(expected),
+                static_cast<unsigned long long>(scheduler::schedules(0U)));
+        pr_info("scheduler demo=running-forever\n");
         arch::cpu::halt();
     }
 } // namespace sys::kernel

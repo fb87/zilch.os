@@ -1,19 +1,38 @@
-# Module: scheduler
+---
+module: sys.kernel.scheduler
+layer: kernel
+status: bringup
+sources:
+  - scheduler.hh
+tests:
+  - scheduler.tt
+  - scheduler_test.tt
+---
+
+# Scheduler
 
 ## Purpose
 
-Defines the scheduler module for the Zilch L4 microkernel.
+Provide fixed-capacity per-CPU run queues, an idle execution object for every
+online CPU, timer-driven quantum expiration, and SGI-driven rescheduling.
 
-## Responsibilities
+## Current milestone
 
-- Provide a bounded, allocation-free implementation appropriate to its layer.
-- Preserve the kernel/architecture/platform dependency boundary.
+The current execution objects are stackless kernel worker state machines. A
+worker performs one bounded step whenever selected. This validates queue
+rotation, CPU pinning, timer preemption policy, and reschedule IPI integration
+without pretending that saved kernel stacks and full register context switching
+already exist.
 
 ## Invariants
 
-- No exceptions, RTTI, implicit allocation, or hosted C++ runtime dependency.
-- Public behavior is deterministic unless explicitly documented otherwise.
+- A run queue is owned by one logical CPU.
+- A thread is inserted into at most one run queue.
+- Run queues and worker storage are statically bounded.
+- Interrupt handlers never allocate memory.
+- Timer and reschedule IRQ paths perform bounded work.
 
-## Verification
+## Next milestone
 
-The colocated `scheduler.tt` file is reserved for module-level tests.
+Extend the architectural exception frame with ELR, SPSR, and saved stack state,
+then replace worker-step dispatch with real kernel-thread context switching.

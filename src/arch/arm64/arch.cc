@@ -1,5 +1,6 @@
 #include <sys/arch/arch.hh>
 #include <sys/kernel/printk.hh>
+#include <sys/kernel/scheduler.hh>
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/timer.hh>
 
@@ -14,12 +15,14 @@ extern "C" void sys_arm64_exception_handler(
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
             const sys::u64 ticks = sys::platform::timer::handle_interrupt();
+            sys::kernel::scheduler::on_timer_tick();
             if (ticks == 1U && sys::arch::cpu::current_id() == 0U) {
                 pr_info("timer interrupt active cpu=%u\n",
                         static_cast<unsigned int>(sys::arch::cpu::current_id()));
             }
         } else if (irq == sys::platform::interrupt::reschedule_ipi) {
             sys::arch::smp::record_reschedule_ipi();
+            sys::kernel::scheduler::on_reschedule_ipi();
         } else if (irq == sys::platform::interrupt::tlb_shootdown_ipi) {
             sys::arch::smp::record_tlb_shootdown_ipi();
         }
