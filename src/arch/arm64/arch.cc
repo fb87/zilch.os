@@ -58,6 +58,12 @@ extern "C" void sys_arm64_exception_handler(
             sys::kernel::thread::handle_user_syscall(*frame, vector, syndrome)) {
             return;
         }
+        if (level == 1U &&
+            sys::kernel::thread::handle_user_fault(
+                *frame, vector, syndrome,
+                sys::arch::exception::fault_address(1U))) {
+            return;
+        }
     }
 
     sys::arch::irq::disable();

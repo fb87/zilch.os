@@ -108,7 +108,7 @@ namespace sys::kernel
                 online ? "online" : "timeout");
         if constexpr (arch::space::user_available) {
             thread::initialize_user_threads();
-            pr_info("user: address-spaces=%u threads=%u syscall=sys_ipc\n",
+            pr_info("user fuzz: address-spaces=%u threads=%u syscall=sys_ipc deterministic=yes\n",
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(thread::user_thread_count));
         }
@@ -168,7 +168,8 @@ namespace sys::kernel
                 static_cast<unsigned int>(expected));
 
         if constexpr (arch::space::user_available) {
-            pr_info("user: entering thread=0 in user mode with private address space\n");
+            pr_info("user fuzz: entering thread=0 cpu=0 seed=%llx\n",
+                    static_cast<unsigned long long>(thread::user_threads[0].fuzz_seed));
             thread::enter_first_user_thread();
         }
         arch::cpu::halt();
