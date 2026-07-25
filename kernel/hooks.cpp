@@ -1,5 +1,5 @@
-#include <sys/arch/current.h>
-#include <sys/arch/v1/kernel_hooks.h>
+#include <sys/arch/current.hpp>
+#include <sys/arch/v1/kernel_hooks.hpp>
 
 namespace sys::arch::v1
 {
@@ -9,8 +9,7 @@ namespace sys::arch::v1
 
         void interrupt(UserContext*, irq_id_t) noexcept {}
 
-        void fatal(const char*) noexcept
-        {
+        void fatal(const char*) noexcept {
             arch_ops().cpu.halt();
             for (;;) {
             }
@@ -19,8 +18,7 @@ namespace sys::arch::v1
         const KernelHooks hooks{exception, interrupt, fatal};
     } // namespace
 
-    const KernelHooks& kernel_hooks() noexcept
-    {
+    const KernelHooks& kernel_hooks() noexcept {
         return hooks;
     }
 } // namespace sys::arch::v1

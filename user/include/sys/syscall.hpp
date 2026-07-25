@@ -8,8 +8,7 @@ namespace sys
                                        word_t argument0 = 0U,
                                        word_t argument1 = 0U,
                                        word_t argument2 = 0U,
-                                       word_t argument3 = 0U) noexcept
-    {
+                                       word_t argument3 = 0U) noexcept {
         return sys_invoke_raw(static_cast<word_t>(number),
                               argument0,
                               argument1,

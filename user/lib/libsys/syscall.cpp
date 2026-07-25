@@ -1,11 +1,10 @@
-#include <sys/abi/v1/syscall.h>
+#include <sys/abi/v1/syscall.hpp>
 
 extern "C" sys::word_t sys_invoke_raw(sys::word_t number,
                                       sys::word_t argument0,
                                       sys::word_t argument1,
                                       sys::word_t argument2,
-                                      sys::word_t argument3) noexcept
-{
+                                      sys::word_t argument3) noexcept {
 #if defined(__aarch64__)
     register sys::word_t x0 asm("x0") = argument0;
     register sys::word_t x1 asm("x1") = argument1;

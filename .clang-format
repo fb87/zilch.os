@@ -15,13 +15,14 @@ ShortNamespaceLines: 0
 
 BreakBeforeBraces: Custom
 BraceWrapping:
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterFunction: false
   AfterCaseLabel: false
-  AfterClass: true
+
   AfterControlStatement: Never
-  AfterEnum: true
-  AfterFunction: true
   AfterNamespace: true
-  AfterStruct: true
   AfterUnion: true
   BeforeCatch: true
   BeforeElse: true

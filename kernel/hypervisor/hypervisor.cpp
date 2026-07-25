@@ -1,19 +1,16 @@
-#include <sys/hypervisor/hypervisor.h>
+#include <sys/hypervisor/hypervisor.hpp>
 
 namespace sys::hypervisor
 {
-    Error initialize() noexcept
-    {
+    Error initialize() noexcept {
         return Error::unsupported;
     }
 
-    Error create_vm(vm_id_t) noexcept
-    {
+    Error create_vm(vm_id_t) noexcept {
         return Error::unsupported;
     }
 
-    Error run(vm_id_t) noexcept
-    {
+    Error run(vm_id_t) noexcept {
         return Error::unsupported;
     }
 } // namespace sys::hypervisor

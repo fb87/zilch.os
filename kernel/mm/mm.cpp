@@ -1,9 +1,8 @@
-#include <sys/mm/mm.h>
+#include <sys/mm/mm.hpp>
 
 namespace sys::mm
 {
-    Error initialize() noexcept
-    {
+    Error initialize() noexcept {
         return Error::unsupported;
     }
 } // namespace sys::mm

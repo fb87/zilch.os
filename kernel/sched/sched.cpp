@@ -1,9 +1,8 @@
-#include <sys/sched/sched.h>
+#include <sys/sched/sched.hpp>
 
 namespace sys::sched
 {
-    Error initialize() noexcept
-    {
+    Error initialize() noexcept {
         return Error::unsupported;
     }
 } // namespace sys::sched
