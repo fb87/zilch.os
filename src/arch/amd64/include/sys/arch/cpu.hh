@@ -6,8 +6,7 @@ namespace sys::arch::cpu
 {
     inline void initialize_boot_cpu() noexcept {}
 
-    [[nodiscard]]
-    inline cpu_id_t current_id() noexcept {
+    [[nodiscard]] inline cpu_id_t current_id() noexcept {
         return 0U;
     }
 
@@ -19,8 +18,7 @@ namespace sys::arch::cpu
         __asm__ volatile("hlt" ::: "memory");
     }
 
-    [[noreturn]]
-    inline void halt() noexcept {
+    [[noreturn]] inline void halt() noexcept {
         __asm__ volatile("cli" ::: "memory");
         for (;;) {
             wait_for_event();

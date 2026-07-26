@@ -22,22 +22,22 @@ namespace sys::arch
         inline constexpr u64 ap_el0_rw = 0U;
         inline constexpr u64 pxn = 0U;
         inline constexpr u64 uxn = 0U;
-        struct alignas(page_size) table_t { u64 entry[entries]; };
+        struct alignas(page_size) table_t {
+            u64 entry[entries];
+        };
         inline table_t kernel_l0{};
         inline table_t kernel_l1{};
         inline table_t kernel_l2{};
         inline void build_kernel_table(table_t&, table_t&, table_t&) noexcept {}
-        [[nodiscard]] inline u64 table_descriptor(const table_t&) noexcept { return 0U; }
+        [[nodiscard]] inline u64 table_descriptor(const table_t&) noexcept {
+            return 0U;
+        }
         inline void activate(paddr_t) noexcept {}
         inline void initialize() noexcept {}
         inline void initialize_cpu() noexcept {}
 
-        [[nodiscard]]
-        inline error_t map_page(
-            paddr_t,
-            vaddr_t,
-            paddr_t,
-            page_attributes_t) noexcept {
+        [[nodiscard]] inline error_t map_page(paddr_t, vaddr_t, paddr_t,
+                                              page_attributes_t) noexcept {
             return error_t::unsupported;
         }
 

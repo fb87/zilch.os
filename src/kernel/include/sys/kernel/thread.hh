@@ -31,13 +31,8 @@ namespace sys::kernel::thread
         arch::user_context_t context{};
     };
 
-    inline void initialize(
-        thread_t& target,
-        thread_id_t id,
-        space_id_t address_space,
-        vaddr_t entry,
-        vaddr_t stack) noexcept
-    {
+    inline void initialize(thread_t& target, thread_id_t id, space_id_t address_space,
+                           vaddr_t entry, vaddr_t stack) noexcept {
         target.id = id;
         target.address_space = 0U;
         target.state = state_t::inactive;
@@ -53,14 +48,9 @@ namespace sys::kernel::thread
         arch::context::initialize_user(target.context, entry, stack, 0U);
     }
 
-    inline void initialize_kernel(
-        thread_t& target,
-        thread_id_t id,
-        cpu_id_t cpu,
-        kernel_step_t step,
-        void* argument,
-        u32 quantum_ticks = 1U) noexcept
-    {
+    inline void initialize_kernel(thread_t& target, thread_id_t id, cpu_id_t cpu,
+                                  kernel_step_t step, void* argument,
+                                  u32 quantum_ticks = 1U) noexcept {
         target.id = id;
         target.address_space = 0U;
         target.state = state_t::inactive;

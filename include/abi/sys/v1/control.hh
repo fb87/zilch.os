@@ -4,8 +4,7 @@
 
 namespace sys::abi::v1
 {
-    enum class control_operation : word_t
-    {
+    enum class control_operation : word_t {
         capability_copy = 0U,
         capability_move = 1U,
         capability_delete = 2U,
@@ -29,4 +28,4 @@ namespace sys::abi::v1
         hypervisor_invoke = 20U,
         hypervisor_self_test = 21U,
     };
-}
+} // namespace sys::abi::v1

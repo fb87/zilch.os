@@ -1,7 +1,6 @@
 #include <sys/types.hh>
 
-extern "C" [[noreturn]] void sys_user_exit(sys::s32 status) noexcept
-{
+extern "C" [[noreturn]] void sys_user_exit(sys::s32 status) noexcept {
     (void)status;
     for (;;) {
 #if defined(__aarch64__)

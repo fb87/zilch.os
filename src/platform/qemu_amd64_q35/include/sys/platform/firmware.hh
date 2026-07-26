@@ -13,8 +13,7 @@ namespace sys::platform::firmware
         .cpu_count = 1U,
     };
 
-    [[nodiscard]] inline error_t start_cpu(cpu_id_t, uintptr_t, uintptr_t) noexcept
-    {
+    [[nodiscard]] inline error_t start_cpu(cpu_id_t, uintptr_t, uintptr_t) noexcept {
         return error_t::unsupported;
     }
 } // namespace sys::platform::firmware

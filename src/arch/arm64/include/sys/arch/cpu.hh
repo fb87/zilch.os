@@ -6,8 +6,7 @@ namespace sys::arch::cpu
 {
     inline void initialize_boot_cpu() noexcept {}
 
-    [[nodiscard]]
-    inline cpu_id_t current_id() noexcept {
+    [[nodiscard]] inline cpu_id_t current_id() noexcept {
         u64 value;
         __asm__ volatile("mrs %0, mpidr_el1" : "=r"(value));
         return static_cast<cpu_id_t>(value & 0xffU);
@@ -21,8 +20,7 @@ namespace sys::arch::cpu
         __asm__ volatile("wfe" ::: "memory");
     }
 
-    [[noreturn]]
-    inline void halt() noexcept {
+    [[noreturn]] inline void halt() noexcept {
         for (;;) {
             wait_for_event();
         }

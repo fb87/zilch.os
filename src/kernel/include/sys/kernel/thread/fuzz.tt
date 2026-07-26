@@ -1,4 +1,4 @@
 #include <sys/kernel/thread/thread.hh>
 
-static_assert(sys::kernel::thread::initial_fuzz_seed(0U)
-              != sys::kernel::thread::initial_fuzz_seed(1U));
+static_assert(sys::kernel::thread::initial_fuzz_seed(0U) !=
+              sys::kernel::thread::initial_fuzz_seed(1U));

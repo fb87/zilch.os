@@ -4,8 +4,7 @@
 
 namespace sys::abi::v1
 {
-    enum class hypervisor_operation : word_t
-    {
+    enum class hypervisor_operation : word_t {
         vm_reset = 0U,
         stage2_map = 1U,
         stage2_unmap = 2U,
@@ -17,8 +16,7 @@ namespace sys::abi::v1
         fuzz = 8U,
     };
 
-    enum class vm_exit_reason : word_t
-    {
+    enum class vm_exit_reason : word_t {
         none = 0U,
         hypercall = 1U,
         wait = 2U,
@@ -29,8 +27,7 @@ namespace sys::abi::v1
         unexpected = 7U,
     };
 
-    enum class guest_hypercall : word_t
-    {
+    enum class guest_hypercall : word_t {
         console_write = 1U,
         time_query = 2U,
         irq_acknowledge = 3U,
@@ -38,4 +35,4 @@ namespace sys::abi::v1
         report = 5U,
         diagnostic = 6U,
     };
-}
+} // namespace sys::abi::v1

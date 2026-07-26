@@ -1,21 +1,18 @@
 #include <sys/arch/arch.hh>
-#include <sys/kernel/thread/scheduler.hh>
-#include <sys/kernel/syscall/control.hh>
-#include <sys/kernel/syscall/ipc.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
+#include <sys/kernel/syscall/control.hh>
+#include <sys/kernel/syscall/ipc.hh>
+#include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/timer.hh>
 
 extern "C" void sys_arch_link_anchor() noexcept {}
 
-extern "C" void sys_arm64_exception_handler(
-    sys::arch::exception::frame_t* frame,
-    sys::u64 level) noexcept
-{
+extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame,
+                                            sys::u64 level) noexcept {
     const sys::u64 vector = frame->vector;
-    const sys::u64 syndrome =
-        sys::arch::exception::syndrome(static_cast<sys::u32>(level));
+    const sys::u64 syndrome = sys::arch::exception::syndrome(static_cast<sys::u32>(level));
 
     /*
      * ESR_ELx is meaningful only for synchronous exceptions.  Dispatch by
@@ -63,36 +60,31 @@ extern "C" void sys_arm64_exception_handler(
     }
 
     if (exception_class == 0U) {
-        if (level == 2U &&
-            sys::arch::hypervisor::dispatch(*frame, syndrome)) {
+        if (level == 2U && sys::arch::hypervisor::dispatch(*frame, syndrome)) {
             return;
         }
 
         /* EL0 AArch64 synchronous exceptions enter EL1 through vector 8. */
-        if (level == 1U &&
-            sys::kernel::syscall::dispatch_control(
-                sys::kernel::thread::current(), *frame, vector, syndrome)) {
+        if (level == 1U && sys::kernel::syscall::dispatch_control(sys::kernel::thread::current(),
+                                                                  *frame, vector, syndrome)) {
             return;
         }
-        if (level == 1U &&
-            sys::kernel::syscall::dispatch_ipc(
-                sys::kernel::thread::current(), *frame, vector, syndrome)) {
+        if (level == 1U && sys::kernel::syscall::dispatch_ipc(sys::kernel::thread::current(),
+                                                              *frame, vector, syndrome)) {
             return;
         }
-        if (level == 1U &&
-            sys::kernel::thread::handle_user_fault(
-                *frame, vector, syndrome,
-                sys::arch::exception::fault_address(1U))) {
+        if (level == 1U && sys::kernel::thread::handle_user_fault(
+                               *frame, vector, syndrome, sys::arch::exception::fault_address(1U))) {
             return;
         }
     }
 
     sys::arch::irq::disable();
     pr_err("exception el=%llu vector=%llu esr=%llx far=%llx elr=%llx\n",
-           static_cast<unsigned long long>(level),
-           static_cast<unsigned long long>(vector),
+           static_cast<unsigned long long>(level), static_cast<unsigned long long>(vector),
            static_cast<unsigned long long>(syndrome),
-           static_cast<unsigned long long>(sys::arch::exception::fault_address(static_cast<sys::u32>(level))),
+           static_cast<unsigned long long>(
+               sys::arch::exception::fault_address(static_cast<sys::u32>(level))),
            static_cast<unsigned long long>(frame->instruction_pointer));
     sys::arch::cpu::halt();
 }

@@ -1,13 +1,9 @@
 #include <abi/sys/v1/syscall.hh>
 
-extern "C" sys::word_t sys_invoke_raw(sys::word_t number,
-                                      sys::word_t argument0,
-                                      sys::word_t argument1,
-                                      sys::word_t argument2,
-                                      sys::word_t argument3,
-                                      sys::word_t argument4,
-                                      sys::word_t argument5) noexcept
-{
+extern "C" sys::word_t sys_invoke_raw(sys::word_t number, sys::word_t argument0,
+                                      sys::word_t argument1, sys::word_t argument2,
+                                      sys::word_t argument3, sys::word_t argument4,
+                                      sys::word_t argument5) noexcept {
 #if defined(__aarch64__)
     register sys::word_t x0 asm("x0") = argument0;
     register sys::word_t x1 asm("x1") = argument1;
@@ -18,8 +14,7 @@ extern "C" sys::word_t sys_invoke_raw(sys::word_t number,
     register sys::word_t x8 asm("x8") = number;
     asm volatile("svc #0"
                  : "+r"(x0)
-                 : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5),
-                   "r"(x8)
+                 : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8)
                  : "memory");
     return x0;
 #elif defined(__x86_64__)
@@ -32,8 +27,7 @@ extern "C" sys::word_t sys_invoke_raw(sys::word_t number,
     register sys::word_t r9 asm("r9") = argument5;
     asm volatile("syscall"
                  : "+r"(rax)
-                 : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8),
-                   "r"(r9)
+                 : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8), "r"(r9)
                  : "rcx", "r11", "memory");
     return rax;
 #else

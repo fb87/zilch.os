@@ -11,8 +11,7 @@
 
 namespace sys::kernel::thread
 {
-    enum class state : u8
-    {
+    enum class state : u8 {
         inactive,
         ready,
         running,
@@ -25,22 +24,19 @@ namespace sys::kernel::thread
         terminated,
     };
 
-    enum class pending_ipc : u8
-    {
+    enum class pending_ipc : u8 {
         none,
         incoming_call,
         reply,
     };
 
-    struct reply_capability
-    {
+    struct reply_capability {
         thread_id_t caller{static_cast<thread_id_t>(-1)};
         u32 generation{};
         bool valid{};
     };
 
-    struct thread
-    {
+    struct thread {
         object::header_t object{};
         thread_id_t id{};
         cpu_id_t pinned_cpu{};
@@ -65,16 +61,12 @@ namespace sys::kernel::thread
         fault::disposition fault_disposition{fault::disposition::pending};
     };
 
-    [[nodiscard]] inline constexpr u64 initial_fuzz_seed(thread_id_t id) noexcept
-    {
-        return 0x9e3779b97f4a7c15ULL
-            ^ (static_cast<u64>(id) * 0xbf58476d1ce4e5b9ULL);
+    [[nodiscard]] inline constexpr u64 initial_fuzz_seed(thread_id_t id) noexcept {
+        return 0x9e3779b97f4a7c15ULL ^ (static_cast<u64>(id) * 0xbf58476d1ce4e5b9ULL);
     }
 
-    inline void initialize_user(thread& value, thread_id_t id,
-                                cpu_id_t cpu, word_t argument0,
-                                word_t argument1) noexcept
-    {
+    inline void initialize_user(thread& value, thread_id_t id, cpu_id_t cpu, word_t argument0,
+                                word_t argument1) noexcept {
         value.id = id;
         value.pinned_cpu = cpu;
         value.current_state = state::ready;
@@ -95,59 +87,47 @@ namespace sys::kernel::thread
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
         value.address_space.initialize(static_cast<u16>(id + 1U));
-        arch::thread::initialize_user(value.context,
-                                      arch::space::entry(),
-                                      arch::space::stack_top(),
-                                      argument0,
-                                      argument1);
+        arch::thread::initialize_user(value.context, arch::space::entry(), arch::space::stack_top(),
+                                      argument0, argument1);
     }
 
-    [[nodiscard]] inline state load_state(const thread& value) noexcept
-    {
-        return static_cast<state>(__atomic_load_n(
-            reinterpret_cast<const u8*>(&value.current_state), __ATOMIC_ACQUIRE));
+    [[nodiscard]] inline state load_state(const thread& value) noexcept {
+        return static_cast<state>(
+            __atomic_load_n(reinterpret_cast<const u8*>(&value.current_state), __ATOMIC_ACQUIRE));
     }
 
-    inline void store_state(thread& value, state new_state) noexcept
-    {
-        __atomic_store_n(reinterpret_cast<u8*>(&value.current_state),
-                         static_cast<u8>(new_state), __ATOMIC_RELEASE);
+    inline void store_state(thread& value, state new_state) noexcept {
+        __atomic_store_n(reinterpret_cast<u8*>(&value.current_state), static_cast<u8>(new_state),
+                         __ATOMIC_RELEASE);
     }
 
-    [[nodiscard]] inline bool runnable(const thread& value) noexcept
-    {
+    [[nodiscard]] inline bool runnable(const thread& value) noexcept {
         const state current = load_state(value);
         return current == state::ready || current == state::running;
     }
 
-    [[nodiscard]] inline bool validate(const thread& value) noexcept
-    {
+    [[nodiscard]] inline bool validate(const thread& value) noexcept {
         if (runnable(value)) {
-            return value.context.instruction_pointer != 0U
-                && value.context.stack_pointer != 0U;
+            return value.context.instruction_pointer != 0U && value.context.stack_pointer != 0U;
         }
         return true;
     }
 
-    inline void publish_pending(thread& value, pending_ipc kind,
-                                thread_id_t sender, u32 sender_generation,
-                                const word_t message[4]) noexcept
-    {
+    inline void publish_pending(thread& value, pending_ipc kind, thread_id_t sender,
+                                u32 sender_generation, const word_t message[4]) noexcept {
         value.pending_sender = sender;
         value.pending_sender_generation = sender_generation;
         for (usize_t index = 0U; index < 4U; ++index) {
             value.pending_message[index] = message[index];
         }
-        __atomic_store_n(&value.pending_ipc_kind, static_cast<u8>(kind),
-                         __ATOMIC_RELEASE);
+        __atomic_store_n(&value.pending_ipc_kind, static_cast<u8>(kind), __ATOMIC_RELEASE);
     }
 
-    inline void consume_pending(thread& value) noexcept
-    {
+    inline void consume_pending(thread& value) noexcept {
         const auto kind = static_cast<pending_ipc>(__atomic_exchange_n(
-            &value.pending_ipc_kind, static_cast<u8>(pending_ipc::none),
-            __ATOMIC_ACQUIRE));
-        if (kind == pending_ipc::none) return;
+            &value.pending_ipc_kind, static_cast<u8>(pending_ipc::none), __ATOMIC_ACQUIRE));
+        if (kind == pending_ipc::none)
+            return;
 
         value.context.x[0] = static_cast<word_t>(error_t::success);
         if (kind == pending_ipc::incoming_call) {

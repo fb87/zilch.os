@@ -1,7 +1,8 @@
 #pragma once
 
-#include <abi/sys/v1/thread.hh>
 #include <sys/syscall.hh>
+
+#include <abi/sys/v1/thread.hh>
 
 namespace sys
 {

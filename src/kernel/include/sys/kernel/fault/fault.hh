@@ -5,8 +5,7 @@
 
 namespace sys::kernel::fault
 {
-    enum class kind : u8
-    {
+    enum class kind : u8 {
         none,
         instruction_abort,
         data_abort,
@@ -14,8 +13,7 @@ namespace sys::kernel::fault
         invalid_context,
     };
 
-    struct record
-    {
+    struct record {
         kind type{kind::none};
         thread_id_t thread{};
         u32 thread_generation{};
@@ -24,10 +22,9 @@ namespace sys::kernel::fault
         vaddr_t instruction_pointer{};
     };
 
-    enum class disposition : u8
-    {
+    enum class disposition : u8 {
         pending,
         resume,
         terminate,
     };
-}
+} // namespace sys::kernel::fault

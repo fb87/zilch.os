@@ -8,11 +8,8 @@ namespace sys::arch
 
     namespace context
     {
-        inline void initialize_user(
-            user_context_t& context,
-            vaddr_t entry,
-            vaddr_t stack,
-            word_t argument) noexcept {
+        inline void initialize_user(user_context_t& context, vaddr_t entry, vaddr_t stack,
+                                    word_t argument) noexcept {
             context = {};
             context.general[0] = argument;
             context.stack_pointer = stack;

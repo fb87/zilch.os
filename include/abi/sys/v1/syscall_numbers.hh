@@ -4,21 +4,18 @@
 
 namespace sys::abi::v1
 {
-    enum class syscall : word_t
-    {
+    enum class syscall : word_t {
         ipc = 0U,
         control = 1U,
     };
 
-    enum class ipc_operation : word_t
-    {
+    enum class ipc_operation : word_t {
         call = 0U,
         receive = 1U,
         reply_receive = 2U,
     };
 
-    enum class fuzz_case : word_t
-    {
+    enum class fuzz_case : word_t {
         valid_call = 0U,
         invalid_capability = 1U,
         invalid_operation = 2U,

@@ -10,8 +10,7 @@ namespace sys::kernel::ipc
     struct message_tag_t {
         word_t raw;
 
-        [[nodiscard]]
-        constexpr usize_t word_count() const noexcept {
+        [[nodiscard]] constexpr usize_t word_count() const noexcept {
             return static_cast<usize_t>(raw & 0x3fU);
         }
     };
@@ -27,8 +26,7 @@ namespace sys::kernel::ipc
         thread_id_t receiver;
     };
 
-    [[nodiscard]]
-    inline error_t validate(const message_t& message) noexcept {
+    [[nodiscard]] inline error_t validate(const message_t& message) noexcept {
         return message.tag.word_count() <= maximum_message_words ? error_t::success
                                                                  : error_t::invalid_argument;
     }

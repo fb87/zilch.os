@@ -21,16 +21,14 @@ namespace sys::kernel::scheduler
 
     inline run_queue_t run_queues[maximum_cpu_count]{};
 
-    inline void idle_step(void*) noexcept
-    {
+    inline void idle_step(void*) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         if (cpu < maximum_cpu_count) {
             __atomic_fetch_add(&run_queues[cpu].idle_count, 1U, __ATOMIC_RELAXED);
         }
     }
 
-    inline void initialize() noexcept
-    {
+    inline void initialize() noexcept {
         for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
             run_queues[cpu].count = 0U;
             run_queues[cpu].cursor = 0U;
@@ -40,19 +38,14 @@ namespace sys::kernel::scheduler
             for (u32 index = 0U; index < maximum_threads_per_cpu; ++index) {
                 run_queues[cpu].entries[index] = nullptr;
             }
-            thread::initialize_kernel(run_queues[cpu].idle,
-                                      0x1000U + cpu,
-                                      cpu,
-                                      idle_step,
-                                      nullptr,
+            thread::initialize_kernel(run_queues[cpu].idle, 0x1000U + cpu, cpu, idle_step, nullptr,
                                       1U);
             run_queues[cpu].idle.state = thread::state_t::running;
             run_queues[cpu].current = &run_queues[cpu].idle;
         }
     }
 
-    inline void initialize_cpu() noexcept
-    {
+    inline void initialize_cpu() noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         if (cpu < maximum_cpu_count) {
             run_queues[cpu].current = &run_queues[cpu].idle;
@@ -60,8 +53,7 @@ namespace sys::kernel::scheduler
         }
     }
 
-    [[nodiscard]] inline bool make_ready(thread::thread_t& target) noexcept
-    {
+    [[nodiscard]] inline bool make_ready(thread::thread_t& target) noexcept {
         if (target.cpu >= maximum_cpu_count) {
             return false;
         }
@@ -74,8 +66,7 @@ namespace sys::kernel::scheduler
         return true;
     }
 
-    inline void schedule_current_cpu() noexcept
-    {
+    inline void schedule_current_cpu() noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         if (cpu >= maximum_cpu_count) {
             return;
@@ -90,8 +81,8 @@ namespace sys::kernel::scheduler
             next = queue.entries[queue.cursor];
         }
 
-        if (previous != nullptr && previous != &queue.idle
-            && previous->state == thread::state_t::running) {
+        if (previous != nullptr && previous != &queue.idle &&
+            previous->state == thread::state_t::running) {
             previous->state = thread::state_t::ready;
         }
         next->state = thread::state_t::running;
@@ -104,8 +95,7 @@ namespace sys::kernel::scheduler
         }
     }
 
-    inline void on_timer_tick() noexcept
-    {
+    inline void on_timer_tick() noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         if (cpu >= maximum_cpu_count) {
             return;
@@ -121,13 +111,11 @@ namespace sys::kernel::scheduler
         }
     }
 
-    inline void on_reschedule_ipi() noexcept
-    {
+    inline void on_reschedule_ipi() noexcept {
         schedule_current_cpu();
     }
 
-    [[nodiscard]] inline u64 schedules(cpu_id_t cpu) noexcept
-    {
+    [[nodiscard]] inline u64 schedules(cpu_id_t cpu) noexcept {
         if (cpu >= maximum_cpu_count) {
             return 0U;
         }

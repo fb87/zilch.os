@@ -11,8 +11,7 @@ namespace sys::platform::console
         __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
     }
 
-    [[nodiscard]]
-    inline u8 in8(u16 port) noexcept {
+    [[nodiscard]] inline u8 in8(u16 port) noexcept {
         u8 value;
         __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
         return value;

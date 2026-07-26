@@ -6,16 +6,14 @@
 
 namespace sys::kernel::memory
 {
-    enum class permission : u8
-    {
+    enum class permission : u8 {
         none = 0U,
         read = 1U,
         write = 2U,
         execute = 4U,
     };
 
-    struct frame
-    {
+    struct frame {
         object::header_t object{};
         alignas(arch::memory::page_size) u8 bytes[arch::memory::page_size]{};
         bool mapped{};
@@ -23,25 +21,21 @@ namespace sys::kernel::memory
         vaddr_t mapped_address{};
     };
 
-    struct page_table
-    {
+    struct page_table {
         object::header_t object{};
         space_id_t owner{};
         u8 level{};
     };
 
-    [[nodiscard]] inline constexpr bool writable(permission value) noexcept
-    {
+    [[nodiscard]] inline constexpr bool writable(permission value) noexcept {
         return (static_cast<u8>(value) & static_cast<u8>(permission::write)) != 0U;
     }
 
-    [[nodiscard]] inline constexpr bool executable(permission value) noexcept
-    {
+    [[nodiscard]] inline constexpr bool executable(permission value) noexcept {
         return (static_cast<u8>(value) & static_cast<u8>(permission::execute)) != 0U;
     }
 
-    [[nodiscard]] inline constexpr bool valid_wx(permission value) noexcept
-    {
+    [[nodiscard]] inline constexpr bool valid_wx(permission value) noexcept {
         return !(writable(value) && executable(value));
     }
-}
+} // namespace sys::kernel::memory

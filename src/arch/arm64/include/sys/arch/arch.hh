@@ -1,18 +1,18 @@
 #pragma once
 
-#include <sys/arch/v1/contract.hh>
 #include <sys/arch/context.hh>
 #include <sys/arch/cpu.hh>
+#include <sys/arch/exception.hh>
 #include <sys/arch/hypervisor.hh>
 #include <sys/arch/irq.hh>
 #include <sys/arch/memory.hh>
-#include <sys/arch/exception.hh>
 #include <sys/arch/smp.hh>
-#include <sys/arch/timer.hh>
-#include <sys/arch/thread/context.hh>
-#include <sys/arch/thread/entry.hh>
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/syscall/entry.hh>
+#include <sys/arch/thread/context.hh>
+#include <sys/arch/thread/entry.hh>
+#include <sys/arch/timer.hh>
+#include <sys/arch/v1/contract.hh>
 
 namespace sys::arch
 {

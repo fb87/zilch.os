@@ -5,8 +5,7 @@
 
 namespace sys::kernel::scheduling
 {
-    struct context
-    {
+    struct context {
         object::header_t object{};
         u8 priority{128U};
         u8 maximum_priority{255U};
@@ -18,8 +17,7 @@ namespace sys::kernel::scheduling
         bool enabled{true};
     };
 
-    inline void initialize(context& value, cpu_id_t affinity) noexcept
-    {
+    inline void initialize(context& value, cpu_id_t affinity) noexcept {
         value.priority = 128U;
         value.maximum_priority = 255U;
         value.budget_ticks = 1U;
@@ -29,12 +27,14 @@ namespace sys::kernel::scheduling
         value.enabled = true;
     }
 
-    [[nodiscard]] inline bool charge(context& value, u64 ticks = 1U) noexcept
-    {
-        if (!value.enabled || value.budget_ticks == 0U) return false;
+    [[nodiscard]] inline bool charge(context& value, u64 ticks = 1U) noexcept {
+        if (!value.enabled || value.budget_ticks == 0U)
+            return false;
         value.consumed_ticks += ticks;
         return value.consumed_ticks <= value.budget_ticks;
     }
 
-    inline void replenish(context& value) noexcept { value.consumed_ticks = 0U; }
-}
+    inline void replenish(context& value) noexcept {
+        value.consumed_ticks = 0U;
+    }
+} // namespace sys::kernel::scheduling

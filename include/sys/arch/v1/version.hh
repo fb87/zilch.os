@@ -16,9 +16,7 @@ namespace sys::arch::v1
         .patch = 0U,
     };
 
-    [[nodiscard]]
-    constexpr bool compatible(version_t provided) noexcept {
-        return provided.major == required_version.major &&
-               provided.minor >= required_version.minor;
+    [[nodiscard]] constexpr bool compatible(version_t provided) noexcept {
+        return provided.major == required_version.major && provided.minor >= required_version.minor;
     }
 } // namespace sys::arch::v1

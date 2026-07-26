@@ -4,8 +4,7 @@
 
 namespace sys::abi::v1
 {
-    enum class ObjectType : u16
-    {
+    enum class ObjectType : u16 {
         none,
         thread,
         address_space,

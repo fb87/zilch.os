@@ -9,15 +9,13 @@ namespace sys::kernel::boot
     inline constexpr u16 bootinfo_version = 1U;
     inline constexpr u32 initial_capability_count = 16U;
 
-    struct capability_entry
-    {
+    struct capability_entry {
         capability_id_t selector{};
         object::reference_t object{};
         u32 rights{};
     };
 
-    struct bootinfo
-    {
+    struct bootinfo {
         u32 magic{bootinfo_magic};
         u16 version{bootinfo_version};
         u16 cpu_count{};
@@ -30,4 +28,4 @@ namespace sys::kernel::boot
     };
 
     inline bootinfo root_bootinfo{};
-}
+} // namespace sys::kernel::boot

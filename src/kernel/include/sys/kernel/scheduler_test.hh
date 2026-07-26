@@ -21,15 +21,13 @@ namespace sys::kernel::scheduler_test
     inline thread::thread_t workers[worker_count]{};
     inline worker_argument_t arguments[worker_count]{};
 
-    inline void worker_step(void* opaque) noexcept
-    {
+    inline void worker_step(void* opaque) noexcept {
         auto* argument = static_cast<worker_argument_t*>(opaque);
         if (argument == nullptr) {
             return;
         }
 
-        const u64 counter =
-            __atomic_add_fetch(&argument->counter, 1U, __ATOMIC_RELAXED);
+        const u64 counter = __atomic_add_fetch(&argument->counter, 1U, __ATOMIC_RELAXED);
         if ((counter % argument->delay) != 0U) {
             return;
         }
@@ -42,8 +40,7 @@ namespace sys::kernel::scheduler_test
                 static_cast<unsigned int>(argument->delay));
     }
 
-    [[nodiscard]] inline bool initialize(u32 cpu_count) noexcept
-    {
+    [[nodiscard]] inline bool initialize(u32 cpu_count) noexcept {
         if (cpu_count == 0U || cpu_count > scheduler::maximum_cpu_count) {
             return false;
         }
@@ -61,12 +58,8 @@ namespace sys::kernel::scheduler_test
                 .reports = 0U,
             };
 
-            thread::initialize_kernel(workers[index],
-                                      thread_id,
-                                      cpu,
-                                      worker_step,
-                                      &arguments[index],
-                                      1U);
+            thread::initialize_kernel(workers[index], thread_id, cpu, worker_step,
+                                      &arguments[index], 1U);
             if (!scheduler::make_ready(workers[index])) {
                 return false;
             }
@@ -74,24 +67,21 @@ namespace sys::kernel::scheduler_test
         return true;
     }
 
-    [[nodiscard]] inline u64 steps(u32 worker) noexcept
-    {
+    [[nodiscard]] inline u64 steps(u32 worker) noexcept {
         if (worker >= worker_count) {
             return 0U;
         }
         return __atomic_load_n(&arguments[worker].counter, __ATOMIC_ACQUIRE);
     }
 
-    [[nodiscard]] inline u32 reports(u32 worker) noexcept
-    {
+    [[nodiscard]] inline u32 reports(u32 worker) noexcept {
         if (worker >= worker_count) {
             return 0U;
         }
         return __atomic_load_n(&arguments[worker].reports, __ATOMIC_ACQUIRE);
     }
 
-    [[nodiscard]] inline bool complete() noexcept
-    {
+    [[nodiscard]] inline bool complete() noexcept {
         for (u32 worker = 0U; worker < worker_count; ++worker) {
             if (reports(worker) < report_count_per_worker) {
                 return false;

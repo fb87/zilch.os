@@ -16,39 +16,32 @@ namespace sys::platform::interrupt
     inline constexpr irq_id_t tlb_shootdown_ipi = 1U;
     inline constexpr irq_id_t virtual_timer_irq = 27U;
 
-    [[nodiscard]] inline volatile u32& reg32(uintptr_t address) noexcept
-    {
+    [[nodiscard]] inline volatile u32& reg32(uintptr_t address) noexcept {
         return *reinterpret_cast<volatile u32*>(address);
     }
 
-    [[nodiscard]] inline volatile u64& reg64(uintptr_t address) noexcept
-    {
+    [[nodiscard]] inline volatile u64& reg64(uintptr_t address) noexcept {
         return *reinterpret_cast<volatile u64*>(address);
     }
 
-    [[nodiscard]] inline u64 current_mpidr() noexcept
-    {
+    [[nodiscard]] inline u64 current_mpidr() noexcept {
         u64 value;
         __asm__ volatile("mrs %0, mpidr_el1" : "=r"(value));
         return value;
     }
 
-    [[nodiscard]] inline u32 current_affinity() noexcept
-    {
+    [[nodiscard]] inline u32 current_affinity() noexcept {
         const u64 mpidr = current_mpidr();
-        return static_cast<u32>((mpidr & 0xffULL)
-            | (mpidr & 0x0000ff00ULL)
-            | (mpidr & 0x00ff0000ULL)
-            | ((mpidr >> 8U) & 0xff000000ULL));
+        return static_cast<u32>((mpidr & 0xffULL) | (mpidr & 0x0000ff00ULL) |
+                                (mpidr & 0x00ff0000ULL) | ((mpidr >> 8U) & 0xff000000ULL));
     }
 
-    [[nodiscard]] inline uintptr_t find_redistributor() noexcept
-    {
+    [[nodiscard]] inline uintptr_t find_redistributor() noexcept {
         const u32 affinity = current_affinity();
 
         for (u32 index = 0U; index < maximum_redistributor_count; ++index) {
-            const uintptr_t base = redistributor_base
-                + static_cast<uintptr_t>(index) * redistributor_stride;
+            const uintptr_t base =
+                redistributor_base + static_cast<uintptr_t>(index) * redistributor_stride;
             const u64 typer = reg64(base + 0x0008U);
 
             if (static_cast<u32>(typer >> 32U) == affinity) {
@@ -63,8 +56,7 @@ namespace sys::platform::interrupt
         return 0U;
     }
 
-    [[nodiscard]] inline bool wait_distributor_ready() noexcept
-    {
+    [[nodiscard]] inline bool wait_distributor_ready() noexcept {
         for (u64 remaining = register_wait_limit; remaining != 0U; --remaining) {
             if ((reg32(distributor_base + 0x0000U) & (1U << 31U)) == 0U) {
                 return true;
@@ -75,8 +67,7 @@ namespace sys::platform::interrupt
         return false;
     }
 
-    [[nodiscard]] inline error_t initialize_global() noexcept
-    {
+    [[nodiscard]] inline error_t initialize_global() noexcept {
         reg32(distributor_base + 0x0000U) = 0U;
         __asm__ volatile("dsb sy" ::: "memory");
         if (!wait_distributor_ready()) {
@@ -92,8 +83,7 @@ namespace sys::platform::interrupt
         return error_t::success;
     }
 
-    [[nodiscard]] inline error_t initialize_cpu() noexcept
-    {
+    [[nodiscard]] inline error_t initialize_cpu() noexcept {
         const uintptr_t redistributor = find_redistributor();
         if (redistributor == 0U) {
             return error_t::not_found;
@@ -113,9 +103,8 @@ namespace sys::platform::interrupt
 
         const uintptr_t sgi = redistributor + sgi_base_offset;
         reg32(sgi + 0x0080U) = 0xffffffffU;
-        reg32(sgi + 0x0100U) = (1U << reschedule_ipi)
-            | (1U << tlb_shootdown_ipi)
-            | (1U << virtual_timer_irq);
+        reg32(sgi + 0x0100U) =
+            (1U << reschedule_ipi) | (1U << tlb_shootdown_ipi) | (1U << virtual_timer_irq);
         __asm__ volatile("dsb sy" ::: "memory");
 
         u64 value = 1U;
@@ -130,8 +119,7 @@ namespace sys::platform::interrupt
         return error_t::success;
     }
 
-    [[nodiscard]] inline error_t initialize() noexcept
-    {
+    [[nodiscard]] inline error_t initialize() noexcept {
         const error_t global_result = initialize_global();
         if (global_result != error_t::success) {
             return global_result;
@@ -140,34 +128,25 @@ namespace sys::platform::interrupt
         return initialize_cpu();
     }
 
-    [[nodiscard]] inline irq_id_t acknowledge() noexcept
-    {
+    [[nodiscard]] inline irq_id_t acknowledge() noexcept {
         u64 value;
         __asm__ volatile("mrs %0, ICC_IAR1_EL1" : "=r"(value));
         return static_cast<irq_id_t>(value & 0x00ffffffU);
     }
 
-    inline void complete(irq_id_t irq) noexcept
-    {
+    inline void complete(irq_id_t irq) noexcept {
         const u64 value = irq;
         __asm__ volatile("msr ICC_EOIR1_EL1, %0\n\tisb" : : "r"(value) : "memory");
     }
 
-    inline void send_ipi_all_others(irq_id_t irq) noexcept
-    {
+    inline void send_ipi_all_others(irq_id_t irq) noexcept {
         const u64 mpidr = current_mpidr();
         const u64 aff1 = (mpidr >> 8U) & 0xffU;
         const u64 aff2 = (mpidr >> 16U) & 0xffU;
         const u64 aff3 = (mpidr >> 32U) & 0xffU;
-        const u64 value = (aff3 << 48U)
-            | (1ULL << 40U)
-            | (aff2 << 32U)
-            | (static_cast<u64>(irq & 0xfU) << 24U)
-            | (aff1 << 16U);
+        const u64 value = (aff3 << 48U) | (1ULL << 40U) | (aff2 << 32U) |
+                          (static_cast<u64>(irq & 0xfU) << 24U) | (aff1 << 16U);
 
-        __asm__ volatile("dsb ishst\n\tmsr ICC_SGI1R_EL1, %0\n\tisb"
-                         :
-                         : "r"(value)
-                         : "memory");
+        __asm__ volatile("dsb ishst\n\tmsr ICC_SGI1R_EL1, %0\n\tisb" : : "r"(value) : "memory");
     }
 } // namespace sys::platform::interrupt

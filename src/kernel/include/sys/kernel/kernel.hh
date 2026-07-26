@@ -3,7 +3,6 @@
 #include <sys/arch/arch.hh>
 #include <sys/kernel/address_space.hh>
 #include <sys/kernel/capability.hh>
-#include <sys/kernel/thread/scheduler.hh>
 #include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/interrupt.hh>
 #include <sys/kernel/ipc.hh>
@@ -11,6 +10,7 @@
 #include <sys/kernel/scheduler.hh>
 #include <sys/kernel/scheduler_test.hh>
 #include <sys/kernel/thread.hh>
+#include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/platform.hh>
 
 namespace sys::kernel
@@ -20,18 +20,15 @@ namespace sys::kernel
     inline constexpr u16 version_minor = 8U;
     inline constexpr u16 version_patch = 0U;
 
-    inline void verify_contracts() noexcept
-    {
+    inline void verify_contracts() noexcept {
         static_assert(arch::v1::compatible(arch::version));
         static_assert(platform::v1::compatible(platform::version));
-        static_assert(arch::v1::valid_page_geometry(
-            arch::memory::page_shift,
-            arch::memory::virtual_address_bits,
-            arch::memory::physical_address_bits));
+        static_assert(arch::v1::valid_page_geometry(arch::memory::page_shift,
+                                                    arch::memory::virtual_address_bits,
+                                                    arch::memory::physical_address_bits));
     }
 
-    [[noreturn]] inline void start_secondary() noexcept
-    {
+    [[noreturn]] inline void start_secondary() noexcept {
         platform::console::initialize();
         pr_info("smp: secondary entered cpu=%u el=%u\n",
                 static_cast<unsigned int>(arch::cpu::current_id()),
@@ -58,8 +55,7 @@ namespace sys::kernel
         arch::cpu::halt();
     }
 
-    [[noreturn]] inline void start() noexcept
-    {
+    [[noreturn]] inline void start() noexcept {
         verify_contracts();
 
         platform::console::initialize();
@@ -74,13 +70,9 @@ namespace sys::kernel
         scheduler::initialize();
         scheduler::initialize_cpu();
 
-        pr_info("%s L4 microkernel %u.%u.%u\n", name,
-                static_cast<unsigned int>(version_major),
-                static_cast<unsigned int>(version_minor),
-                static_cast<unsigned int>(version_patch));
-        pr_info("arch=%s platform=%s word_bits=%u el=%u\n",
-                arch::name,
-                platform::name,
+        pr_info("%s L4 microkernel %u.%u.%u\n", name, static_cast<unsigned int>(version_major),
+                static_cast<unsigned int>(version_minor), static_cast<unsigned int>(version_patch));
+        pr_info("arch=%s platform=%s word_bits=%u el=%u\n", arch::name, platform::name,
                 static_cast<unsigned int>(word_bits),
                 static_cast<unsigned int>(arch::exception::current_el()));
 
@@ -106,37 +98,36 @@ namespace sys::kernel
 
         const u32 expected = platform::firmware::boot_info.cpu_count;
         const bool online = arch::smp::wait_until_online(expected, 1000000U);
-        pr_info("smp cpus=%u/%u status=%s\n",
-                static_cast<unsigned int>(arch::smp::online_count()),
-                static_cast<unsigned int>(expected),
-                online ? "online" : "timeout");
+        pr_info("smp cpus=%u/%u status=%s\n", static_cast<unsigned int>(arch::smp::online_count()),
+                static_cast<unsigned int>(expected), online ? "online" : "timeout");
         if constexpr (arch::space::user_available) {
             const error_t user_result = thread::initialize_user_threads();
             if (user_result != error_t::success) {
-                pr_err("user object initialization failed=%d\n",
-                       static_cast<int>(user_result));
+                pr_err("user object initialization failed=%d\n", static_cast<int>(user_result));
                 arch::cpu::halt();
             }
             const error_t profile_result = thread::validate_kernel_profile();
             if (profile_result != error_t::success) {
-                pr_err("kernel profile self-test failed=%d\n",
-                       static_cast<int>(profile_result));
+                pr_err("kernel profile self-test failed=%d\n", static_cast<int>(profile_result));
                 arch::cpu::halt();
             }
-            pr_info("kernel profile=1.0 runtime-certification=enabled completion-api=enabled authority=verified memory=verified notification=verified\n");
+            pr_info("kernel profile=1.0 runtime-certification=enabled completion-api=enabled "
+                    "authority=verified memory=verified notification=verified\n");
             pr_info("root bootstrap: task=0 bootinfo=v%u caps=%u pager_endpoint=%u mode=%s\n",
                     static_cast<unsigned int>(boot::root_bootinfo.version),
                     static_cast<unsigned int>(boot::root_bootinfo.capability_count),
                     static_cast<unsigned int>(boot::root_bootinfo.root_fault_endpoint),
                     CONFIG_ROOT_ONLY_BOOT ? "root-only" : "compatibility-fuzz");
-            pr_info("user authority: tasks=%u cspaces=%u endpoints=%u object-table=generation-checked\n",
+            pr_info("user authority: tasks=%u cspaces=%u endpoints=%u "
+                    "object-table=generation-checked\n",
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(ipc::endpoint_count));
             if constexpr (CONFIG_ROOT_ONLY_BOOT) {
                 pr_info("root-only boot: initial_tasks=1 initial_threads=1 image=init.elf\n");
             } else {
-                pr_info("user smp: address-spaces=%u threads=%u cpus=%u ipc=capability-call/reply_receive fault-ipc=enabled fuzz=deterministic\n",
+                pr_info("user smp: address-spaces=%u threads=%u cpus=%u "
+                        "ipc=capability-call/reply_receive fault-ipc=enabled fuzz=deterministic\n",
                         static_cast<unsigned int>(thread::active_user_thread_count),
                         static_cast<unsigned int>(thread::active_user_thread_count),
                         static_cast<unsigned int>(expected));
@@ -156,8 +147,7 @@ namespace sys::kernel
         arch::irq::enable();
         pr_info("status=interrupts-enabled\n");
 
-        platform::interrupt::send_ipi_all_others(
-            platform::interrupt::reschedule_ipi);
+        platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
 
         bool ipi_online = false;
         for (u64 spins = 1000000U; spins != 0U; --spins) {
@@ -174,8 +164,7 @@ namespace sys::kernel
             arch::cpu::relax();
         }
 
-        pr_info("ipi reschedule=%s targets=%u\n",
-                ipi_online ? "verified" : "timeout",
+        pr_info("ipi reschedule=%s targets=%u\n", ipi_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected - 1U));
 
         bool timers_online = false;
@@ -193,12 +182,10 @@ namespace sys::kernel
             arch::cpu::relax();
         }
 
-        pr_info("timer per-cpu=%s cpus=%u\n",
-                timers_online ? "verified" : "timeout",
+        pr_info("timer per-cpu=%s cpus=%u\n", timers_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected));
 
-        platform::interrupt::send_ipi_all_others(
-            platform::interrupt::tlb_shootdown_ipi);
+        platform::interrupt::send_ipi_all_others(platform::interrupt::tlb_shootdown_ipi);
         bool tlb_online = false;
         for (u64 spins = 1000000U; spins != 0U; --spins) {
             tlb_online = true;
@@ -208,11 +195,11 @@ namespace sys::kernel
                     break;
                 }
             }
-            if (tlb_online) break;
+            if (tlb_online)
+                break;
             arch::cpu::relax();
         }
-        pr_info("tlb shootdown=%s targets=%u asids=%u\n",
-                tlb_online ? "verified" : "timeout",
+        pr_info("tlb shootdown=%s targets=%u asids=%u\n", tlb_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected - 1U),
                 static_cast<unsigned int>(thread::user_thread_count));
 
@@ -229,6 +216,5 @@ namespace sys::kernel
             thread::enter_first_user_thread();
         }
         arch::cpu::halt();
-
     }
 } // namespace sys::kernel

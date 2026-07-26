@@ -6,30 +6,25 @@ namespace sys::arch::irq
 {
     using irq_state_t = v1::irq_state_t;
 
-    [[nodiscard]] inline irq_state_t save_and_disable() noexcept
-    {
+    [[nodiscard]] inline irq_state_t save_and_disable() noexcept {
         word_t state;
-        __asm__ volatile(
-            "mrs %0, daif\n"
-            "msr daifset, #2"
-            : "=r"(state)
-            :
-            : "memory");
+        __asm__ volatile("mrs %0, daif\n"
+                         "msr daifset, #2"
+                         : "=r"(state)
+                         :
+                         : "memory");
         return {.value = state};
     }
 
-    inline void restore(irq_state_t state) noexcept
-    {
+    inline void restore(irq_state_t state) noexcept {
         __asm__ volatile("msr daif, %0" : : "r"(state.value) : "memory");
     }
 
-    inline void enable() noexcept
-    {
+    inline void enable() noexcept {
         __asm__ volatile("msr daifclr, #2" ::: "memory");
     }
 
-    inline void disable() noexcept
-    {
+    inline void disable() noexcept {
         __asm__ volatile("msr daifset, #2" ::: "memory");
     }
 } // namespace sys::arch::irq

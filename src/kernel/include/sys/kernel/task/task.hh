@@ -6,8 +6,7 @@
 
 namespace sys::kernel::task
 {
-    struct task
-    {
+    struct task {
         object::header_t object{};
         capability::cspace_t cspace{};
         space_id_t address_space_id{};
@@ -15,8 +14,7 @@ namespace sys::kernel::task
         bool root{};
     };
 
-    inline void initialize(task& value, space_id_t address_space_id) noexcept
-    {
+    inline void initialize(task& value, space_id_t address_space_id) noexcept {
         capability::initialize(value.cspace);
         value.address_space_id = address_space_id;
         value.fault_endpoint = 0U;

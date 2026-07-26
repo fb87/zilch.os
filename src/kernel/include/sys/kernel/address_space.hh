@@ -12,16 +12,10 @@ namespace sys::kernel::memory
         u16 address_space_identifier;
     };
 
-    [[nodiscard]]
-    inline error_t map(
-        address_space_t& address_space,
-        vaddr_t virtual_address,
-        paddr_t physical_address,
-        arch::page_attributes_t attributes) noexcept {
-        return arch::memory::map_page(
-            address_space.root_table,
-            virtual_address,
-            physical_address,
-            attributes);
+    [[nodiscard]] inline error_t map(address_space_t& address_space, vaddr_t virtual_address,
+                                     paddr_t physical_address,
+                                     arch::page_attributes_t attributes) noexcept {
+        return arch::memory::map_page(address_space.root_table, virtual_address, physical_address,
+                                      attributes);
     }
 } // namespace sys::kernel::memory

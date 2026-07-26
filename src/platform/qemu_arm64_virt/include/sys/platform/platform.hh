@@ -1,11 +1,11 @@
 #pragma once
 
-#include <sys/platform/v1/contract.hh>
 #include <sys/platform/console.hh>
 #include <sys/platform/firmware.hh>
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/memory.hh>
 #include <sys/platform/timer.hh>
+#include <sys/platform/v1/contract.hh>
 
 namespace sys::platform
 {
