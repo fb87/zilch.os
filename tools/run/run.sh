@@ -14,8 +14,10 @@ fi
 [ -f "$kernel" ] || { echo "error: kernel not found: $kernel" >&2; exit 1; }
 readelf_tool=$(command -v llvm-readelf 2>/dev/null || command -v readelf)
 machine=$($readelf_tool -h "$kernel" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
+cpus=${CPUS:-4}
+memory_mb=${MEMORY_MB:-256}
 case "$machine" in
-    AArch64) exec qemu-system-aarch64 -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -smp 4 -m 256M -nographic -no-reboot -kernel "$kernel" "$@" ;;
-    *X86-64*) exec qemu-system-x86_64 -machine q35 -cpu max -smp 4 -m 256M -nographic -no-reboot -kernel "$kernel" "$@" ;;
+    AArch64) exec qemu-system-aarch64 -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" "$@" ;;
+    *X86-64*) exec qemu-system-x86_64 -machine q35 -cpu max -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" "$@" ;;
     *) echo "error: unsupported ELF machine: $machine" >&2; exit 1 ;;
 esac

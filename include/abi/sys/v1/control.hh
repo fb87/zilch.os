@@ -20,6 +20,8 @@ namespace sys::abi::v1
         interrupt_ack = 12U,
         scheduling_configure = 13U,
         capability_mint = 14U,
+        frame_allocate = 15U,
+        frame_release = 18U,
         child_create = 16U,
         child_destroy = 17U,
         hypervisor_invoke = 20U,

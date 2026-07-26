@@ -363,6 +363,20 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
 
+        const paddr_t old_page = memory::frames[3].physical_address;
+        auto* old_words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(old_page));
+        old_words[0] = 0xa5a55a5af00dcafeULL;
+        result = memory::release_frame(memory::frames[3]);
+        if (result != error_t::success)
+            return result;
+        result = memory::assign_frame(memory::frames[3], root.address_space_id);
+        if (result != error_t::success || memory::frames[3].physical_address != old_page)
+            return error_t::invalid_argument;
+        const auto* new_words = reinterpret_cast<const volatile u64*>(
+            static_cast<uintptr_t>(memory::frames[3].physical_address));
+        if (new_words[0] != 0U)
+            return error_t::invalid_argument;
+
         notification::signal(profile::root_notification, 1U);
         if (notification::consume(profile::root_notification) != 1U)
             return error_t::invalid_argument;

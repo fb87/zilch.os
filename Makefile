@@ -9,6 +9,8 @@ VERSION ?= 0.7.0
 BOOT_PROFILE ?= root
 BUILD_VARIANT ?= development
 ARCH ?= arm64
+CPUS ?= 4
+MEMORY_MB ?= 256
 
 VALID_BUILD_VARIANTS := development certification release
 ifeq ($(filter $(BUILD_VARIANT),$(VALID_BUILD_VARIANTS)),)
@@ -84,6 +86,7 @@ KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_
     -DCONFIG_SELFTEST=$(CONFIG_SELFTEST) \
     -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \
     -DCONFIG_VERBOSE_DIAGNOSTICS=$(CONFIG_VERBOSE_DIAGNOSTICS) \
+    -DCONFIG_QEMU_RAM_MB=$(MEMORY_MB) -DCONFIG_QEMU_CPUS=$(CPUS) \
     -DUSER_BIN_PATH=\"$(OBJTREE)/user/init.bin\"
 KBUILD_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections $(WARNINGS)
 KBUILD_AFLAGS := -ffreestanding
@@ -136,7 +139,7 @@ arm64:
 amd64:
 	@$(MAKE) ARCH=amd64 PLATFORM=qemu-amd64-q35
 run: $(KERNEL_ELF)
-	@$(SRCTREE)/tools/run/run.sh $(KERNEL_ELF)
+	@CPUS=$(CPUS) MEMORY_MB=$(MEMORY_MB) $(SRCTREE)/tools/run/run.sh $(KERNEL_ELF)
 certification:
 	@$(MAKE) BUILD_VARIANT=certification ARCH=arm64 PLATFORM=qemu-arm64-virt all
 

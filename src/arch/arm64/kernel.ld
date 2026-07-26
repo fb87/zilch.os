@@ -19,5 +19,6 @@ SECTIONS
     . += 4 * 0x4000;
     __hypervisor_stacks_end = .;
   }
+  __kernel_end = ALIGN(4096);
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.init_array*) *(.fini_array*) }
 }

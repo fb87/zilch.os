@@ -214,6 +214,23 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+            case abi::v1::control_operation::frame_allocate: {
+                memory::frame* target_frame = nullptr;
+                result = resolve_frame(current, a1, capability::right_t::control, target_frame);
+                if (result == error_t::success) {
+                    result = memory::assign_frame(
+                        *target_frame,
+                        current.owner == nullptr ? 0U : current.owner->address_space_id);
+                }
+                break;
+            }
+            case abi::v1::control_operation::frame_release: {
+                memory::frame* target_frame = nullptr;
+                result = resolve_frame(current, a1, capability::right_t::control, target_frame);
+                if (result == error_t::success)
+                    result = memory::release_frame(*target_frame);
+                break;
+            }
             case abi::v1::control_operation::unmap_frame: {
                 space::address_space* target_space = nullptr;
                 memory::frame* source_frame = nullptr;
@@ -221,7 +238,7 @@ namespace sys::kernel::syscall
                 if (result == error_t::success)
                     result = resolve_frame(current, a2, capability::right_t::write, source_frame);
                 if (result == error_t::success)
-                    result = memory::unmap(*target_space, *source_frame);
+                    result = memory::unmap(*target_space, *source_frame, a3);
                 break;
             }
             case abi::v1::control_operation::notification_signal:
