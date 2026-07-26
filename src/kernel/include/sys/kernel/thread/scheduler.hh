@@ -7,6 +7,7 @@
 #include <sys/kernel/acceptance/acceptance.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/ipc/endpoint.hh>
+#include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/memory/manager.hh>
@@ -155,15 +156,32 @@ namespace sys::kernel::thread
             {static_cast<u32>(capability::right_t::read)
              | static_cast<u32>(capability::right_t::control)});
         if (root_result != error_t::success) return root_result;
+        if constexpr (arch::hypervisor::active) {
+            root_result = capability::install(
+                root_task.cspace, 28U,
+                object::reference(hypervisor::bootstrap_vm.object),
+                {static_cast<u32>(capability::right_t::read)
+                 | static_cast<u32>(capability::right_t::write)
+                 | static_cast<u32>(capability::right_t::grant)
+                 | static_cast<u32>(capability::right_t::control)});
+            if (root_result != error_t::success) return root_result;
+            root_result = capability::install(
+                root_task.cspace, 29U,
+                object::reference(hypervisor::bootstrap_vcpu.object),
+                {static_cast<u32>(capability::right_t::read)
+                 | static_cast<u32>(capability::right_t::write)
+                 | static_cast<u32>(capability::right_t::control)});
+            if (root_result != error_t::success) return root_result;
+        }
 
         boot::root_bootinfo.cpu_count = maximum_cpu_count;
         boot::root_bootinfo.root_task = 1U;
         boot::root_bootinfo.root_thread = 2U;
         boot::root_bootinfo.root_space = 3U;
         boot::root_bootinfo.root_fault_endpoint = 10U;
-        boot::root_bootinfo.capability_count = 8U;
-        const capability_id_t selectors[8]{1U, 2U, 3U, 4U, 10U, 12U, 14U, 15U};
-        for (u32 index = 0U; index < 8U; ++index) {
+        boot::root_bootinfo.capability_count = arch::hypervisor::active ? 10U : 8U;
+        const capability_id_t selectors[10]{1U, 2U, 3U, 4U, 10U, 12U, 14U, 15U, 28U, 29U};
+        for (u32 index = 0U; index < boot::root_bootinfo.capability_count; ++index) {
             const capability::slot_t& slot = root_task.cspace.slots[selectors[index]];
             boot::root_bootinfo.capabilities[index] = {
                 selectors[index], slot.object, slot.rights.bits};
@@ -181,7 +199,6 @@ namespace sys::kernel::thread
 
     inline volatile u64 certification_operations[maximum_cpu_count]{};
     inline volatile u64 certification_failures[maximum_cpu_count]{};
-    inline volatile word_t certification_state[maximum_cpu_count]{};
 
     [[nodiscard]] inline error_t create_user_bundle(
         task::task& root, cpu_id_t cpu, word_t role,
@@ -265,7 +282,6 @@ namespace sys::kernel::thread
         }
         certification_operations[cpu] = 0U;
         certification_failures[cpu] = 0U;
-        certification_state[cpu] = 0U;
         return error_t::success;
     }
 
@@ -347,6 +363,13 @@ namespace sys::kernel::thread
         if (notification::consume(profile::root_notification) != 1U)
             return error_t::invalid_argument;
         acceptance::mark_profile_self_tests(true, true, true);
+        if constexpr (arch::hypervisor::active) {
+            result = hypervisor::self_test();
+            if (result != error_t::success) return result;
+            pr_info("[HV-DIAG] profile=0.1 self-test=PASS operations=%llu failures=%llu\n",
+                    static_cast<unsigned long long>(hypervisor::self_test_operations),
+                    static_cast<unsigned long long>(hypervisor::self_test_failures));
+        }
         return error_t::success;
     }
 

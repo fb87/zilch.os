@@ -1,4 +1,1 @@
-obj-y += start.o
-obj-y += vectors.o
-
-obj-y += user.o
+obj-y += start.o vectors.o user.o guest.o

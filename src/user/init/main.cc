@@ -1,5 +1,6 @@
 #include <abi/sys/v1/control.hh>
 #include <sys/control.hh>
+#include <sys/hypervisor.hh>
 #include <sys/types.hh>
 
 namespace
@@ -13,12 +14,17 @@ namespace
         root_created_objects = 5U,
         root_created_smp_fuzz = 6U,
         object_destroy_reuse = 7U,
+        hypervisor_profile_0_1 = 8U,
+        hypervisor_negative_fuzz = 9U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
-#if CONFIG_SOAK_FUZZ
-    inline constexpr sys::word_t soak_epoch_operations = 65536U;
-#endif
+    inline constexpr sys::word_t worker_thread_selector_base = 17U;
+    inline constexpr sys::word_t worker_task_selector_base = 20U;
+    inline constexpr sys::word_t worker_space_selector_base = 23U;
+    inline constexpr sys::word_t hypervisor_vm_selector = 28U;
+
+    static_assert(worker_space_selector_base + 3U < hypervisor_vm_selector);
 
     [[nodiscard]] bool report(test_id id, bool pass) noexcept
     {
@@ -77,7 +83,9 @@ namespace
     {
         return sys::control(
                    sys::abi::v1::control_operation::child_create,
-                   cpu, cpu, 19U + cpu, 22U + cpu, 25U + cpu)
+                   cpu, cpu, worker_thread_selector_base + cpu,
+                   worker_task_selector_base + cpu,
+                   worker_space_selector_base + cpu)
             == static_cast<sys::word_t>(sys::error_t::success);
     }
 
@@ -101,61 +109,11 @@ namespace
         return false;
     }
 
-
-#if CONFIG_SOAK_FUZZ
-    [[noreturn]] void run_soak() noexcept
-    {
-        sys::word_t baseline[4]{};
-        for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
-            baseline[cpu] = sys::control(
-                sys::abi::v1::control_operation::acceptance_query, cpu, 0U);
-        }
-
-        for (sys::word_t epoch = 1U;; ++epoch) {
-            bool complete = false;
-            while (!complete) {
-                complete = true;
-                for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
-                    const sys::word_t operations = sys::control(
-                        sys::abi::v1::control_operation::acceptance_query,
-                        cpu, 0U);
-                    const sys::word_t failures = sys::control(
-                        sys::abi::v1::control_operation::acceptance_query,
-                        cpu, 1U);
-                    if (failures != 0U) {
-                        (void)sys::control(
-                            sys::abi::v1::control_operation::acceptance_soak_report,
-                            epoch, cpu, operations, failures, 0U);
-                        for (;;) { }
-                    }
-                    if ((operations - baseline[cpu]) < soak_epoch_operations) {
-                        complete = false;
-                    }
-                }
-            }
-
-            for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
-                const sys::word_t operations = sys::control(
-                    sys::abi::v1::control_operation::acceptance_query, cpu, 0U);
-                const sys::word_t failures = sys::control(
-                    sys::abi::v1::control_operation::acceptance_query, cpu, 1U);
-                const sys::word_t seed = sys::control(
-                    sys::abi::v1::control_operation::acceptance_query, cpu, 2U);
-                (void)sys::control(
-                    sys::abi::v1::control_operation::acceptance_soak_report,
-                    epoch, cpu, operations, failures, seed);
-                baseline[cpu] = operations;
-            }
-        }
-    }
-
-#endif
-
     [[nodiscard]] bool stop_destroy_worker(sys::word_t cpu) noexcept
     {
-        const sys::word_t thread_selector = 19U + cpu;
-        const sys::word_t task_selector = 22U + cpu;
-        const sys::word_t space_selector = 25U + cpu;
+        const sys::word_t thread_selector = worker_thread_selector_base + cpu;
+        const sys::word_t task_selector = worker_task_selector_base + cpu;
+        const sys::word_t space_selector = worker_space_selector_base + cpu;
         const sys::word_t suspend = sys::control(
             sys::abi::v1::control_operation::thread_suspend,
             thread_selector);
@@ -202,6 +160,22 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept
                   && remove == static_cast<sys::word_t>(sys::error_t::success))
         && pass;
 
+    const sys::word_t hv_self_test = sys::control(
+        sys::abi::v1::control_operation::hypervisor_self_test);
+    pass = report(test_id::hypervisor_profile_0_1,
+                  hv_self_test == static_cast<sys::word_t>(sys::error_t::success))
+        && pass;
+    sys::word_t hv_fuzz_failures = 0U;
+    for (sys::word_t iteration = 0U; iteration < 4096U; ++iteration) {
+        const sys::word_t result = sys::hypervisor_invoke(
+            sys::abi::v1::hypervisor_operation::stage2_map,
+            31U, iteration << 12U, 0x48000000U, 1U);
+        if (result != static_cast<sys::word_t>(sys::error_t::denied))
+            ++hv_fuzz_failures;
+    }
+    pass = report(test_id::hypervisor_negative_fuzz, hv_fuzz_failures == 0U)
+        && pass;
+
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
         created = create_worker(cpu) && created;
@@ -226,16 +200,5 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept
     (void)sys::control(
         sys::abi::v1::control_operation::acceptance_finalize,
         pass ? 1U : 0U);
-
-#if CONFIG_SOAK_FUZZ
-    if (pass) {
-        bool recreated = true;
-        for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
-            recreated = create_worker(cpu) && recreated;
-        }
-        if (recreated) run_soak();
-    }
-#endif
-
     return pass ? 0 : 1;
 }

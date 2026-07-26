@@ -2,6 +2,7 @@
 
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/interrupt.hh>
+#include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/object/table.hh>
@@ -24,6 +25,9 @@ namespace sys::kernel::profile
         root_timer_interrupt.notification = object::reference(root_notification.object);
         result = object::register_object(root_timer_interrupt.object, 49U,
                                          object::type_t::interrupt);
+        if (result != error_t::success) return result;
+        result = hypervisor::initialize();
+        if (result == error_t::unsupported) return error_t::success;
         return result;
     }
 }

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/hypervisor.hh>
 #include <abi/sys/v1/syscall_numbers.hh>
 #include <sys/arch/syscall/entry.hh>
 #include <sys/kernel/interrupt.hh>
+#include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/printk.hh>
@@ -80,6 +82,37 @@ namespace sys::kernel::syscall
             right, header);
         if (lookup != error_t::success) return lookup;
         result = reinterpret_cast<memory::frame*>(header);
+        return error_t::success;
+    }
+
+
+    [[nodiscard]] inline error_t resolve_vm(
+        thread::thread& current, capability_id_t selector,
+        capability::right_t right, hypervisor::virtual_machine_t*& result) noexcept
+    {
+        result = nullptr;
+        if (current.owner == nullptr) return error_t::denied;
+        object::header_t* header = nullptr;
+        const error_t lookup = capability::lookup(
+            current.owner->cspace, selector, object::type_t::virtual_machine,
+            right, header);
+        if (lookup != error_t::success) return lookup;
+        result = reinterpret_cast<hypervisor::virtual_machine_t*>(header);
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t resolve_vcpu(
+        thread::thread& current, capability_id_t selector,
+        capability::right_t right, hypervisor::virtual_cpu_t*& result) noexcept
+    {
+        result = nullptr;
+        if (current.owner == nullptr) return error_t::denied;
+        object::header_t* header = nullptr;
+        const error_t lookup = capability::lookup(
+            current.owner->cspace, selector, object::type_t::virtual_cpu,
+            right, header);
+        if (lookup != error_t::success) return lookup;
+        result = reinterpret_cast<hypervisor::virtual_cpu_t*>(header);
         return error_t::success;
     }
 
@@ -266,6 +299,8 @@ namespace sys::kernel::syscall
             case 5U: name = "root_created_objects"; break;
             case 6U: name = "root_created_smp_fuzz"; break;
             case 7U: name = "object_destroy_reuse"; break;
+            case 8U: name = "hypervisor_profile_0_1"; break;
+            case 9U: name = "hypervisor_negative_fuzz"; break;
             default: break;
             }
             pr_info("[TEST] name=%s result=%s\n", name, a2 != 0U ? "PASS" : "FAIL");
@@ -334,13 +369,82 @@ namespace sys::kernel::syscall
                             __atomic_load_n(&thread::certification_failures[cpu],
                                             __ATOMIC_ACQUIRE)));
             }
-            __atomic_store_n(&thread::certification_state[cpu], a3,
-                             __ATOMIC_RELEASE);
             if (a1 != 0U) {
                 __atomic_fetch_add(&thread::certification_failures[cpu], a1,
                                    __ATOMIC_RELAXED);
             }
             result = error_t::success;
+            break;
+        }
+        case abi::v1::control_operation::hypervisor_self_test:
+            if (current.owner == nullptr || !current.owner->root) {
+                result = error_t::denied;
+                break;
+            }
+            result = hypervisor::self_test();
+            break;
+        case abi::v1::control_operation::hypervisor_invoke: {
+            const auto hv_operation = static_cast<abi::v1::hypervisor_operation>(a1);
+            hypervisor::virtual_machine_t* vm = nullptr;
+            hypervisor::virtual_cpu_t* vcpu = nullptr;
+            switch (hv_operation) {
+            case abi::v1::hypervisor_operation::vm_reset:
+                result = resolve_vm(current, a2, capability::right_t::control, vm);
+                if (result == error_t::success) result = hypervisor::reset(*vm);
+                break;
+            case abi::v1::hypervisor_operation::stage2_map:
+                result = resolve_vm(current, a2, capability::right_t::control, vm);
+                if (result == error_t::success)
+                    result = hypervisor::stage2_map(*vm, a3, a4, hypervisor::page_size,
+                                                    static_cast<u32>(a5));
+                break;
+            case abi::v1::hypervisor_operation::stage2_unmap:
+                result = resolve_vm(current, a2, capability::right_t::control, vm);
+                if (result == error_t::success) result = hypervisor::stage2_unmap(*vm, a3);
+                break;
+            case abi::v1::hypervisor_operation::vcpu_configure:
+                result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                if (result == error_t::success)
+                    result = hypervisor::configure_vcpu(*vcpu, a3, a4, a5);
+                break;
+            case abi::v1::hypervisor_operation::virtual_irq_inject:
+                result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                if (result == error_t::success)
+                    result = hypervisor::inject_irq(*vcpu, static_cast<u16>(a3));
+                break;
+            case abi::v1::hypervisor_operation::vcpu_suspend:
+                result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                if (result == error_t::success) {
+                    if (vcpu->running) result = error_t::busy;
+                    else { vcpu->state = hypervisor::vm_state::stopped; result = error_t::success; }
+                }
+                break;
+            case abi::v1::hypervisor_operation::vcpu_run: {
+                result = resolve_vcpu(current, a2, capability::right_t::execute, vcpu);
+                if (result == error_t::success) {
+                    hypervisor::exit_record exit{};
+                    result = hypervisor::run(*vcpu, exit);
+                    frame.x[1] = static_cast<word_t>(exit.reason);
+                    frame.x[2] = exit.syndrome;
+                    frame.x[3] = exit.fault_address;
+                    frame.x[4] = exit.guest_pc;
+                }
+                break;
+            }
+            case abi::v1::hypervisor_operation::diagnostics:
+                result = resolve_vm(current, a2, capability::right_t::read, vm);
+                if (result == error_t::success) {
+                    frame.x[1] = vm->last_diagnostic.checkpoint;
+                    frame.x[2] = static_cast<word_t>(static_cast<s64>(vm->last_diagnostic.result));
+                    frame.x[3] = vm->last_diagnostic.ipa;
+                    frame.x[4] = vm->last_diagnostic.value;
+                }
+                break;
+            case abi::v1::hypervisor_operation::fuzz:
+                if (current.owner == nullptr || !current.owner->root) result = error_t::denied;
+                else result = hypervisor::self_test();
+                break;
+            }
             break;
         }
         case abi::v1::control_operation::acceptance_query: {
@@ -352,29 +456,11 @@ namespace sys::kernel::syscall
             const u64 value = a2 == 0U
                 ? __atomic_load_n(&thread::certification_operations[a1],
                                   __ATOMIC_ACQUIRE)
-                : (a2 == 1U
-                    ? __atomic_load_n(&thread::certification_failures[a1],
-                                      __ATOMIC_ACQUIRE)
-                    : __atomic_load_n(&thread::certification_state[a1],
-                                      __ATOMIC_ACQUIRE));
+                : __atomic_load_n(&thread::certification_failures[a1],
+                                  __ATOMIC_ACQUIRE);
             arch::syscall::set_result(frame, static_cast<word_t>(value));
             return true;
         }
-        case abi::v1::control_operation::acceptance_soak_report:
-            if (current.owner == nullptr || !current.owner->root
-                || a2 >= thread::maximum_cpu_count) {
-                result = error_t::denied;
-                break;
-            }
-            pr_info("[SOAK] epoch=%llu cpu=%u operations=%llu failures=%llu seed=%llx progress=%s\n",
-                    static_cast<unsigned long long>(a1),
-                    static_cast<unsigned int>(a2),
-                    static_cast<unsigned long long>(a3),
-                    static_cast<unsigned long long>(a4),
-                    static_cast<unsigned long long>(a5),
-                    a4 == 0U ? "yes" : "no");
-            result = a4 == 0U ? error_t::success : error_t::invalid_argument;
-            break;
         }
         set_control_result(frame, result);
         return true;

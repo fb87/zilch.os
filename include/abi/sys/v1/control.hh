@@ -26,6 +26,7 @@ namespace sys::abi::v1
         child_destroy = 17U,
         acceptance_worker_tick = 18U,
         acceptance_query = 19U,
-        acceptance_soak_report = 20U,
+        hypervisor_invoke = 20U,
+        hypervisor_self_test = 21U,
     };
 }

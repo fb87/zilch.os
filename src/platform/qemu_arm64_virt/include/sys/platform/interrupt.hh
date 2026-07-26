@@ -100,7 +100,7 @@ namespace sys::platform::interrupt
         }
 
         volatile u32& waker = reg32(redistributor + 0x0014U);
-        waker &= ~(1U << 1U);
+        waker = waker & ~(1U << 1U);
         __asm__ volatile("dsb sy" ::: "memory");
 
         u64 remaining = register_wait_limit;
