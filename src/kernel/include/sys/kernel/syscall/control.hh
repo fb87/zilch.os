@@ -300,6 +300,9 @@ namespace sys::kernel::syscall
                     case 9U:
                         name = "hypervisor_negative_fuzz";
                         break;
+                    case 10U:
+                        name = "hypervisor_profile_0_4";
+                        break;
                     default:
                         break;
                 }

@@ -16,6 +16,7 @@ namespace
         object_destroy_reuse = 7U,
         hypervisor_profile_0_2 = 8U,
         hypervisor_negative_fuzz = 9U,
+        hypervisor_profile_0_4 = 10U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -143,9 +144,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
 
     const sys::word_t hv_self_test =
         sys::control(sys::abi::v1::control_operation::hypervisor_self_test);
-    pass = report(test_id::hypervisor_profile_0_2,
-                  hv_self_test == static_cast<sys::word_t>(sys::error_t::success)) &&
-           pass;
+    const bool hypervisor_pass = hv_self_test == static_cast<sys::word_t>(sys::error_t::success);
+    pass = report(test_id::hypervisor_profile_0_2, hypervisor_pass) && pass;
+    pass = report(test_id::hypervisor_profile_0_4, hypervisor_pass) && pass;
     sys::word_t hv_fuzz_failures = 0U;
     for (sys::word_t iteration = 0U; iteration < 4096U; ++iteration) {
         const sys::word_t result = sys::hypervisor_invoke(

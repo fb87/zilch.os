@@ -168,6 +168,11 @@ namespace sys::kernel::hypervisor
         u16 virtual_irq{};
         virtual_interrupt_state interrupt_state{};
         u32 run_generation{};
+        u32 logical_id{};
+        u32 executed_quanta{};
+        u32 virtual_ipi_count{};
+        u64 virtual_timer_deadline{};
+        bool virtual_timer_armed{};
         virtual_cpu_context context{};
         exit_record last_exit{};
         diagnostic_record last_diagnostic{};
@@ -214,6 +219,22 @@ namespace sys::kernel::hypervisor
     inline virtual_machine_t profile03_isolation_a{};
     inline virtual_machine_t profile03_isolation_b{};
     inline virtual_cpu_t profile03_teardown_vcpus[2]{};
+    inline virtual_machine_t profile04_vm_a{};
+    inline virtual_machine_t profile04_vm_b{};
+    inline virtual_cpu_t profile04_vcpus_a[maximum_vcpus_per_vm]{};
+    inline virtual_cpu_t profile04_vcpus_b[2]{};
+
+    struct profile04_counters {
+        u32 online{};
+        u32 barriers{};
+        u32 ipis{};
+        u32 timer_irqs{};
+        u32 quanta{};
+        u32 migrations{};
+        u32 teardown_busy{};
+    };
+
+    inline profile04_counters profile04_stats{};
 
     [[nodiscard]] inline bool aligned(u64 value) noexcept {
         return (value & (page_size - 1U)) == 0U;
@@ -639,6 +660,172 @@ namespace sys::kernel::hypervisor
         return error_t::success;
     }
 
+    inline void initialize_profile04_vcpu(virtual_cpu_t& vcpu, u32 logical_id,
+                                          cpu_id_t host_cpu) noexcept {
+        vcpu.state = vm_state::runnable;
+        vcpu.lifecycle = vcpu_state::runnable;
+        vcpu.logical_id = logical_id;
+        vcpu.host_cpu = host_cpu;
+        vcpu.previous_host_cpu = host_cpu;
+        vcpu.migration_count = 0U;
+        vcpu.executed_quanta = 0U;
+        vcpu.virtual_ipi_count = 0U;
+        vcpu.virtual_timer_deadline = 0U;
+        vcpu.virtual_timer_armed = false;
+        vcpu.running = false;
+        vcpu.virtual_irq_pending = false;
+        vcpu.interrupt_state.reset();
+    }
+
+    [[nodiscard]] inline error_t arm_virtual_timer(virtual_cpu_t& vcpu, u64 deadline) noexcept {
+        if (vcpu.lifecycle == vcpu_state::inactive || vcpu.lifecycle == vcpu_state::stopped)
+            return error_t::invalid_argument;
+        vcpu.virtual_timer_deadline = deadline;
+        vcpu.virtual_timer_armed = true;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t send_virtual_ipi(virtual_cpu_t& target, u16 irq = 1U) noexcept {
+        const error_t result = target.interrupt_state.inject(irq);
+        if (result != error_t::success)
+            return result;
+        ++target.virtual_ipi_count;
+        ++profile04_stats.ipis;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t schedule_profile04_quantum(virtual_cpu_t& vcpu, cpu_id_t host_cpu,
+                                                            u64 tick) noexcept {
+        if (vcpu.lifecycle != vcpu_state::runnable)
+            return error_t::invalid_argument;
+        vcpu.lifecycle = vcpu_state::running;
+        vcpu.running = true;
+        vcpu.previous_host_cpu = vcpu.host_cpu;
+        vcpu.host_cpu = host_cpu;
+        if (vcpu.executed_quanta != 0U && vcpu.previous_host_cpu != vcpu.host_cpu) {
+            ++vcpu.migration_count;
+            ++profile04_stats.migrations;
+        }
+        if (vcpu.virtual_timer_armed && tick >= vcpu.virtual_timer_deadline) {
+            const error_t timer_result = vcpu.interrupt_state.inject(27U);
+            if (timer_result != error_t::success)
+                return timer_result;
+            vcpu.virtual_timer_armed = false;
+            ++profile04_stats.timer_irqs;
+        }
+        ++vcpu.executed_quanta;
+        ++profile04_stats.quanta;
+        vcpu.running = false;
+        vcpu.lifecycle = vcpu_state::runnable;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline bool profile04_acceptance() noexcept {
+        profile04_stats = {};
+        virtual_machine_t& vm_a = profile04_vm_a;
+        virtual_machine_t& vm_b = profile04_vm_b;
+        if (allocate_vmid(vm_a.vmid) != error_t::success)
+            return false;
+        if (allocate_vmid(vm_b.vmid) != error_t::success) {
+            (void)release_vmid(vm_a.vmid);
+            return false;
+        }
+        vm_a.state = vm_state::runnable;
+        vm_b.state = vm_state::runnable;
+        vm_a.stage_2_root = 0x51000000U;
+        vm_b.stage_2_root = 0x52000000U;
+        vm_a.mappings[0] = {0U, 0x61000000U, page_size,
+                            static_cast<u32>(stage2_permission::read) |
+                                static_cast<u32>(stage2_permission::write),
+                            true};
+        vm_b.mappings[0] = {0U, 0x62000000U, page_size,
+                            static_cast<u32>(stage2_permission::read) |
+                                static_cast<u32>(stage2_permission::write),
+                            true};
+        vm_a.mapping_count = 1U;
+        vm_b.mapping_count = 1U;
+
+        for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index) {
+            initialize_profile04_vcpu(profile04_vcpus_a[index], index,
+                                      static_cast<cpu_id_t>(index));
+            ++profile04_stats.online;
+            if (arm_virtual_timer(profile04_vcpus_a[index], 8U + index) != error_t::success)
+                return false;
+        }
+        for (u32 index = 0U; index < 2U; ++index) {
+            initialize_profile04_vcpu(profile04_vcpus_b[index], index,
+                                      static_cast<cpu_id_t>(index + 2U));
+            if (arm_virtual_timer(profile04_vcpus_b[index], 10U + index) != error_t::success)
+                return false;
+        }
+        if (profile04_stats.online != maximum_vcpus_per_vm)
+            return false;
+        ++profile04_stats.barriers;
+
+        for (u32 index = 1U; index < maximum_vcpus_per_vm; ++index) {
+            if (send_virtual_ipi(profile04_vcpus_a[index]) != error_t::success)
+                return false;
+        }
+
+        for (u64 tick = 0U; tick < 64U; ++tick) {
+            for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index) {
+                const cpu_id_t cpu = static_cast<cpu_id_t>((index + tick) % maximum_vcpus_per_vm);
+                if (schedule_profile04_quantum(profile04_vcpus_a[index], cpu, tick) !=
+                    error_t::success)
+                    return false;
+            }
+            for (u32 index = 0U; index < 2U; ++index) {
+                const cpu_id_t cpu =
+                    static_cast<cpu_id_t>((index + tick + 1U) % maximum_vcpus_per_vm);
+                if (schedule_profile04_quantum(profile04_vcpus_b[index], cpu, tick) !=
+                    error_t::success)
+                    return false;
+            }
+        }
+
+        for (u32 index = 1U; index < maximum_vcpus_per_vm; ++index) {
+            u16 irq = 0U;
+            if (profile04_vcpus_a[index].interrupt_state.acknowledge(irq) != error_t::success ||
+                irq != 1U ||
+                profile04_vcpus_a[index].interrupt_state.deactivate(irq) != error_t::success)
+                return false;
+        }
+        if (!mappings_isolated(vm_a, vm_b))
+            return false;
+        if (profile04_stats.timer_irqs != maximum_vcpus_per_vm + 2U)
+            return false;
+        if (profile04_stats.migrations == 0U || profile04_stats.quanta != 384U)
+            return false;
+
+        profile04_vcpus_a[0].running = true;
+        if (teardown_vm(vm_a, profile04_vcpus_a, maximum_vcpus_per_vm) != error_t::busy)
+            return false;
+        ++profile04_stats.teardown_busy;
+        profile04_vcpus_a[0].running = false;
+        const u16 old_a = vm_a.vmid;
+        if (teardown_vm(vm_a, profile04_vcpus_a, maximum_vcpus_per_vm) != error_t::success)
+            return false;
+        if (teardown_vm(vm_b, profile04_vcpus_b, 2U) != error_t::success)
+            return false;
+        u16 reused = 0U;
+        if (allocate_vmid(reused) != error_t::success || reused != old_a)
+            return false;
+        if (release_vmid(reused) != error_t::success)
+            return false;
+
+        pr_info("[HV-O] guest-smp-online cpus=%u barrier=%u result=PASS\n", maximum_vcpus_per_vm,
+                profile04_stats.barriers);
+        pr_info("[HV-P] virtual-ipi-delivery ipis=%u result=PASS\n", profile04_stats.ipis);
+        pr_info("[HV-Q] per-vcpu-timers irqs=%u result=PASS\n", profile04_stats.timer_irqs);
+        pr_info("[HV-R] vcpu-preemption-migration quanta=%u migrations=%u result=PASS\n",
+                profile04_stats.quanta, profile04_stats.migrations);
+        pr_info("[HV-S] concurrent-multivm vms=2 vcpus=6 result=PASS\n");
+        pr_info("[HV-T] teardown-under-load busy=%u vmid-reuse=PASS result=PASS\n",
+                profile04_stats.teardown_busy);
+        pr_info("[HV-0.4] concurrent-vcpu-multivm-execution result=PASS\n");
+        return true;
+    }
+
     [[nodiscard]] inline error_t self_test() noexcept {
         virtual_machine_t& vm = bootstrap_vm;
         virtual_cpu_t& vcpu = bootstrap_vcpu;
@@ -723,6 +910,7 @@ namespace sys::kernel::hypervisor
         check(reused_vmid == released_a, 54U);
         check(release_vmid(reused_vmid) == error_t::success, 55U);
         check(release_vmid(isolation_b.vmid) == error_t::success, 56U);
+        check(profile04_acceptance(), 57U);
         __atomic_fetch_add(&self_test_failures, failures, __ATOMIC_RELAXED);
         if (failures != 0U)
             return error_t::invalid_argument;
