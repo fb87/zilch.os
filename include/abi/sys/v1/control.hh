@@ -25,6 +25,13 @@ namespace sys::abi::v1
         child_create = 16U,
         child_destroy = 17U,
         hypervisor_invoke = 20U,
+        frame_create = 21U,
+        frame_destroy = 22U,
+        page_table_create = 23U,
+        memory_set_quota = 24U,
+        fault_reply_map = 25U,
+        memory_query = 26U,
+        page_table_destroy = 27U,
 #if CONFIG_SELFTEST
         acceptance_report = 0x80000000U,
         acceptance_finalize = 0x80000001U,

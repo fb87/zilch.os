@@ -11,6 +11,8 @@ namespace sys::kernel::task
         capability::cspace_t cspace{};
         space_id_t address_space_id{};
         capability_id_t fault_endpoint{};
+        u32 memory_quota_pages{64U};
+        u32 memory_pages_owned{};
         bool root{};
     };
 
@@ -18,6 +20,8 @@ namespace sys::kernel::task
         capability::initialize(value.cspace);
         value.address_space_id = address_space_id;
         value.fault_endpoint = 0U;
+        value.memory_quota_pages = 64U;
+        value.memory_pages_owned = 0U;
         value.root = false;
     }
 } // namespace sys::kernel::task

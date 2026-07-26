@@ -377,6 +377,42 @@ namespace sys::kernel::thread
         if (new_words[0] != 0U)
             return error_t::invalid_argument;
 
+        const u32 owned_before = root.memory_pages_owned;
+        result = memory::create_frame(root, 18U);
+        if (result != error_t::success || root.memory_pages_owned != owned_before + 1U)
+            return error_t::invalid_argument;
+        object::header_t* dynamic_header = nullptr;
+        result = capability::lookup(root.cspace, 18U, object::type_t::frame,
+                                    capability::right_t::control, dynamic_header);
+        if (result != error_t::success || dynamic_header == nullptr)
+            return error_t::invalid_argument;
+        auto& dynamic_frame = *reinterpret_cast<memory::frame*>(dynamic_header);
+        result = memory::map(
+            user_threads[0].address_space, dynamic_frame,
+            CONFIG_ROOT_ONLY_BOOT ? 0x20003000ULL : 0x10003000ULL,
+            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
+                                            static_cast<u8>(memory::permission::write)));
+        if (result != error_t::success)
+            return result;
+        if (memory::destroy_frame(root, 18U) != error_t::busy)
+            return error_t::invalid_argument;
+        result = memory::unmap(user_threads[0].address_space, dynamic_frame);
+        if (result != error_t::success)
+            return result;
+        result = memory::destroy_frame(root, 18U);
+        if (result != error_t::success || root.memory_pages_owned != owned_before)
+            return error_t::invalid_argument;
+
+        result = memory::create_page_table(root, 19U, 3U);
+        if (result != error_t::success || root.memory_pages_owned != owned_before + 1U)
+            return error_t::invalid_argument;
+        result = memory::destroy_page_table(root, 19U);
+        if (result != error_t::success || root.memory_pages_owned != owned_before)
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=dynamic_memory_objects result=PASS free=%u managed=%u\n",
+                static_cast<unsigned int>(memory::free_pages),
+                static_cast<unsigned int>(memory::managed_pages));
+
         notification::signal(profile::root_notification, 1U);
         if (notification::consume(profile::root_notification) != 1U)
             return error_t::invalid_argument;

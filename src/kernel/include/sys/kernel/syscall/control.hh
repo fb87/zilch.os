@@ -214,6 +214,96 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+            case abi::v1::control_operation::frame_create: {
+                task::task* target_task = current.owner;
+                if (a1 != 0U)
+                    result = resolve_task(current, a1, capability::right_t::control, target_task);
+                else
+                    result = target_task != nullptr ? error_t::success : error_t::denied;
+                if (result == error_t::success)
+                    result = memory::create_frame(*target_task, static_cast<capability_id_t>(a2));
+                break;
+            }
+            case abi::v1::control_operation::frame_destroy:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result =
+                        memory::destroy_frame(*current.owner, static_cast<capability_id_t>(a1));
+                break;
+            case abi::v1::control_operation::page_table_create: {
+                task::task* target_task = current.owner;
+                if (a1 != 0U)
+                    result = resolve_task(current, a1, capability::right_t::control, target_task);
+                else
+                    result = target_task != nullptr ? error_t::success : error_t::denied;
+                if (result == error_t::success)
+                    result = memory::create_page_table(
+                        *target_task, static_cast<capability_id_t>(a2), static_cast<u8>(a3));
+                break;
+            }
+            case abi::v1::control_operation::page_table_destroy:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = memory::destroy_page_table(*current.owner,
+                                                        static_cast<capability_id_t>(a1));
+                break;
+            case abi::v1::control_operation::memory_set_quota: {
+                if (current.owner == nullptr || !current.owner->root) {
+                    result = error_t::denied;
+                    break;
+                }
+                task::task* target_task = nullptr;
+                result = resolve_task(current, a1, capability::right_t::control, target_task);
+                if (result == error_t::success) {
+                    if (a2 == 0U || a2 > memory::managed_pages)
+                        result = error_t::invalid_argument;
+                    else if (target_task->memory_pages_owned > a2)
+                        result = error_t::busy;
+                    else {
+                        target_task->memory_quota_pages = static_cast<u32>(a2);
+                        result = error_t::success;
+                    }
+                }
+                break;
+            }
+            case abi::v1::control_operation::memory_query:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else {
+                    frame.x[1] = current.owner->memory_pages_owned;
+                    frame.x[2] = current.owner->memory_quota_pages;
+                    frame.x[3] = memory::free_pages;
+                    frame.x[4] = memory::managed_pages;
+                    result = error_t::success;
+                }
+                break;
+            case abi::v1::control_operation::fault_reply_map: {
+                thread::thread* target = nullptr;
+                memory::frame* source = nullptr;
+                result = resolve_thread(current, a1, capability::right_t::control, target);
+                if (result == error_t::success)
+                    result = resolve_frame(current, a2, capability::right_t::write, source);
+                if (result == error_t::success) {
+                    if (thread::load_state(*target) != thread::state::blocked_fault ||
+                        target->fault_disposition != fault::disposition::pending) {
+                        result = error_t::invalid_argument;
+                    } else {
+                        const vaddr_t page_address = a3 & ~(memory::page_size - 1U);
+                        result = memory::map(target->address_space, *source, page_address,
+                                             static_cast<memory::permission>(a4));
+                        if (result == error_t::success) {
+                            target->fault_disposition = fault::disposition::resume;
+                            target->last_fault = {};
+                            target->waiting_endpoint = 0U;
+                            thread::wake(*target);
+                            ipc::remote_reschedule(target->pinned_cpu, arch::cpu::current_id());
+                        }
+                    }
+                }
+                break;
+            }
             case abi::v1::control_operation::frame_allocate: {
                 memory::frame* target_frame = nullptr;
                 result = resolve_frame(current, a1, capability::right_t::control, target_frame);

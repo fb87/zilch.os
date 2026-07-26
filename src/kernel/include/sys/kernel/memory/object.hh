@@ -22,6 +22,7 @@ namespace sys::kernel::memory
         space_id_t owner{};
         u32 mapping_count{};
         bool allocated{};
+        bool in_use{};
         mapping_record mappings[maximum_mappings_per_frame]{};
     };
 
@@ -31,6 +32,7 @@ namespace sys::kernel::memory
         space_id_t owner{};
         u8 level{};
         bool allocated{};
+        bool in_use{};
     };
 
     [[nodiscard]] inline constexpr bool writable(permission value) noexcept {
