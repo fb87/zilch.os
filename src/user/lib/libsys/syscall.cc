@@ -34,3 +34,34 @@ extern "C" sys::word_t sys_invoke_raw(sys::word_t number, sys::word_t argument0,
 #error "Unsupported userspace architecture"
 #endif
 }
+
+extern "C" sys::word_t sys_ipc_invoke_raw(sys::word_t endpoint, sys::word_t operation,
+                                          sys::word_t message0, sys::word_t message1,
+                                          sys::word_t message2, sys::word_t message3,
+                                          sys::word_t transfer_descriptor,
+                                          sys::word_t timeout_descriptor) noexcept {
+#if defined(__aarch64__)
+    register sys::word_t x0 asm("x0") = endpoint;
+    register sys::word_t x1 asm("x1") = operation;
+    register sys::word_t x2 asm("x2") = message0;
+    register sys::word_t x3 asm("x3") = message1;
+    register sys::word_t x4 asm("x4") = message2;
+    register sys::word_t x5 asm("x5") = message3;
+    register sys::word_t x6 asm("x6") = transfer_descriptor;
+    register sys::word_t x7 asm("x7") = timeout_descriptor;
+    register sys::word_t x8 asm("x8") = static_cast<sys::word_t>(sys::abi::v1::syscall::ipc);
+    asm volatile("svc #0"
+                 : "+r"(x0)
+                 : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x6), "r"(x7), "r"(x8)
+                 : "memory");
+    return x0;
+#elif defined(__x86_64__)
+    if (transfer_descriptor != 0U || timeout_descriptor != 0U) {
+        return static_cast<sys::word_t>(static_cast<sys::s64>(sys::error_t::unsupported));
+    }
+    return sys_invoke_raw(static_cast<sys::word_t>(sys::abi::v1::syscall::ipc), endpoint, operation,
+                          message0, message1, message2, message3);
+#else
+#error "Unsupported userspace architecture"
+#endif
+}

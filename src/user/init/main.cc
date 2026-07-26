@@ -1,3 +1,8 @@
+#ifndef CONFIG_SELFTEST
+#define CONFIG_SELFTEST 0
+#endif
+
+#if CONFIG_SELFTEST
 #include <sys/control.hh>
 #include <sys/hypervisor.hh>
 #include <sys/types.hh>
@@ -181,3 +186,10 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     (void)sys::control(sys::abi::v1::control_operation::acceptance_finalize, pass ? 1U : 0U);
     return pass ? 0 : 1;
 }
+
+#else
+#include <sys/types.hh>
+extern "C" int main(sys::word_t, sys::word_t) noexcept {
+    return 0;
+}
+#endif

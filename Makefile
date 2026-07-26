@@ -7,7 +7,16 @@ MAKEFLAGS += --no-builtin-rules
 PROJECT ?= zilch
 VERSION ?= 0.7.0
 BOOT_PROFILE ?= root
+BUILD_VARIANT ?= development
 ARCH ?= arm64
+
+VALID_BUILD_VARIANTS := development certification release
+ifeq ($(filter $(BUILD_VARIANT),$(VALID_BUILD_VARIANTS)),)
+$(error BUILD_VARIANT=$(BUILD_VARIANT) is invalid; expected one of $(VALID_BUILD_VARIANTS))
+endif
+CONFIG_SELFTEST := $(if $(filter certification,$(BUILD_VARIANT)),1,0)
+CONFIG_HYPERVISOR_SELFTEST := $(CONFIG_SELFTEST)
+CONFIG_VERBOSE_DIAGNOSTICS := $(if $(filter development certification,$(BUILD_VARIANT)),1,0)
 ifeq ($(origin PLATFORM),command line)
 else
 PLATFORM := $(if $(filter arm64,$(ARCH)),qemu-arm64-virt,qemu-amd64-q35)
@@ -71,10 +80,14 @@ INCLUDES := -I$(SRCTREE)/src/arch/$(ARCH)/include \
             -I$(SRCTREE)/include/abi \
             -I$(OBJTREE)/include/generated
 WARNINGS := -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wundef -Wcast-align -Wcast-qual -Wformat=2 -Wimplicit-fallthrough
-KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_BOOT=$(if $(filter root,$(BOOT_PROFILE)),1,0)
+KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_BOOT=$(if $(filter root,$(BOOT_PROFILE)),1,0) \
+    -DCONFIG_SELFTEST=$(CONFIG_SELFTEST) \
+    -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \
+    -DCONFIG_VERBOSE_DIAGNOSTICS=$(CONFIG_VERBOSE_DIAGNOSTICS) \
+    -DUSER_BIN_PATH=\"$(OBJTREE)/user/init.bin\"
 KBUILD_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections $(WARNINGS)
 KBUILD_AFLAGS := -ffreestanding
-export SRCTREE OBJTREE ARCH PLATFORM CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION KBUILD_CPPFLAGS KBUILD_CXXFLAGS KBUILD_AFLAGS
+export SRCTREE OBJTREE ARCH PLATFORM BUILD_VARIANT CONFIG_SELFTEST CONFIG_HYPERVISOR_SELFTEST CONFIG_VERBOSE_DIAGNOSTICS CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION KBUILD_CPPFLAGS KBUILD_CXXFLAGS KBUILD_AFLAGS
 
 core-y := src/arch/$(ARCH)/ src/platform/$(PLATFORM_DIR)/ src/kernel/
 core-builtins := $(patsubst %/,$(OBJTREE)/%/built-in.o,$(core-y))
@@ -96,7 +109,7 @@ EARLYFS := $(OBJTREE)/image/earlyfs.tar
 MANIFEST ?= $(SRCTREE)/src/image/manifests/minimal.toml
 include $(SRCTREE)/tools/build/Makefile.user
 
-.PHONY: all kernel image userspace arm64 amd64 run clean release
+.PHONY: all kernel image userspace arm64 amd64 run clean release certification production-gate
 all: userspace kernel image
 kernel: userspace $(KERNEL_ELF) $(KERNEL_BIN)
 image: $(EARLYFS)
@@ -124,10 +137,18 @@ amd64:
 	@$(MAKE) ARCH=amd64 PLATFORM=qemu-amd64-q35
 run: $(KERNEL_ELF)
 	@$(SRCTREE)/tools/run/run.sh $(KERNEL_ELF)
-release: format-check
-	@$(MAKE) ARCH=arm64 PLATFORM=qemu-arm64-virt all
-	@$(MAKE) ARCH=amd64 PLATFORM=qemu-amd64-q35 all
-	@$(SRCTREE)/tools/release/make_release.sh $(SRCTREE) $(SRCTREE)/out/build $(PROJECT) $(VERSION)
+certification:
+	@$(MAKE) BUILD_VARIANT=certification ARCH=arm64 PLATFORM=qemu-arm64-virt all
+
+production-gate:
+	@$(SRCTREE)/tools/release/check_production_source.sh $(SRCTREE)
+	@$(MAKE) BUILD_VARIANT=release ARCH=arm64 PLATFORM=qemu-arm64-virt O=out/release/arm64 clean all
+	@$(SRCTREE)/tools/release/check_production_elf.sh $(SRCTREE)/out/release/arm64/$(PROJECT).elf
+
+release: format-check production-gate
+	@$(MAKE) BUILD_VARIANT=release ARCH=amd64 PLATFORM=qemu-amd64-q35 O=out/release/amd64 clean all
+	@$(SRCTREE)/tools/release/check_production_elf.sh $(SRCTREE)/out/release/amd64/$(PROJECT).elf
+	@$(SRCTREE)/tools/release/make_release.sh $(SRCTREE) $(SRCTREE)/out/release $(PROJECT) $(VERSION)
 clean:
 	@rm -rf out
 .PHONY: FORCE

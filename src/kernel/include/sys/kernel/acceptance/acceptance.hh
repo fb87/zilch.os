@@ -5,6 +5,7 @@
 
 namespace sys::kernel::acceptance
 {
+#if CONFIG_SELFTEST
     inline constexpr u64 certification_operation_target = 1048576U;
 
     inline volatile bool authority_ready{};
@@ -53,4 +54,9 @@ namespace sys::kernel::acceptance
                 static_cast<unsigned long long>(operations));
         pr_info("[ACCEPTANCE] profile=1.0 result=PASS failures=0\n");
     }
+#else
+    inline void mark_profile_self_tests(bool, bool, bool) noexcept {}
+    inline void mark_fault_ipc() noexcept {}
+    inline void report_final(u64, u64, bool) noexcept {}
+#endif
 } // namespace sys::kernel::acceptance

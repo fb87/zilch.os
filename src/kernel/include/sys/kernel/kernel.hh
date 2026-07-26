@@ -106,13 +106,16 @@ namespace sys::kernel
                 pr_err("user object initialization failed=%d\n", static_cast<int>(user_result));
                 arch::cpu::halt();
             }
+#if CONFIG_SELFTEST
             const error_t profile_result = thread::validate_kernel_profile();
             if (profile_result != error_t::success) {
                 pr_err("kernel profile self-test failed=%d\n", static_cast<int>(profile_result));
                 arch::cpu::halt();
             }
-            pr_info("kernel profile=1.0 runtime-certification=enabled completion-api=enabled "
-                    "authority=verified memory=verified notification=verified\n");
+            pr_info("kernel certification harness=enabled\n");
+#else
+            pr_info("kernel product build selftests=disabled\n");
+#endif
             pr_info("root bootstrap: task=0 bootinfo=v%u caps=%u pager_endpoint=%u mode=%s\n",
                     static_cast<unsigned int>(boot::root_bootinfo.version),
                     static_cast<unsigned int>(boot::root_bootinfo.capability_count),

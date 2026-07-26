@@ -7,55 +7,152 @@
 
 namespace sys::kernel::capability
 {
-    inline constexpr u32 cspace_slot_count = 32U;
+    inline constexpr u32 cspace_slot_count = 64U;
+    inline constexpr u32 maximum_registered_cspaces = 32U;
+    inline constexpr u32 maximum_derivations = 4096U;
+    inline constexpr u32 maximum_derivation_depth = 64U;
 
     struct cspace_t {
         volatile u32 lock{};
+        u32 registry_index{maximum_registered_cspaces};
         slot_t slots[cspace_slot_count]{};
     };
 
-    inline void lock(cspace_t& cspace) noexcept {
-        while (__atomic_exchange_n(&cspace.lock, 1U, __ATOMIC_ACQUIRE) != 0U) {
-            while (__atomic_load_n(&cspace.lock, __ATOMIC_RELAXED) != 0U) {
+    struct derivation_record_t {
+        derivation_id_t id{};
+        derivation_id_t parent{};
+        object::reference_t object{};
+        volatile u32 active{};
+    };
+
+    inline cspace_t* cspace_registry[maximum_registered_cspaces]{};
+    inline volatile u32 cspace_registry_lock{};
+    inline derivation_record_t derivations[maximum_derivations]{};
+    inline volatile derivation_id_t next_derivation{1U};
+
+    inline void spin_lock(volatile u32& value) noexcept {
+        while (__atomic_exchange_n(&value, 1U, __ATOMIC_ACQUIRE) != 0U) {
+            while (__atomic_load_n(&value, __ATOMIC_RELAXED) != 0U) {
                 arch::cpu::relax();
             }
         }
     }
 
+    inline void spin_unlock(volatile u32& value) noexcept {
+        __atomic_store_n(&value, 0U, __ATOMIC_RELEASE);
+    }
+
+    inline void lock(cspace_t& cspace) noexcept {
+        spin_lock(cspace.lock);
+    }
     inline void unlock(cspace_t& cspace) noexcept {
-        __atomic_store_n(&cspace.lock, 0U, __ATOMIC_RELEASE);
+        spin_unlock(cspace.lock);
+    }
+
+    [[nodiscard]] inline derivation_id_t
+    allocate_derivation(derivation_id_t parent, const object::reference_t& object) noexcept {
+        const derivation_id_t id = __atomic_fetch_add(&next_derivation, 1U, __ATOMIC_ACQ_REL);
+        if (id == 0U || id >= maximum_derivations)
+            return 0U;
+        derivation_record_t& record = derivations[id];
+        record.id = id;
+        record.parent = parent;
+        record.object = object;
+        __atomic_store_n(&record.active, 1U, __ATOMIC_RELEASE);
+        return id;
+    }
+
+    [[nodiscard]] inline bool descendant_of(derivation_id_t candidate,
+                                            derivation_id_t ancestor) noexcept {
+        if (candidate == 0U || ancestor == 0U || candidate == ancestor)
+            return false;
+        for (u32 depth = 0U; depth < maximum_derivation_depth; ++depth) {
+            if (candidate >= maximum_derivations)
+                return false;
+            const derivation_record_t& record = derivations[candidate];
+            if (record.id != candidate)
+                return false;
+            if (record.parent == ancestor)
+                return true;
+            if (record.parent == 0U || record.parent == candidate)
+                return false;
+            candidate = record.parent;
+        }
+        return false;
+    }
+
+    [[nodiscard]] inline error_t register_cspace(cspace_t& cspace) noexcept {
+        spin_lock(cspace_registry_lock);
+        for (u32 index = 0U; index < maximum_registered_cspaces; ++index) {
+            if (cspace_registry[index] == &cspace) {
+                cspace.registry_index = index;
+                spin_unlock(cspace_registry_lock);
+                return error_t::success;
+            }
+        }
+        for (u32 index = 0U; index < maximum_registered_cspaces; ++index) {
+            if (cspace_registry[index] == nullptr) {
+                cspace_registry[index] = &cspace;
+                cspace.registry_index = index;
+                spin_unlock(cspace_registry_lock);
+                return error_t::success;
+            }
+        }
+        spin_unlock(cspace_registry_lock);
+        return error_t::no_memory;
     }
 
     inline void initialize(cspace_t& cspace) noexcept {
         cspace.lock = 0U;
-        for (u32 index = 0U; index < cspace_slot_count; ++index) {
+        cspace.registry_index = maximum_registered_cspaces;
+        for (u32 index = 0U; index < cspace_slot_count; ++index)
             cspace.slots[index] = {};
-        }
+        (void)register_cspace(cspace);
     }
 
     [[nodiscard]] inline error_t install(cspace_t& cspace, capability_id_t selector,
                                          const object::reference_t& object,
-                                         rights_t rights) noexcept {
+                                         rights_t granted_rights) noexcept {
         if (selector >= cspace_slot_count || object.type == object::type_t::none ||
-            object::resolve(object) == nullptr) {
+            object::resolve(object) == nullptr || granted_rights.bits == 0U) {
             return error_t::invalid_argument;
         }
+        lock(cspace);
         slot_t& slot = cspace.slots[selector];
-        if (slot.object.type != object::type_t::none)
+        if (slot.object.type != object::type_t::none) {
+            unlock(cspace);
             return error_t::busy;
+        }
+        const derivation_id_t derivation = allocate_derivation(0U, object);
+        if (derivation == 0U) {
+            unlock(cspace);
+            return error_t::no_memory;
+        }
         slot.object = object;
-        slot.rights = rights;
+        slot.rights = granted_rights;
+        slot.derivation = derivation;
+        slot.parent = 0U;
+        slot.badge = 0U;
+        slot.depth = 0U;
+        unlock(cspace);
         return error_t::success;
     }
 
-    [[nodiscard]] inline error_t remove(cspace_t& cspace, capability_id_t selector) noexcept {
+    [[nodiscard]] inline error_t remove_locked(cspace_t& cspace,
+                                               capability_id_t selector) noexcept {
         if (selector >= cspace_slot_count)
             return error_t::invalid_argument;
         slot_t& slot = cspace.slots[selector];
         if (slot.object.type == object::type_t::none)
             return error_t::not_found;
+        if (slot.derivation < maximum_derivations)
+            __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
         slot = {};
         return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t remove(cspace_t& cspace, capability_id_t selector) noexcept {
+        return remove_locked(cspace, selector);
     }
 
     [[nodiscard]] inline error_t lookup(const cspace_t& cspace, capability_id_t selector,
@@ -74,30 +171,61 @@ namespace sys::kernel::capability
         return result != nullptr ? error_t::success : error_t::not_found;
     }
 
+    [[nodiscard]] inline error_t derive(cspace_t& destination, capability_id_t destination_selector,
+                                        const cspace_t& source, capability_id_t source_selector,
+                                        rights_t rights_mask, badge_t badge) noexcept {
+        if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
+            return error_t::invalid_argument;
+        cspace_t& mutable_source = const_cast<cspace_t&>(source);
+        cspace_t* first = &destination < &mutable_source ? &destination : &mutable_source;
+        cspace_t* second = &destination < &mutable_source ? &mutable_source : &destination;
+        lock(*first);
+        if (second != first)
+            lock(*second);
+        const slot_t source_slot = source.slots[source_selector];
+        slot_t& destination_slot = destination.slots[destination_selector];
+        error_t result = error_t::success;
+        if (source_slot.object.type == object::type_t::none ||
+            object::resolve(source_slot.object) == nullptr) {
+            result = error_t::not_found;
+        } else if (!source_slot.rights.contains(right_t::grant) ||
+                   !attenuates(source_slot.rights, rights_mask)) {
+            result = error_t::denied;
+        } else if (source_slot.depth >= maximum_derivation_depth) {
+            result = error_t::invalid_argument;
+        } else if (destination_slot.object.type != object::type_t::none) {
+            result = error_t::busy;
+        } else {
+            const derivation_id_t id =
+                allocate_derivation(source_slot.derivation, source_slot.object);
+            if (id == 0U) {
+                result = error_t::no_memory;
+            } else {
+                destination_slot.object = source_slot.object;
+                destination_slot.rights = rights_mask;
+                destination_slot.derivation = id;
+                destination_slot.parent = source_slot.derivation;
+                destination_slot.badge = badge;
+                destination_slot.depth = source_slot.depth + 1U;
+            }
+        }
+        if (second != first)
+            unlock(*second);
+        unlock(*first);
+        return result;
+    }
+
     [[nodiscard]] inline error_t copy(cspace_t& destination, capability_id_t destination_selector,
                                       const cspace_t& source, capability_id_t source_selector,
                                       rights_t rights_mask) noexcept {
-        if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
-            return error_t::invalid_argument;
-        const slot_t& source_slot = source.slots[source_selector];
-        if (source_slot.object.type == object::type_t::none ||
-            object::resolve(source_slot.object) == nullptr)
-            return error_t::not_found;
-        if (!source_slot.rights.contains(right_t::grant))
-            return error_t::denied;
-        const u32 granted = source_slot.rights.bits & rights_mask.bits;
-        if (granted == 0U)
-            return error_t::denied;
-        lock(destination);
-        slot_t& destination_slot = destination.slots[destination_selector];
-        if (destination_slot.object.type != object::type_t::none) {
-            unlock(destination);
-            return error_t::busy;
-        }
-        destination_slot.object = source_slot.object;
-        destination_slot.rights = {granted};
-        unlock(destination);
-        return error_t::success;
+        return derive(destination, destination_selector, source, source_selector, rights_mask, 0U);
+    }
+
+    [[nodiscard]] inline error_t mint(cspace_t& destination, capability_id_t destination_selector,
+                                      const cspace_t& source, capability_id_t source_selector,
+                                      rights_t rights_mask, badge_t badge) noexcept {
+        return derive(destination, destination_selector, source, source_selector, rights_mask,
+                      badge);
     }
 
     [[nodiscard]] inline error_t move(cspace_t& destination, capability_id_t destination_selector,
@@ -131,16 +259,35 @@ namespace sys::kernel::capability
     [[nodiscard]] inline error_t delete_capability(cspace_t& cspace,
                                                    capability_id_t selector) noexcept {
         lock(cspace);
-        const error_t result = remove(cspace, selector);
+        const error_t result = remove_locked(cspace, selector);
         unlock(cspace);
         return result;
     }
 
-    inline u32 revoke_reference(const object::reference_t& reference) noexcept {
+    inline u32 revoke_descendants(derivation_id_t ancestor) noexcept {
+        if (ancestor == 0U)
+            return 0U;
         u32 removed = 0U;
-        // Static K1/K6 profile owns a bounded set of CSpaces; callers iterate them.
-        // This helper intentionally operates on one CSpace through revoke_in().
-        (void)reference;
+        spin_lock(cspace_registry_lock);
+        for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
+            cspace_t* cspace = cspace_registry[space_index];
+            if (cspace == nullptr)
+                continue;
+            lock(*cspace);
+            for (u32 slot_index = 0U; slot_index < cspace_slot_count; ++slot_index) {
+                slot_t& slot = cspace->slots[slot_index];
+                if (slot.object.type != object::type_t::none &&
+                    descendant_of(slot.derivation, ancestor)) {
+                    if (slot.derivation < maximum_derivations)
+                        __atomic_store_n(&derivations[slot.derivation].active, 0U,
+                                         __ATOMIC_RELEASE);
+                    slot = {};
+                    ++removed;
+                }
+            }
+            unlock(*cspace);
+        }
+        spin_unlock(cspace_registry_lock);
         return removed;
     }
 
@@ -151,6 +298,8 @@ namespace sys::kernel::capability
             slot_t& slot = cspace.slots[index];
             if (slot.object.id == reference.id && slot.object.generation == reference.generation &&
                 slot.object.type == reference.type) {
+                if (slot.derivation < maximum_derivations)
+                    __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
                 slot = {};
                 ++removed;
             }
@@ -159,4 +308,16 @@ namespace sys::kernel::capability
         return removed;
     }
 
+    inline u32 revoke_reference(const object::reference_t& reference) noexcept {
+        u32 removed = 0U;
+        spin_lock(cspace_registry_lock);
+        for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
+            cspace_t* cspace = cspace_registry[space_index];
+            if (cspace == nullptr)
+                continue;
+            removed += revoke_in(*cspace, reference);
+        }
+        spin_unlock(cspace_registry_lock);
+        return removed;
+    }
 } // namespace sys::kernel::capability

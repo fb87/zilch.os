@@ -3,7 +3,7 @@
 .balign 4096
 .global sys_arm64_user_image_start
 sys_arm64_user_image_start:
-.incbin "out/build/arm64/qemu-arm64-virt/user/init.bin"
+.incbin USER_BIN_PATH
 .balign 4096
 .global sys_arm64_user_image_end
 sys_arm64_user_image_end:
@@ -32,12 +32,14 @@ sys_arm64_user_image_start:
 .Lserver_receive:
   mov x0, x22
   mov x1, #1                  // receive
+  mov x7, xzr                 // no timeout
   mov x8, #0                  // sys_ipc
   svc #0
 .Lserver_loop:
   // Echo the four message registers and atomically reply+receive.
   mov x0, x22
   mov x1, #2                  // reply_receive
+  mov x7, xzr
   mov x8, #0
   svc #0
   b .Lserver_loop
@@ -68,6 +70,7 @@ sys_arm64_user_image_start:
   mov x4, x20                 // message word 2
   mov x5, xzr                 // message word 3
   mov x6, xzr                 // clear fuzz discriminator for normal IPC
+  mov x7, xzr
   mov x8, #0
   svc #0                      // blocks until server replies
 
@@ -123,6 +126,7 @@ sys_arm64_user_image_start:
   mov x6, #0x5a5a
   movk x6, #0x4655, lsl #16
   movk x6, #0x5a, lsl #32
+  mov x7, xzr
   mov x8, #0
   svc #0
   b .Lclient_loop

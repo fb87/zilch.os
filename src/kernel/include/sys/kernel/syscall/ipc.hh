@@ -18,6 +18,7 @@ namespace sys::kernel::syscall
     inline volatile u64 total_fuzz_operations = 0U;
     inline volatile u64 total_fuzz_failures = 0U;
     inline volatile u64 total_ipc_rendezvous = 0U;
+    inline volatile u32 next_reply_nonce = 1U;
     inline constexpr u64 fuzz_progress_interval = 16384U;
     inline volatile u64 next_fuzz_progress = fuzz_progress_interval;
     inline u64 previous_cpu_operations[thread::maximum_cpu_count]{};
@@ -160,6 +161,59 @@ namespace sys::kernel::syscall
         }
     }
 
+    inline void capture_transfer(thread::thread& value,
+                                 const arch::thread::context& frame) noexcept {
+        value.transfer = {};
+        const word_t descriptor = arch::syscall::argument(frame, 6U);
+        if ((descriptor & abi::v1::capability_transfer_valid) == 0U)
+            return;
+        value.transfer.source = descriptor & 0x3fU;
+        value.transfer.destination = (descriptor >> 6U) & 0x3fU;
+        value.transfer.rights.bits = static_cast<u32>((descriptor >> 12U) & 0x3fU);
+        value.transfer.badge = static_cast<capability::badge_t>(descriptor >> 32U);
+        value.transfer.valid = true;
+    }
+
+    inline void capture_timeout(thread::thread& value,
+                                const arch::thread::context& frame) noexcept {
+        const word_t descriptor = arch::syscall::argument(frame, 7U);
+        value.ipc_timeout_active = (descriptor & abi::v1::ipc_timeout_valid) != 0U;
+        const u64 timeout = descriptor & ~abi::v1::ipc_timeout_valid;
+        value.ipc_deadline =
+            value.ipc_timeout_active ? platform::timer::ticks(value.pinned_cpu) + timeout : 0U;
+    }
+
+    [[nodiscard]] inline error_t transfer_capability(thread::thread& sender,
+                                                     thread::thread& receiver) noexcept {
+        if (!sender.transfer.valid)
+            return error_t::success;
+        if (sender.owner == nullptr || receiver.owner == nullptr ||
+            sender.transfer.destination >= capability::cspace_slot_count ||
+            sender.transfer.source >= capability::cspace_slot_count ||
+            sender.transfer.rights.bits == 0U) {
+            return error_t::invalid_argument;
+        }
+        const error_t result = capability::mint(receiver.owner->cspace, sender.transfer.destination,
+                                                sender.owner->cspace, sender.transfer.source,
+                                                sender.transfer.rights, sender.transfer.badge);
+        if (result == error_t::success)
+            sender.transfer = {};
+        return result;
+    }
+
+    inline void install_reply(thread::thread& server, thread::thread& caller) noexcept {
+        server.reply.caller = caller.id;
+        server.reply.generation = caller.object.generation;
+        server.reply.nonce = __atomic_fetch_add(&next_reply_nonce, 1U, __ATOMIC_ACQ_REL);
+        if (server.reply.nonce == 0U) {
+            server.reply.nonce = __atomic_fetch_add(&next_reply_nonce, 1U, __ATOMIC_ACQ_REL);
+        }
+        server.reply.donation_active =
+            scheduling::donate_priority(server.scheduling_context, caller.scheduling_context) ==
+            error_t::success;
+        server.reply.valid = true;
+    }
+
     inline void copy_message_from_frame(thread::thread& value,
                                         const arch::thread::context& frame) noexcept {
         for (usize_t i = 0U; i < 4U; ++i) {
@@ -167,16 +221,24 @@ namespace sys::kernel::syscall
         }
     }
 
-    inline void deliver_to_receiver(thread::thread& receiver, thread::thread& sender) noexcept {
+    [[nodiscard]] inline error_t deliver_to_receiver(thread::thread& receiver,
+                                                     thread::thread& sender) noexcept {
+        const error_t transfer_result = transfer_capability(sender, receiver);
+        if (transfer_result != error_t::success)
+            return transfer_result;
+        install_reply(receiver, sender);
         thread::publish_pending(receiver, thread::pending_ipc::incoming_call, sender.id,
                                 sender.object.generation, sender.message);
         thread::wake(receiver);
         ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
+        return error_t::success;
     }
 
     inline void reply_to_caller(thread::thread& server) noexcept {
         const thread::reply_capability reply = server.reply;
         server.reply = {};
+        if (reply.donation_active)
+            scheduling::revoke_donation(server.scheduling_context);
         if (!reply.valid || reply.caller >= thread::user_thread_count)
             return;
         thread::thread& caller = thread::user_threads[reply.caller];
@@ -197,6 +259,7 @@ namespace sys::kernel::syscall
             }
             return;
         }
+        caller.ipc_timeout_active = false;
         thread::publish_pending(caller, thread::pending_ipc::reply, server.id,
                                 server.object.generation, server.message);
         thread::wake(caller);
@@ -219,13 +282,20 @@ namespace sys::kernel::syscall
             if (sender_pointer == nullptr)
                 continue;
             thread::thread& sender = *sender_pointer;
+            const error_t transfer_result = transfer_capability(sender, current);
+            if (transfer_result != error_t::success) {
+                sender.pending_result = transfer_result;
+                sender.ipc_timeout_active = false;
+                thread::wake(sender);
+                ipc::remote_reschedule(sender.pinned_cpu, arch::cpu::current_id());
+                continue;
+            }
             set_error(frame, error_t::success);
             frame.x[1] = static_cast<word_t>(sender.id);
             for (usize_t i = 0U; i < 4U; ++i)
                 frame.x[i + 2U] = sender.message[i];
-            current.reply.caller = sender.id;
-            current.reply.generation = sender.object.generation;
-            current.reply.valid = true;
+            install_reply(current, sender);
+            sender.ipc_timeout_active = false;
             if (thread::load_state(sender) != thread::state::blocked_fault)
                 thread::store_state(sender, thread::state::blocked_reply);
             __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
@@ -247,6 +317,7 @@ namespace sys::kernel::syscall
          * wake us and then this CPU can overwrite ready with blocked_receive.
          */
         current.waiting_endpoint = selector;
+        capture_timeout(current, frame);
         thread::prepare_block(frame, thread::state::blocked_receive);
         endpoint->receiver = object::reference(current.object);
         ipc::unlock(*endpoint);
@@ -264,6 +335,8 @@ namespace sys::kernel::syscall
             return true;
         }
         copy_message_from_frame(current, frame);
+        capture_transfer(current, frame);
+        capture_timeout(current, frame);
         current.waiting_endpoint = selector;
         ipc::lock(*endpoint);
         if (endpoint->receiver.type != object::type_t::none) {
@@ -277,8 +350,14 @@ namespace sys::kernel::syscall
                  * The caller must become blocked before the receiver is made
                  * runnable.  A receiver on another CPU may reply immediately.
                  */
+                const error_t transfer_result = transfer_capability(current, receiver);
+                if (transfer_result != error_t::success) {
+                    ipc::unlock(*endpoint);
+                    set_error(frame, transfer_result);
+                    return true;
+                }
                 thread::prepare_block(frame, thread::state::blocked_reply);
-                deliver_to_receiver(receiver, current);
+                (void)deliver_to_receiver(receiver, current);
                 __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
                 ipc::unlock(*endpoint);
                 thread::schedule_prepared(frame);
@@ -294,12 +373,61 @@ namespace sys::kernel::syscall
         thread::prepare_block(frame, thread::state::blocked_send);
         if (!ipc::enqueue_sender(*endpoint, object::reference(current.object))) {
             store_state(current, thread::state::running);
+            current.ipc_timeout_active = false;
+            current.transfer = {};
             ipc::unlock(*endpoint);
             set_error(frame, error_t::busy);
             return true;
         }
         ipc::unlock(*endpoint);
         thread::schedule_prepared(frame);
+        return true;
+    }
+
+    inline bool cancel(thread::thread& current, arch::thread::context& frame) noexcept {
+        if (current.owner == nullptr) {
+            set_error(frame, error_t::denied);
+            return true;
+        }
+        object::header_t* target_header = nullptr;
+        const capability_id_t selector = arch::syscall::argument(frame, 2U);
+        const error_t lookup_result =
+            capability::lookup(current.owner->cspace, selector, object::type_t::thread,
+                               capability::right_t::control, target_header);
+        if (lookup_result != error_t::success || target_header == nullptr) {
+            set_error(frame, lookup_result);
+            return true;
+        }
+        auto& target = *reinterpret_cast<thread::thread*>(target_header);
+        const thread::state target_state = thread::load_state(target);
+        if (target_state != thread::state::blocked_send &&
+            target_state != thread::state::blocked_receive &&
+            target_state != thread::state::blocked_reply) {
+            set_error(frame, error_t::not_found);
+            return true;
+        }
+        if (target.owner != nullptr && target.waiting_endpoint < capability::cspace_slot_count) {
+            ipc::endpoint* endpoint = nullptr;
+            if (resolve_endpoint(target, target.waiting_endpoint, capability::right_t::read,
+                                 endpoint) == error_t::success) {
+                (void)ipc::cancel_thread(*endpoint, object::reference(target.object));
+            }
+        }
+        for (u32 index = 0U; index < thread::active_user_thread_count; ++index) {
+            thread::thread& server = thread::user_threads[index];
+            if (server.reply.valid && server.reply.caller == target.id &&
+                server.reply.generation == target.object.generation) {
+                if (server.reply.donation_active)
+                    scheduling::revoke_donation(server.scheduling_context);
+                server.reply = {};
+            }
+        }
+        target.ipc_timeout_active = false;
+        target.transfer = {};
+        target.pending_result = error_t::timed_out;
+        thread::wake(target);
+        ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
+        set_error(frame, error_t::success);
         return true;
     }
 
@@ -338,6 +466,8 @@ namespace sys::kernel::syscall
                 copy_message_from_frame(current, frame);
                 reply_to_caller(current);
                 return receive(current, frame, endpoint);
+            case abi::v1::ipc_operation::cancel:
+                return cancel(current, frame);
         }
         set_error(frame, error_t::denied);
         return true;

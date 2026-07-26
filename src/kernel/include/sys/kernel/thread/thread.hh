@@ -33,6 +33,16 @@ namespace sys::kernel::thread
     struct reply_capability {
         thread_id_t caller{static_cast<thread_id_t>(-1)};
         u32 generation{};
+        u32 nonce{};
+        bool donation_active{};
+        bool valid{};
+    };
+
+    struct capability_transfer {
+        capability_id_t source{static_cast<capability_id_t>(-1)};
+        capability_id_t destination{static_cast<capability_id_t>(-1)};
+        capability::rights_t rights{};
+        capability::badge_t badge{};
         bool valid{};
     };
 
@@ -47,6 +57,10 @@ namespace sys::kernel::thread
         scheduling::context scheduling_context{};
         capability_id_t waiting_endpoint{};
         reply_capability reply{};
+        capability_transfer transfer{};
+        u64 ipc_deadline{};
+        bool ipc_timeout_active{};
+        error_t pending_result{error_t::success};
         word_t message[4]{};
         word_t pending_message[4]{};
         thread_id_t pending_sender{static_cast<thread_id_t>(-1)};
@@ -73,6 +87,10 @@ namespace sys::kernel::thread
         value.waiting_endpoint = 0U;
         scheduling::initialize(value.scheduling_context, cpu);
         value.reply = {};
+        value.transfer = {};
+        value.ipc_deadline = 0U;
+        value.ipc_timeout_active = false;
+        value.pending_result = error_t::success;
         value.pending_sender = static_cast<thread_id_t>(-1);
         value.pending_sender_generation = 0U;
         value.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
@@ -129,15 +147,21 @@ namespace sys::kernel::thread
         if (kind == pending_ipc::none)
             return;
 
-        value.context.x[0] = static_cast<word_t>(error_t::success);
+        value.context.x[0] = static_cast<word_t>(static_cast<s64>(value.pending_result));
+        value.pending_result = error_t::success;
+        value.ipc_timeout_active = false;
         if (kind == pending_ipc::incoming_call) {
             value.context.x[1] = static_cast<word_t>(value.pending_sender);
             for (usize_t index = 0U; index < 4U; ++index) {
                 value.context.x[index + 2U] = value.pending_message[index];
             }
-            value.reply.caller = value.pending_sender;
-            value.reply.generation = value.pending_sender_generation;
-            value.reply.valid = true;
+            if (!value.reply.valid) {
+                value.reply.caller = value.pending_sender;
+                value.reply.generation = value.pending_sender_generation;
+                value.reply.nonce = value.pending_sender_generation;
+                value.reply.donation_active = false;
+                value.reply.valid = true;
+            }
         } else {
             for (usize_t index = 0U; index < 4U; ++index) {
                 value.context.x[index + 1U] = value.pending_message[index];

@@ -19,13 +19,18 @@ namespace sys::abi::v1
         interrupt_bind = 11U,
         interrupt_ack = 12U,
         scheduling_configure = 13U,
-        acceptance_report = 14U,
-        acceptance_finalize = 15U,
+        capability_mint = 14U,
         child_create = 16U,
         child_destroy = 17U,
-        acceptance_worker_tick = 18U,
-        acceptance_query = 19U,
         hypervisor_invoke = 20U,
-        hypervisor_self_test = 21U,
+#if CONFIG_SELFTEST
+        acceptance_report = 0x80000000U,
+        acceptance_finalize = 0x80000001U,
+        acceptance_worker_tick = 0x80000002U,
+        acceptance_query = 0x80000003U,
+#endif
+#if CONFIG_HYPERVISOR_SELFTEST
+        hypervisor_self_test = 0x80000100U,
+#endif
     };
 } // namespace sys::abi::v1

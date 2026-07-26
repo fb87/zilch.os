@@ -16,6 +16,7 @@
 #include <sys/kernel/profile.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
+#include <sys/platform/timer.hh>
 #include <sys/types.hh>
 
 namespace sys::kernel::thread
@@ -328,6 +329,7 @@ namespace sys::kernel::thread
         return error_t::success;
     }
 
+#if CONFIG_SELFTEST
     [[nodiscard]] inline error_t validate_kernel_profile() noexcept {
         task::task& root = user_tasks[0];
         error_t result = capability::copy(root.cspace, 16U, root.cspace, 10U,
@@ -340,6 +342,15 @@ namespace sys::kernel::thread
         result = capability::delete_capability(root.cspace, 17U);
         if (result != error_t::success)
             return result;
+        result = capability::mint(root.cspace, 18U, root.cspace, 10U,
+                                  capability::rights(capability::right_t::write), 0x5aU);
+        if (result != error_t::success)
+            return result;
+        const capability::derivation_id_t root_derivation = root.cspace.slots[10U].derivation;
+        if (capability::revoke_descendants(root_derivation) != 1U ||
+            root.cspace.slots[18U].object.type != object::type_t::none ||
+            root.cspace.slots[10U].object.type == object::type_t::none)
+            return error_t::invalid_argument;
 
         result = memory::map(
             user_threads[0].address_space, memory::frames[0],
@@ -366,6 +377,7 @@ namespace sys::kernel::thread
         }
         return error_t::success;
     }
+#endif
 
     inline void log_cpu_assignment(cpu_id_t cpu) noexcept {
         thread_id_t assigned[3]{};
@@ -431,21 +443,73 @@ namespace sys::kernel::thread
         return user_threads[current_index()];
     }
 
+    inline void expire_ipc_timeouts(cpu_id_t cpu, u64 now) noexcept {
+        for (u32 index = 0U; index < active_user_thread_count; ++index) {
+            thread& value = user_threads[index];
+            if (value.pinned_cpu != cpu || !value.ipc_timeout_active || now < value.ipc_deadline)
+                continue;
+            const state current_state = load_state(value);
+            if (current_state != state::blocked_send && current_state != state::blocked_receive &&
+                current_state != state::blocked_reply) {
+                value.ipc_timeout_active = false;
+                continue;
+            }
+            if (value.owner != nullptr && value.waiting_endpoint < capability::cspace_slot_count) {
+                object::header_t* endpoint_header = nullptr;
+                if (capability::lookup(value.owner->cspace, value.waiting_endpoint,
+                                       object::type_t::endpoint, capability::right_t::read,
+                                       endpoint_header) == error_t::success &&
+                    endpoint_header != nullptr) {
+                    auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
+                    (void)ipc::cancel_thread(endpoint, object::reference(value.object));
+                }
+            }
+            for (u32 server_index = 0U; server_index < active_user_thread_count; ++server_index) {
+                thread& server = user_threads[server_index];
+                if (server.reply.valid && server.reply.caller == value.id &&
+                    server.reply.generation == value.object.generation) {
+                    if (server.reply.donation_active)
+                        scheduling::revoke_donation(server.scheduling_context);
+                    server.reply = {};
+                }
+            }
+            value.ipc_timeout_active = false;
+            value.transfer = {};
+            value.pending_result = error_t::timed_out;
+            if (load_state(value) != state::faulted && load_state(value) != state::terminated)
+                store_state(value, state::ready);
+        }
+    }
+
     inline void save_current_user(const arch::thread::context& frame) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         if (user_execution_active[cpu]) {
-            arch::thread::copy(user_threads[current_user_thread[cpu]].context, frame);
+            thread& value = user_threads[current_user_thread[cpu]];
+            arch::thread::copy(value.context, frame);
+            (void)scheduling::charge(value.scheduling_context, 1U);
         }
     }
 
     [[nodiscard]] inline u32 next_runnable(cpu_id_t cpu, u32 after) noexcept {
+        const u64 now = platform::timer::ticks(cpu);
+        u32 selected = after;
+        u8 selected_priority = scheduling::lowest_priority;
+        bool found = false;
         for (u32 offset = 1U; offset <= active_user_thread_count; ++offset) {
             const u32 candidate = (after + offset) % active_user_thread_count;
-            if (user_threads[candidate].pinned_cpu == cpu && runnable(user_threads[candidate])) {
-                return candidate;
+            thread& value = user_threads[candidate];
+            if (value.pinned_cpu != cpu || !runnable(value) ||
+                !scheduling::eligible(value.scheduling_context, now)) {
+                continue;
+            }
+            const u8 priority = value.scheduling_context.effective_priority;
+            if (!found || priority > selected_priority) {
+                selected = candidate;
+                selected_priority = priority;
+                found = true;
             }
         }
-        return after;
+        return found ? selected : after;
     }
 
     [[nodiscard]] inline bool validate_user_context(thread& value) noexcept {
@@ -501,6 +565,7 @@ namespace sys::kernel::thread
 
         /* This path is valid only when the IRQ interrupted user mode. */
         const u32 old = current_user_thread[cpu];
+        expire_ipc_timeouts(cpu, platform::timer::ticks(cpu));
         save_current_user(frame);
         const u32 next = next_runnable(cpu, old);
         if (next != old || !runnable(user_threads[old]))
@@ -531,6 +596,7 @@ namespace sys::kernel::thread
          * EL0 context.  IRQs interrupting syscall, fault, printk, scheduler,
          * or other kernel execution must return to that kernel instruction.
          */
+        expire_ipc_timeouts(cpu, platform::timer::ticks(cpu));
         const u32 old = current_user_thread[cpu];
         const u32 next = next_runnable(cpu, old);
         if (next != old || runnable(user_threads[next])) {

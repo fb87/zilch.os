@@ -11,6 +11,7 @@ namespace sys::kernel::capability
         execute = 1U << 2U,
         grant = 1U << 3U,
         control = 1U << 4U,
+        manage = 1U << 5U,
     };
 
     struct rights_t {
@@ -18,6 +19,10 @@ namespace sys::kernel::capability
 
         [[nodiscard]] constexpr bool contains(right_t right) const noexcept {
             return (bits & static_cast<u32>(right)) != 0U;
+        }
+
+        [[nodiscard]] constexpr bool contains(rights_t other) const noexcept {
+            return (bits & other.bits) == other.bits;
         }
     };
 
@@ -29,9 +34,17 @@ namespace sys::kernel::capability
         return {static_cast<u32>(first) | static_cast<u32>(second)};
     }
 
+    using derivation_id_t = u64;
+    using badge_t = u64;
+
     struct slot_t {
         object::reference_t object{};
         rights_t rights{};
+        derivation_id_t derivation{};
+        derivation_id_t parent{};
+        badge_t badge{};
+        u32 depth{};
+        u32 flags{};
     };
 
     [[nodiscard]] inline error_t validate(const slot_t& slot, right_t required) noexcept {
@@ -39,5 +52,9 @@ namespace sys::kernel::capability
             return error_t::not_found;
         }
         return slot.rights.contains(required) ? error_t::success : error_t::denied;
+    }
+
+    [[nodiscard]] inline constexpr bool attenuates(rights_t parent, rights_t child) noexcept {
+        return parent.contains(child) && child.bits != 0U;
     }
 } // namespace sys::kernel::capability

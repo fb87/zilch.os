@@ -1,3 +1,5 @@
 # Capability lifecycle
 
-K2 adds bounded CSpace copy, move, delete and reference revocation. Copy requires `grant`; rights may only be reduced. Move is atomic across the source and destination CSpaces. Object destruction revokes matching generation-bound references before object-table reuse.
+The production capability core records parent-child derivation for every copied or minted capability. Rights may only be attenuated. Mint may attach a badge. Move transfers an existing derivation atomically, delete removes one slot, and revoke removes all descendants of a selected derivation across registered CSpaces while preserving the ancestor.
+
+Derivation depth, registered CSpaces, and total derivations are bounded explicitly. Exhaustion returns an error and never overwrites a live capability. Runtime concurrent revoke-versus-IPC verification remains a release gate.

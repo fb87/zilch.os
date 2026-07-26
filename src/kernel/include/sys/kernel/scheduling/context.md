@@ -1,3 +1,5 @@
 # Scheduling context
 
-A scheduling context contains CPU affinity, priority, budget and replenishment period. Threads reference scheduling contexts; scheduling authority is represented by a control capability rather than global thread IDs.
+A scheduling context carries base/effective priority, budget, period, consumption, next replenishment, affinity, throttle state, and bounded priority-donation depth. Runnable selection is priority ordered with deterministic rotating tie order. Exhausted contexts are ineligible until periodic replenishment.
+
+The mechanism is compiled into product builds. Latency limits, timeout queues, donation through IPC, and real-time stress evidence remain required before production certification.

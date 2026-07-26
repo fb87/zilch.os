@@ -131,6 +131,11 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::capability_copy:
                 return capability::copy(destination_task->cspace, destination_selector,
                                         current.owner->cspace, source_selector, {rights});
+            case abi::v1::control_operation::capability_mint:
+                return capability::mint(
+                    destination_task->cspace, destination_selector, current.owner->cspace,
+                    source_selector, {rights},
+                    static_cast<capability::badge_t>(destination_task_selector));
             case abi::v1::control_operation::capability_move:
                 return capability::move(destination_task->cspace, destination_selector,
                                         current.owner->cspace, source_selector);
@@ -171,6 +176,7 @@ namespace sys::kernel::syscall
 
         switch (operation) {
             case abi::v1::control_operation::capability_copy:
+            case abi::v1::control_operation::capability_mint:
             case abi::v1::control_operation::capability_move:
             case abi::v1::control_operation::capability_delete:
             case abi::v1::control_operation::capability_revoke:
@@ -266,6 +272,7 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::interrupt_ack:
                 result = error_t::success;
                 break;
+#if CONFIG_SELFTEST
             case abi::v1::control_operation::acceptance_report: {
                 if (current.owner == nullptr || !current.owner->root) {
                     result = error_t::denied;
@@ -319,6 +326,7 @@ namespace sys::kernel::syscall
                         a1 != 0U ? "PASS" : "FAIL", a1 != 0U ? 0U : 1U);
                 result = a1 != 0U ? error_t::success : error_t::invalid_argument;
                 break;
+#endif
             case abi::v1::control_operation::scheduling_configure: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);
@@ -350,6 +358,7 @@ namespace sys::kernel::syscall
                     *current.owner, static_cast<capability_id_t>(a1),
                     static_cast<capability_id_t>(a2), static_cast<capability_id_t>(a3));
                 break;
+#if CONFIG_SELFTEST
             case abi::v1::control_operation::acceptance_worker_tick: {
                 const cpu_id_t cpu = arch::cpu::current_id();
                 if (cpu >= thread::maximum_cpu_count || current.owner == nullptr ||
@@ -372,6 +381,8 @@ namespace sys::kernel::syscall
                 result = error_t::success;
                 break;
             }
+#endif
+#if CONFIG_HYPERVISOR_SELFTEST
             case abi::v1::control_operation::hypervisor_self_test:
                 if (current.owner == nullptr || !current.owner->root) {
                     result = error_t::denied;
@@ -379,6 +390,7 @@ namespace sys::kernel::syscall
                 }
                 result = hypervisor::self_test();
                 break;
+#endif
             case abi::v1::control_operation::hypervisor_invoke: {
                 const auto hv_operation = static_cast<abi::v1::hypervisor_operation>(a1);
                 hypervisor::virtual_machine_t* vm = nullptr;
@@ -443,15 +455,18 @@ namespace sys::kernel::syscall
                             frame.x[4] = vm->last_diagnostic.value;
                         }
                         break;
+#if CONFIG_HYPERVISOR_SELFTEST
                     case abi::v1::hypervisor_operation::fuzz:
                         if (current.owner == nullptr || !current.owner->root)
                             result = error_t::denied;
                         else
                             result = hypervisor::self_test();
                         break;
+#endif
                 }
                 break;
             }
+#if CONFIG_SELFTEST
             case abi::v1::control_operation::acceptance_query: {
                 if (current.owner == nullptr || !current.owner->root ||
                     a1 >= thread::maximum_cpu_count) {
@@ -465,6 +480,7 @@ namespace sys::kernel::syscall
                 arch::syscall::set_result(frame, static_cast<word_t>(value));
                 return true;
             }
+#endif
         }
         set_control_result(frame, result);
         return true;
