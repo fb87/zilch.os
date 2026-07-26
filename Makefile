@@ -7,6 +7,7 @@ MAKEFLAGS += --no-builtin-rules
 PROJECT ?= zilch
 VERSION ?= 0.5.0
 BOOT_PROFILE ?= root
+FUZZ_MODE ?= certify
 ARCH ?= arm64
 ifeq ($(origin PLATFORM),command line)
 else
@@ -71,7 +72,7 @@ INCLUDES := -I$(SRCTREE)/src/arch/$(ARCH)/include \
             -I$(SRCTREE)/include/abi \
             -I$(OBJTREE)/include/generated
 WARNINGS := -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wundef -Wcast-align -Wcast-qual -Wformat=2 -Wimplicit-fallthrough
-KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_BOOT=$(if $(filter root,$(BOOT_PROFILE)),1,0)
+KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_BOOT=$(if $(filter root,$(BOOT_PROFILE)),1,0) -DCONFIG_SOAK_FUZZ=$(if $(filter soak,$(FUZZ_MODE)),1,0)
 KBUILD_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections $(WARNINGS)
 KBUILD_AFLAGS := -ffreestanding
 export SRCTREE OBJTREE ARCH PLATFORM CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION KBUILD_CPPFLAGS KBUILD_CXXFLAGS KBUILD_AFLAGS
@@ -96,7 +97,7 @@ EARLYFS := $(OBJTREE)/image/earlyfs.tar
 MANIFEST ?= $(SRCTREE)/src/image/manifests/minimal.toml
 include $(SRCTREE)/tools/build/Makefile.user
 
-.PHONY: all kernel image userspace arm64 amd64 run clean release
+.PHONY: all kernel image userspace arm64 amd64 run run-certify run-soak clean release
 all: userspace kernel image
 kernel: userspace $(KERNEL_ELF) $(KERNEL_BIN)
 image: $(EARLYFS)
@@ -121,6 +122,10 @@ amd64:
 	@$(MAKE) ARCH=amd64 PLATFORM=qemu-amd64-q35
 run: $(KERNEL_ELF)
 	@$(SRCTREE)/tools/run/run.sh $(KERNEL_ELF)
+run-certify:
+	@$(MAKE) BOOT_PROFILE=root FUZZ_MODE=certify run
+run-soak:
+	@$(MAKE) BOOT_PROFILE=root FUZZ_MODE=soak run
 release: format-check
 	@$(MAKE) ARCH=arm64 PLATFORM=qemu-arm64-virt all
 	@$(MAKE) ARCH=amd64 PLATFORM=qemu-amd64-q35 all

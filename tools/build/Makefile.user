@@ -12,7 +12,8 @@ USER_OBJECTS := $(addprefix $(USER_OBJDIR)/,$(USER_SOURCES:.cc=.o))
 USER_CRT := $(USER_OBJDIR)/src/user/runtime/crt/$(ARCH)/start.o
 USER_LDSCRIPT := $(SRCTREE)/src/user/runtime/linker/user-$(ARCH).ld
 USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) \
-    -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi
+    -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
+    -DCONFIG_SOAK_FUZZ=$(if $(filter soak,$(FUZZ_MODE)),1,0)
 USER_CXXFLAGS := $(KBUILD_CXXFLAGS)
 USER_AFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) -ffreestanding
 

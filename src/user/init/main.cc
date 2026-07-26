@@ -16,6 +16,9 @@ namespace
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
+#if CONFIG_SOAK_FUZZ
+    inline constexpr sys::word_t soak_epoch_operations = 65536U;
+#endif
 
     [[nodiscard]] bool report(test_id id, bool pass) noexcept
     {
@@ -98,6 +101,56 @@ namespace
         return false;
     }
 
+
+#if CONFIG_SOAK_FUZZ
+    [[noreturn]] void run_soak() noexcept
+    {
+        sys::word_t baseline[4]{};
+        for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
+            baseline[cpu] = sys::control(
+                sys::abi::v1::control_operation::acceptance_query, cpu, 0U);
+        }
+
+        for (sys::word_t epoch = 1U;; ++epoch) {
+            bool complete = false;
+            while (!complete) {
+                complete = true;
+                for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
+                    const sys::word_t operations = sys::control(
+                        sys::abi::v1::control_operation::acceptance_query,
+                        cpu, 0U);
+                    const sys::word_t failures = sys::control(
+                        sys::abi::v1::control_operation::acceptance_query,
+                        cpu, 1U);
+                    if (failures != 0U) {
+                        (void)sys::control(
+                            sys::abi::v1::control_operation::acceptance_soak_report,
+                            epoch, cpu, operations, failures, 0U);
+                        for (;;) { }
+                    }
+                    if ((operations - baseline[cpu]) < soak_epoch_operations) {
+                        complete = false;
+                    }
+                }
+            }
+
+            for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
+                const sys::word_t operations = sys::control(
+                    sys::abi::v1::control_operation::acceptance_query, cpu, 0U);
+                const sys::word_t failures = sys::control(
+                    sys::abi::v1::control_operation::acceptance_query, cpu, 1U);
+                const sys::word_t seed = sys::control(
+                    sys::abi::v1::control_operation::acceptance_query, cpu, 2U);
+                (void)sys::control(
+                    sys::abi::v1::control_operation::acceptance_soak_report,
+                    epoch, cpu, operations, failures, seed);
+                baseline[cpu] = operations;
+            }
+        }
+    }
+
+#endif
+
     [[nodiscard]] bool stop_destroy_worker(sys::word_t cpu) noexcept
     {
         const sys::word_t thread_selector = 19U + cpu;
@@ -173,5 +226,16 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept
     (void)sys::control(
         sys::abi::v1::control_operation::acceptance_finalize,
         pass ? 1U : 0U);
+
+#if CONFIG_SOAK_FUZZ
+    if (pass) {
+        bool recreated = true;
+        for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
+            recreated = create_worker(cpu) && recreated;
+        }
+        if (recreated) run_soak();
+    }
+#endif
+
     return pass ? 0 : 1;
 }

@@ -334,6 +334,8 @@ namespace sys::kernel::syscall
                             __atomic_load_n(&thread::certification_failures[cpu],
                                             __ATOMIC_ACQUIRE)));
             }
+            __atomic_store_n(&thread::certification_state[cpu], a3,
+                             __ATOMIC_RELEASE);
             if (a1 != 0U) {
                 __atomic_fetch_add(&thread::certification_failures[cpu], a1,
                                    __ATOMIC_RELAXED);
@@ -350,11 +352,29 @@ namespace sys::kernel::syscall
             const u64 value = a2 == 0U
                 ? __atomic_load_n(&thread::certification_operations[a1],
                                   __ATOMIC_ACQUIRE)
-                : __atomic_load_n(&thread::certification_failures[a1],
-                                  __ATOMIC_ACQUIRE);
+                : (a2 == 1U
+                    ? __atomic_load_n(&thread::certification_failures[a1],
+                                      __ATOMIC_ACQUIRE)
+                    : __atomic_load_n(&thread::certification_state[a1],
+                                      __ATOMIC_ACQUIRE));
             arch::syscall::set_result(frame, static_cast<word_t>(value));
             return true;
         }
+        case abi::v1::control_operation::acceptance_soak_report:
+            if (current.owner == nullptr || !current.owner->root
+                || a2 >= thread::maximum_cpu_count) {
+                result = error_t::denied;
+                break;
+            }
+            pr_info("[SOAK] epoch=%llu cpu=%u operations=%llu failures=%llu seed=%llx progress=%s\n",
+                    static_cast<unsigned long long>(a1),
+                    static_cast<unsigned int>(a2),
+                    static_cast<unsigned long long>(a3),
+                    static_cast<unsigned long long>(a4),
+                    static_cast<unsigned long long>(a5),
+                    a4 == 0U ? "yes" : "no");
+            result = a4 == 0U ? error_t::success : error_t::invalid_argument;
+            break;
         }
         set_control_result(frame, result);
         return true;

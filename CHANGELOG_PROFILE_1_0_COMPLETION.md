@@ -18,3 +18,12 @@ profile until the earlyfs ELF-loader switch is validated on QEMU.
 - Added deterministic negative control-ABI fuzzing on each secondary CPU.
 - Added suspend, teardown, object generation reuse, and stale-capability tests.
 - Added machine-readable root-created object, SMP fuzz, and lifecycle verdicts.
+
+## Continuous soak fuzz mode
+
+- Added `FUZZ_MODE=certify|soak`.
+- Added `make run-certify` and `make run-soak`.
+- Soak mode starts only after finite Profile 1.0 acceptance passes.
+- Root recreates workers on CPUs 1-3 and runs unbounded deterministic fuzzing.
+- Per-epoch logs include each CPU's operation count, failure count, and last
+  replayable PRNG state.

@@ -181,6 +181,7 @@ namespace sys::kernel::thread
 
     inline volatile u64 certification_operations[maximum_cpu_count]{};
     inline volatile u64 certification_failures[maximum_cpu_count]{};
+    inline volatile word_t certification_state[maximum_cpu_count]{};
 
     [[nodiscard]] inline error_t create_user_bundle(
         task::task& root, cpu_id_t cpu, word_t role,
@@ -264,6 +265,7 @@ namespace sys::kernel::thread
         }
         certification_operations[cpu] = 0U;
         certification_failures[cpu] = 0U;
+        certification_state[cpu] = 0U;
         return error_t::success;
     }
 
