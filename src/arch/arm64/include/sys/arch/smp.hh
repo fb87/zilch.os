@@ -84,9 +84,13 @@ namespace sys::arch::smp
 
     [[nodiscard]] inline u32 reschedule_ipis(cpu_id_t id) noexcept
     {
-        if (id >= maximum_cpu_count) {
-            return 0U;
-        }
+        if (id >= maximum_cpu_count) return 0U;
         return __atomic_load_n(&reschedule_ipi_count[id], __ATOMIC_ACQUIRE);
+    }
+
+    [[nodiscard]] inline u32 tlb_shootdown_ipis(cpu_id_t id) noexcept
+    {
+        if (id >= maximum_cpu_count) return 0U;
+        return __atomic_load_n(&tlb_shootdown_ipi_count[id], __ATOMIC_ACQUIRE);
     }
 } // namespace sys::arch::smp

@@ -1,3 +1,14 @@
-# Module: arm64 space/address_space
+# Module: ARM64 address spaces
 
-Architecture-specific implementation of space/address_space. Generic kernel code consumes this through the selected architecture include path and does not reference architecture privilege-level registers or frame layouts directly.
+## Purpose
+
+Builds private user address spaces and activates them through `TTBR0_EL1`.
+
+## Design
+
+- every user thread owns a private root and stack page;
+- the user code page is shared read-only;
+- each address space receives a unique nonzero ASID;
+- activation records an active-CPU mask and writes the ASID-tagged TTBR0;
+- the architecture backend provides ASID invalidation and global TLB fallback;
+- threads are pinned, so address-space migration is not yet required.

@@ -11,4 +11,5 @@ namespace sys::arch::smp
     inline void record_reschedule_ipi() noexcept {}
     inline void record_tlb_shootdown_ipi() noexcept {}
     [[nodiscard]] inline u32 reschedule_ipis(cpu_id_t) noexcept { return 0U; }
+    [[nodiscard]] inline u32 tlb_shootdown_ipis(cpu_id_t) noexcept { return 0U; }
 } // namespace sys::arch::smp

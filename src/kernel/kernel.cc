@@ -9,3 +9,10 @@ extern "C" [[noreturn]] void sys_kernel_secondary_entry() noexcept
 {
     sys::kernel::start_secondary();
 }
+
+extern "C" [[noreturn]] void sys_kernel_user_idle() noexcept
+{
+    for (;;) {
+        sys::arch::cpu::wait_for_event();
+    }
+}

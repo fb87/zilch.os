@@ -12,17 +12,33 @@ namespace sys::kernel::thread
         inactive,
         ready,
         running,
-        blocked,
+        blocked_send,
+        blocked_receive,
+        blocked_reply,
         faulted,
         terminated,
+    };
+
+    enum class pending_ipc : u8
+    {
+        none,
+        incoming_call,
+        reply,
     };
 
     struct thread
     {
         thread_id_t id{};
+        cpu_id_t pinned_cpu{};
         state current_state{state::inactive};
         space::address_space address_space{};
         arch::thread::context context{};
+        capability_id_t waiting_endpoint{};
+        thread_id_t reply_to{static_cast<thread_id_t>(-1)};
+        word_t message[4]{};
+        word_t pending_message[4]{};
+        thread_id_t pending_sender{static_cast<thread_id_t>(-1)};
+        volatile u8 pending_ipc_kind{static_cast<u8>(pending_ipc::none)};
         u64 reports{};
         u64 fuzz_seed{};
         u64 fuzz_iterations{};
@@ -37,16 +53,25 @@ namespace sys::kernel::thread
     }
 
     inline void initialize_user(thread& value, thread_id_t id,
-                                word_t argument0, word_t argument1) noexcept
+                                cpu_id_t cpu, word_t argument0,
+                                word_t argument1) noexcept
     {
         value.id = id;
+        value.pinned_cpu = cpu;
         value.current_state = state::ready;
+        value.waiting_endpoint = 0U;
+        value.reply_to = static_cast<thread_id_t>(-1);
+        value.pending_sender = static_cast<thread_id_t>(-1);
+        value.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
+        for (usize_t index = 0U; index < 4U; ++index) {
+            value.pending_message[index] = 0U;
+        }
         value.reports = 0U;
         value.fuzz_seed = static_cast<u64>(argument1);
         value.fuzz_iterations = 0U;
         value.fuzz_failures = 0U;
         value.faults = 0U;
-        value.address_space.initialize();
+        value.address_space.initialize(static_cast<u16>(id + 1U));
         arch::thread::initialize_user(value.context,
                                       arch::space::entry(),
                                       arch::space::stack_top(),
@@ -54,19 +79,64 @@ namespace sys::kernel::thread
                                       argument1);
     }
 
+    [[nodiscard]] inline state load_state(const thread& value) noexcept
+    {
+        return static_cast<state>(__atomic_load_n(
+            reinterpret_cast<const u8*>(&value.current_state), __ATOMIC_ACQUIRE));
+    }
+
+    inline void store_state(thread& value, state new_state) noexcept
+    {
+        __atomic_store_n(reinterpret_cast<u8*>(&value.current_state),
+                         static_cast<u8>(new_state), __ATOMIC_RELEASE);
+    }
+
     [[nodiscard]] inline bool runnable(const thread& value) noexcept
     {
-        return value.current_state == state::ready
-            || value.current_state == state::running;
+        const state current = load_state(value);
+        return current == state::ready || current == state::running;
     }
 
     [[nodiscard]] inline bool validate(const thread& value) noexcept
     {
-        if (value.current_state == state::running
-            || value.current_state == state::ready) {
+        if (runnable(value)) {
             return value.context.instruction_pointer != 0U
                 && value.context.stack_pointer != 0U;
         }
         return true;
+    }
+
+    inline void publish_pending(thread& value, pending_ipc kind,
+                                thread_id_t sender,
+                                const word_t message[4]) noexcept
+    {
+        value.pending_sender = sender;
+        for (usize_t index = 0U; index < 4U; ++index) {
+            value.pending_message[index] = message[index];
+        }
+        __atomic_store_n(&value.pending_ipc_kind, static_cast<u8>(kind),
+                         __ATOMIC_RELEASE);
+    }
+
+    inline void consume_pending(thread& value) noexcept
+    {
+        const auto kind = static_cast<pending_ipc>(__atomic_exchange_n(
+            &value.pending_ipc_kind, static_cast<u8>(pending_ipc::none),
+            __ATOMIC_ACQUIRE));
+        if (kind == pending_ipc::none) return;
+
+        value.context.x[0] = static_cast<word_t>(error_t::success);
+        if (kind == pending_ipc::incoming_call) {
+            value.context.x[1] = static_cast<word_t>(value.pending_sender);
+            for (usize_t index = 0U; index < 4U; ++index) {
+                value.context.x[index + 2U] = value.pending_message[index];
+            }
+            value.reply_to = value.pending_sender;
+        } else {
+            for (usize_t index = 0U; index < 4U; ++index) {
+                value.context.x[index + 1U] = value.pending_message[index];
+            }
+        }
+        value.pending_sender = static_cast<thread_id_t>(-1);
     }
 } // namespace sys::kernel::thread

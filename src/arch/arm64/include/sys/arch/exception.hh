@@ -13,6 +13,12 @@ namespace sys::arch::exception
         u64 status;
     };
 
+    static_assert(sizeof(frame_t) == 280U);
+    static_assert(__builtin_offsetof(frame_t, vector) == 248U);
+    static_assert(__builtin_offsetof(frame_t, stack_pointer) == 256U);
+    static_assert(__builtin_offsetof(frame_t, instruction_pointer) == 264U);
+    static_assert(__builtin_offsetof(frame_t, status) == 272U);
+
     extern "C" char sys_arm64_vectors_el1[];
     extern "C" char sys_arm64_vectors_el2[];
 

@@ -29,6 +29,22 @@ namespace sys::arch::thread
         destination.status = source.status;
     }
 
+    [[nodiscard]] inline bool valid_user(const context& value) noexcept
+    {
+        constexpr vaddr_t user_code_begin = 0x10000000ULL;
+        constexpr vaddr_t user_code_end = 0x10001000ULL;
+        constexpr vaddr_t user_stack_begin = 0x10010000ULL;
+        constexpr vaddr_t user_stack_end = 0x10011000ULL;
+
+        return value.instruction_pointer >= user_code_begin
+            && value.instruction_pointer < user_code_end
+            && (value.instruction_pointer & 0x3U) == 0U
+            && value.stack_pointer >= user_stack_begin
+            && value.stack_pointer <= user_stack_end
+            && (value.stack_pointer & 0xfU) == 0U
+            && (value.status & 0xfU) == 0U;
+    }
+
     inline void initialize_user(context& value, vaddr_t entry, vaddr_t stack,
                                 word_t argument0, word_t argument1) noexcept
     {

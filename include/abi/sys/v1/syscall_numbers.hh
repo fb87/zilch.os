@@ -12,6 +12,8 @@ namespace sys::abi::v1
     enum class ipc_operation : word_t
     {
         call = 0U,
+        receive = 1U,
+        reply_receive = 2U,
     };
 
     enum class fuzz_case : word_t
@@ -27,5 +29,7 @@ namespace sys::abi::v1
 
     inline constexpr capability_id_t debug_endpoint = 1U;
     inline constexpr capability_id_t fuzz_endpoint = 2U;
+    inline constexpr capability_id_t ipc_server_a = 10U;
+    inline constexpr capability_id_t ipc_server_b = 11U;
     inline constexpr word_t fuzz_magic = 0x5a46555a5aULL;
 } // namespace sys::abi::v1

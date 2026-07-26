@@ -51,6 +51,12 @@ namespace sys::kernel
         scheduler::initialize_cpu();
         arch::smp::mark_online();
         arch::irq::enable();
+        if constexpr (arch::space::user_available) {
+            thread::wait_until_ready();
+            pr_info("user scheduler: cpu=%u entering pinned user threads\n",
+                    static_cast<unsigned int>(arch::cpu::current_id()));
+            thread::enter_first_user_thread();
+        }
         arch::cpu::halt();
     }
 
@@ -108,9 +114,10 @@ namespace sys::kernel
                 online ? "online" : "timeout");
         if constexpr (arch::space::user_available) {
             thread::initialize_user_threads();
-            pr_info("user fuzz: address-spaces=%u threads=%u syscall=sys_ipc deterministic=yes\n",
+            pr_info("user smp: address-spaces=%u threads=%u cpus=%u ipc=call/reply_receive fuzz=deterministic\n",
                     static_cast<unsigned int>(thread::user_thread_count),
-                    static_cast<unsigned int>(thread::user_thread_count));
+                    static_cast<unsigned int>(thread::user_thread_count),
+                    static_cast<unsigned int>(expected));
         }
         if constexpr (arch::hypervisor::active) {
             pr_info("exceptions=EL1 hypervisor=EL2 gic=GICv3 timer=virtual@%uHz\n",
@@ -167,8 +174,28 @@ namespace sys::kernel
                 timers_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected));
 
+        platform::interrupt::send_ipi_all_others(
+            platform::interrupt::tlb_shootdown_ipi);
+        bool tlb_online = false;
+        for (u64 spins = 1000000U; spins != 0U; --spins) {
+            tlb_online = true;
+            for (u32 cpu_id = 1U; cpu_id < expected; ++cpu_id) {
+                if (arch::smp::tlb_shootdown_ipis(cpu_id) == 0U) {
+                    tlb_online = false;
+                    break;
+                }
+            }
+            if (tlb_online) break;
+            arch::cpu::relax();
+        }
+        pr_info("tlb shootdown=%s targets=%u asids=%u\n",
+                tlb_online ? "verified" : "timeout",
+                static_cast<unsigned int>(expected - 1U),
+                static_cast<unsigned int>(thread::user_thread_count));
+
         if constexpr (arch::space::user_available) {
-            pr_info("user fuzz: entering thread=0 cpu=0 seed=%llx\n",
+            thread::launch_user_scheduler();
+            pr_info("user smp: cpu=0 entering server thread=0 seed=%llx\n",
                     static_cast<unsigned long long>(thread::user_threads[0].fuzz_seed));
             thread::enter_first_user_thread();
         }

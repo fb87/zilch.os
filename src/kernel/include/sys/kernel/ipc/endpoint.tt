@@ -1,0 +1,3 @@
+#include <sys/kernel/ipc/endpoint.hh>
+
+static_assert(sys::kernel::ipc::endpoint_capacity >= 10U);

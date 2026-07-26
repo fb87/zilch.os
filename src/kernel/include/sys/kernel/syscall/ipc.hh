@@ -3,34 +3,37 @@
 #include <abi/sys/v1/syscall_numbers.hh>
 #include <sys/arch/cpu.hh>
 #include <sys/arch/syscall/entry.hh>
+#include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/printk.hh>
-#include <sys/kernel/thread/thread.hh>
+#include <sys/kernel/thread/scheduler.hh>
 #include <sys/types.hh>
 
 namespace sys::kernel::syscall
 {
-    inline u64 total_fuzz_operations = 0U;
-    inline u64 total_fuzz_failures = 0U;
-    inline constexpr u64 fuzz_progress_interval = 4096U;
+    inline volatile u64 total_fuzz_operations = 0U;
+    inline volatile u64 total_fuzz_failures = 0U;
+    inline volatile u64 total_ipc_rendezvous = 0U;
+    inline constexpr u64 fuzz_progress_interval = 16384U;
 
-    [[nodiscard]] inline error_t decode_ipc_result(
+    inline void set_error(arch::thread::context& frame, error_t result) noexcept
+    {
+        arch::syscall::set_result(
+            frame, static_cast<word_t>(static_cast<s64>(result)));
+    }
+
+    [[nodiscard]] inline error_t decode_fuzz_result(
         const thread::thread& current,
         const arch::thread::context& frame) noexcept
     {
         const word_t endpoint = arch::syscall::argument(frame, 0U);
         const word_t operation = arch::syscall::argument(frame, 1U);
         const word_t id = arch::syscall::argument(frame, 3U);
-
         if (endpoint != abi::v1::debug_endpoint
-            && endpoint != abi::v1::fuzz_endpoint) {
+            && endpoint != abi::v1::fuzz_endpoint) return error_t::denied;
+        if (operation != static_cast<word_t>(abi::v1::ipc_operation::call))
             return error_t::denied;
-        }
-        if (operation != static_cast<word_t>(abi::v1::ipc_operation::call)) {
-            return error_t::denied;
-        }
-        if (id != static_cast<word_t>(current.id)) {
+        if (id != static_cast<word_t>(current.id))
             return error_t::invalid_argument;
-        }
         return error_t::success;
     }
 
@@ -39,8 +42,8 @@ namespace sys::kernel::syscall
                             error_t result) noexcept
     {
         ++current.fuzz_iterations;
-        ++total_fuzz_operations;
-
+        const u64 operations = __atomic_add_fetch(
+            &total_fuzz_operations, 1U, __ATOMIC_RELAXED);
         error_t expected = error_t::unsupported;
         const auto test_case = static_cast<abi::v1::fuzz_case>(
             arch::syscall::argument(frame, 2U));
@@ -61,59 +64,184 @@ namespace sys::kernel::syscall
             expected = result;
             break;
         }
-
         if (result != expected || !thread::validate(current)) {
             ++current.fuzz_failures;
-            ++total_fuzz_failures;
-            pr_err("fuzz failure seed=%llx iteration=%llu thread=%llu case=%llu result=%d expected=%d\n",
+            __atomic_add_fetch(&total_fuzz_failures, 1U, __ATOMIC_RELAXED);
+            pr_err("fuzz failure cpu=%u seed=%llx iteration=%llu thread=%llu case=%llu result=%d expected=%d\n",
+                   static_cast<unsigned int>(arch::cpu::current_id()),
                    static_cast<unsigned long long>(current.fuzz_seed),
                    static_cast<unsigned long long>(current.fuzz_iterations),
                    static_cast<unsigned long long>(current.id),
                    static_cast<unsigned long long>(arch::syscall::argument(frame, 2U)),
                    static_cast<int>(result), static_cast<int>(expected));
         }
-
-        if ((total_fuzz_operations % fuzz_progress_interval) == 0U) {
-            pr_info("fuzz progress operations=%llu failures=%llu thread=%llu seed=%llx iteration=%llu\n",
-                    static_cast<unsigned long long>(total_fuzz_operations),
-                    static_cast<unsigned long long>(total_fuzz_failures),
-                    static_cast<unsigned long long>(current.id),
-                    static_cast<unsigned long long>(current.fuzz_seed),
-                    static_cast<unsigned long long>(current.fuzz_iterations));
+        if ((operations % fuzz_progress_interval) == 0U) {
+            pr_info("smp fuzz operations=%llu failures=%llu rendezvous=%llu cpu=%u thread=%llu\n",
+                    static_cast<unsigned long long>(operations),
+                    static_cast<unsigned long long>(__atomic_load_n(&total_fuzz_failures, __ATOMIC_RELAXED)),
+                    static_cast<unsigned long long>(__atomic_load_n(&total_ipc_rendezvous, __ATOMIC_RELAXED)),
+                    static_cast<unsigned int>(arch::cpu::current_id()),
+                    static_cast<unsigned long long>(current.id));
         }
+    }
+
+    inline void copy_message_from_frame(thread::thread& value,
+                                        const arch::thread::context& frame) noexcept
+    {
+        for (usize_t i = 0U; i < 4U; ++i) {
+            value.message[i] = arch::syscall::argument(frame, i + 2U);
+        }
+    }
+
+    inline void deliver_to_receiver(thread::thread& receiver,
+                                    thread::thread& sender) noexcept
+    {
+        thread::publish_pending(receiver, thread::pending_ipc::incoming_call,
+                                sender.id, sender.message);
+        thread::wake(receiver);
+        ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
+    }
+
+    inline void reply_to_caller(thread::thread& server) noexcept
+    {
+        if (server.reply_to >= thread::user_thread_count) return;
+        thread::thread& caller = thread::user_threads[server.reply_to];
+        thread::publish_pending(caller, thread::pending_ipc::reply,
+                                server.id, server.message);
+        thread::wake(caller);
+        ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
+        server.reply_to = static_cast<thread_id_t>(-1);
+    }
+
+    inline bool receive(thread::thread& current,
+                        arch::thread::context& frame,
+                        capability_id_t selector) noexcept
+    {
+        ipc::endpoint* endpoint = ipc::lookup(selector);
+        if (endpoint == nullptr) {
+            set_error(frame, error_t::denied);
+            return true;
+        }
+        ipc::lock(*endpoint);
+        thread_id_t sender_id{};
+        if (ipc::dequeue_sender(*endpoint, sender_id)) {
+            thread::thread& sender = thread::user_threads[sender_id];
+            set_error(frame, error_t::success);
+            frame.x[1] = static_cast<word_t>(sender.id);
+            for (usize_t i = 0U; i < 4U; ++i) frame.x[i + 2U] = sender.message[i];
+            current.reply_to = sender.id;
+            thread::store_state(sender, thread::state::blocked_reply);
+            __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
+            const bool valid = ipc::validate(*endpoint);
+            ipc::unlock(*endpoint);
+            if (!valid) pr_err("endpoint invariant failed selector=%llu\n",
+                               static_cast<unsigned long long>(selector));
+            return true;
+        }
+        if (endpoint->receiver != static_cast<thread_id_t>(-1)) {
+            ipc::unlock(*endpoint);
+            set_error(frame, error_t::busy);
+            return true;
+        }
+        /*
+         * Publish the blocked state and saved context before exposing this
+         * thread as the endpoint receiver.  Otherwise a remote caller can
+         * wake us and then this CPU can overwrite ready with blocked_receive.
+         */
+        current.waiting_endpoint = selector;
+        thread::prepare_block(frame, thread::state::blocked_receive);
+        endpoint->receiver = current.id;
+        ipc::unlock(*endpoint);
+        thread::schedule_prepared(frame);
+        return true;
+    }
+
+    inline bool call(thread::thread& current,
+                     arch::thread::context& frame,
+                     capability_id_t selector) noexcept
+    {
+        ipc::endpoint* endpoint = ipc::lookup(selector);
+        if (endpoint == nullptr) {
+            set_error(frame, error_t::denied);
+            return true;
+        }
+        copy_message_from_frame(current, frame);
+        current.waiting_endpoint = selector;
+        ipc::lock(*endpoint);
+        if (endpoint->receiver != static_cast<thread_id_t>(-1)) {
+            thread::thread& receiver = thread::user_threads[endpoint->receiver];
+            endpoint->receiver = static_cast<thread_id_t>(-1);
+
+            /*
+             * The caller must become blocked before the receiver is made
+             * runnable.  A receiver on another CPU may reply immediately.
+             * Publishing blocked_reply first prevents that wakeup from being
+             * overwritten by this CPU after the reply has already arrived.
+             */
+            thread::prepare_block(frame, thread::state::blocked_reply);
+            deliver_to_receiver(receiver, current);
+            __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
+            ipc::unlock(*endpoint);
+            thread::schedule_prepared(frame);
+            return true;
+        }
+
+        /*
+         * Publish blocked_send before placing the caller in the sender queue.
+         * A remote receiver may dequeue, reply, and wake this thread before
+         * this CPU has left the syscall path.
+         */
+        thread::prepare_block(frame, thread::state::blocked_send);
+        if (!ipc::enqueue_sender(*endpoint, current.id)) {
+            store_state(current, thread::state::running);
+            ipc::unlock(*endpoint);
+            set_error(frame, error_t::busy);
+            return true;
+        }
+        ipc::unlock(*endpoint);
+        thread::schedule_prepared(frame);
+        return true;
     }
 
     [[nodiscard]] inline bool dispatch_ipc(thread::thread& current,
                                            arch::thread::context& frame,
-                                           u64 vector,
-                                           u64 syndrome) noexcept
+                                           u64 vector, u64 syndrome) noexcept
     {
-        if (!arch::syscall::is_user_syscall(vector, syndrome)) {
-            return false;
-        }
-
+        if (!arch::syscall::is_user_syscall(vector, syndrome)) return false;
         if (arch::syscall::number(frame)
             != static_cast<word_t>(abi::v1::syscall::ipc)) {
-            arch::syscall::set_result(frame,
-                static_cast<word_t>(static_cast<s64>(error_t::unsupported)));
+            set_error(frame, error_t::unsupported);
             return true;
         }
 
-        const error_t result = decode_ipc_result(current, frame);
         if (arch::syscall::argument(frame, 6U) == abi::v1::fuzz_magic) {
+            /*
+             * x6 is a test-only discriminator, not part of normal IPC.
+             * Clear it in the saved context before returning so a caller that
+             * forgets to overwrite x6 cannot accidentally classify its next
+             * ordinary IPC operation as a fuzz request.
+             */
+            frame.x[6] = 0U;
+            const error_t result = decode_fuzz_result(current, frame);
             record_fuzz(current, frame, result);
-        } else if (result == error_t::success
-                   && arch::syscall::argument(frame, 0U)
-                       == abi::v1::debug_endpoint) {
-            ++current.reports;
-            pr_info("user thread=%llu cpu=%u counter=%llu ipc=call\n",
-                    static_cast<unsigned long long>(current.id),
-                    static_cast<unsigned int>(arch::cpu::current_id()),
-                    static_cast<unsigned long long>(arch::syscall::argument(frame, 4U)));
+            set_error(frame, result);
+            return true;
         }
 
-        arch::syscall::set_result(
-            frame, static_cast<word_t>(static_cast<s64>(result)));
+        const auto operation = static_cast<abi::v1::ipc_operation>(
+            arch::syscall::argument(frame, 1U));
+        const capability_id_t endpoint = arch::syscall::argument(frame, 0U);
+        switch (operation) {
+        case abi::v1::ipc_operation::call:
+            return call(current, frame, endpoint);
+        case abi::v1::ipc_operation::receive:
+            return receive(current, frame, endpoint);
+        case abi::v1::ipc_operation::reply_receive:
+            copy_message_from_frame(current, frame);
+            reply_to_caller(current);
+            return receive(current, frame, endpoint);
+        }
+        set_error(frame, error_t::denied);
         return true;
     }
 } // namespace sys::kernel::syscall

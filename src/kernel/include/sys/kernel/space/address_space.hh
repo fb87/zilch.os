@@ -1,16 +1,22 @@
 #pragma once
 
 #include <sys/arch/space/address_space.hh>
+#include <sys/types.hh>
 
 namespace sys::kernel::space
 {
-    class address_space
+    struct address_space
     {
-    public:
-        void initialize() noexcept { arch::space::initialize(state_); }
-        void activate() noexcept { arch::space::activate(state_); }
+        arch::space::address_space native{};
 
-    private:
-        arch::space::address_space state_{};
+        inline void initialize(u16 asid) noexcept
+        {
+            arch::space::initialize(native, asid);
+        }
+
+        inline void activate() noexcept
+        {
+            arch::space::activate(native);
+        }
     };
 } // namespace sys::kernel::space

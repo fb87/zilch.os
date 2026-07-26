@@ -1,5 +1,6 @@
 #include <sys/arch/arch.hh>
 #include <sys/kernel/thread/scheduler.hh>
+#include <sys/kernel/syscall/ipc.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
 #include <sys/platform/interrupt.hh>
@@ -26,8 +27,12 @@ extern "C" void sys_arm64_exception_handler(
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
             const sys::u64 ticks = sys::platform::timer::handle_interrupt();
-            if (sys::arch::cpu::current_id() == 0U && sys::kernel::thread::user_execution_active) {
-                sys::kernel::thread::schedule_user(*frame);
+            if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
+                if (vector == 9U) {
+                    sys::kernel::thread::schedule_user(*frame);
+                } else if (vector == 5U) {
+                    (void)sys::kernel::thread::resume_user_from_idle(*frame);
+                }
             } else {
                 sys::kernel::scheduler::on_timer_tick();
             }
@@ -37,8 +42,17 @@ extern "C" void sys_arm64_exception_handler(
             }
         } else if (irq == sys::platform::interrupt::reschedule_ipi) {
             sys::arch::smp::record_reschedule_ipi();
-            sys::kernel::scheduler::on_reschedule_ipi();
+            if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
+                if (vector == 9U) {
+                    sys::kernel::thread::schedule_user(*frame);
+                } else if (vector == 5U) {
+                    (void)sys::kernel::thread::resume_user_from_idle(*frame);
+                }
+            } else {
+                sys::kernel::scheduler::on_reschedule_ipi();
+            }
         } else if (irq == sys::platform::interrupt::tlb_shootdown_ipi) {
+            sys::arch::memory::invalidate_tlb_all();
             sys::arch::smp::record_tlb_shootdown_ipi();
         }
         if (irq < 1020U) {
@@ -55,7 +69,7 @@ extern "C" void sys_arm64_exception_handler(
 
         /* EL0 AArch64 synchronous exceptions enter EL1 through vector 8. */
         if (level == 1U &&
-            sys::kernel::thread::handle_user_syscall(*frame, vector, syndrome)) {
+            sys::kernel::syscall::dispatch_ipc(sys::kernel::thread::current(), *frame, vector, syndrome)) {
             return;
         }
         if (level == 1U &&
