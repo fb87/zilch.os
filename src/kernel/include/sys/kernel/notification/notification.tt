@@ -1,0 +1,2 @@
+sys::kernel::notification::notification test{};
+sys::kernel::notification::initialize(test);

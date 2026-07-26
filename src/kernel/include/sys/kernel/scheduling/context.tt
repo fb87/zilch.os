@@ -1,0 +1,2 @@
+sys::kernel::scheduling::context test{};
+sys::kernel::scheduling::initialize(test, 0U);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <sys/kernel/object.hh>
+#include <sys/kernel/object/table.hh>
 
 namespace sys::kernel::capability
 {
@@ -14,25 +14,37 @@ namespace sys::kernel::capability
     };
 
     struct rights_t {
-        u32 bits;
+        u32 bits{};
 
-        [[nodiscard]]
-        constexpr bool contains(right_t right) const noexcept {
+        [[nodiscard]] constexpr bool contains(right_t right) const noexcept
+        {
             return (bits & static_cast<u32>(right)) != 0U;
         }
     };
 
+    [[nodiscard]] inline constexpr rights_t rights(right_t first) noexcept
+    {
+        return {static_cast<u32>(first)};
+    }
+
+    [[nodiscard]] inline constexpr rights_t rights(right_t first,
+                                                    right_t second) noexcept
+    {
+        return {static_cast<u32>(first) | static_cast<u32>(second)};
+    }
+
     struct slot_t {
-        object::header_t* object;
-        rights_t rights;
-        u32 generation;
+        object::reference_t object{};
+        rights_t rights{};
     };
 
-    [[nodiscard]]
-    inline error_t validate(const slot_t& slot, right_t required) noexcept {
-        if (slot.object == nullptr) {
+    [[nodiscard]] inline error_t validate(const slot_t& slot,
+                                          right_t required) noexcept
+    {
+        if (slot.object.type == object::type_t::none) {
             return error_t::not_found;
         }
-        return slot.rights.contains(required) ? error_t::success : error_t::denied;
+        return slot.rights.contains(required) ? error_t::success
+                                               : error_t::denied;
     }
 } // namespace sys::kernel::capability

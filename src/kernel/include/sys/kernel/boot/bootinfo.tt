@@ -1,0 +1,2 @@
+static_assert(sys::kernel::boot::bootinfo_magic == 0x5a494c43U);
+static_assert(sys::kernel::boot::initial_capability_count == 16U);

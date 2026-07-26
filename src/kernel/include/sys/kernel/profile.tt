@@ -1,0 +1,1 @@
+static_assert(sys::kernel::object::table_capacity >= 64U);

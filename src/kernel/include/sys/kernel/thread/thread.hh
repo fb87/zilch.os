@@ -2,7 +2,11 @@
 
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/context.hh>
+#include <sys/kernel/fault/fault.hh>
+#include <sys/kernel/object.hh>
+#include <sys/kernel/scheduling/context.hh>
 #include <sys/kernel/space/address_space.hh>
+#include <sys/kernel/task/task.hh>
 #include <sys/types.hh>
 
 namespace sys::kernel::thread
@@ -15,6 +19,8 @@ namespace sys::kernel::thread
         blocked_send,
         blocked_receive,
         blocked_reply,
+        blocked_fault,
+        suspended,
         faulted,
         terminated,
     };
@@ -26,24 +32,37 @@ namespace sys::kernel::thread
         reply,
     };
 
+    struct reply_capability
+    {
+        thread_id_t caller{static_cast<thread_id_t>(-1)};
+        u32 generation{};
+        bool valid{};
+    };
+
     struct thread
     {
+        object::header_t object{};
         thread_id_t id{};
         cpu_id_t pinned_cpu{};
         state current_state{state::inactive};
         space::address_space address_space{};
         arch::thread::context context{};
+        task::task* owner{};
+        scheduling::context scheduling_context{};
         capability_id_t waiting_endpoint{};
-        thread_id_t reply_to{static_cast<thread_id_t>(-1)};
+        reply_capability reply{};
         word_t message[4]{};
         word_t pending_message[4]{};
         thread_id_t pending_sender{static_cast<thread_id_t>(-1)};
+        u32 pending_sender_generation{};
         volatile u8 pending_ipc_kind{static_cast<u8>(pending_ipc::none)};
         u64 reports{};
         u64 fuzz_seed{};
         u64 fuzz_iterations{};
         u64 fuzz_failures{};
         u64 faults{};
+        fault::record last_fault{};
+        fault::disposition fault_disposition{fault::disposition::pending};
     };
 
     [[nodiscard]] inline constexpr u64 initial_fuzz_seed(thread_id_t id) noexcept
@@ -60,8 +79,10 @@ namespace sys::kernel::thread
         value.pinned_cpu = cpu;
         value.current_state = state::ready;
         value.waiting_endpoint = 0U;
-        value.reply_to = static_cast<thread_id_t>(-1);
+        scheduling::initialize(value.scheduling_context, cpu);
+        value.reply = {};
         value.pending_sender = static_cast<thread_id_t>(-1);
+        value.pending_sender_generation = 0U;
         value.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
         for (usize_t index = 0U; index < 4U; ++index) {
             value.pending_message[index] = 0U;
@@ -71,6 +92,8 @@ namespace sys::kernel::thread
         value.fuzz_iterations = 0U;
         value.fuzz_failures = 0U;
         value.faults = 0U;
+        value.last_fault = {};
+        value.fault_disposition = fault::disposition::pending;
         value.address_space.initialize(static_cast<u16>(id + 1U));
         arch::thread::initialize_user(value.context,
                                       arch::space::entry(),
@@ -107,10 +130,11 @@ namespace sys::kernel::thread
     }
 
     inline void publish_pending(thread& value, pending_ipc kind,
-                                thread_id_t sender,
+                                thread_id_t sender, u32 sender_generation,
                                 const word_t message[4]) noexcept
     {
         value.pending_sender = sender;
+        value.pending_sender_generation = sender_generation;
         for (usize_t index = 0U; index < 4U; ++index) {
             value.pending_message[index] = message[index];
         }
@@ -131,12 +155,15 @@ namespace sys::kernel::thread
             for (usize_t index = 0U; index < 4U; ++index) {
                 value.context.x[index + 2U] = value.pending_message[index];
             }
-            value.reply_to = value.pending_sender;
+            value.reply.caller = value.pending_sender;
+            value.reply.generation = value.pending_sender_generation;
+            value.reply.valid = true;
         } else {
             for (usize_t index = 0U; index < 4U; ++index) {
                 value.context.x[index + 1U] = value.pending_message[index];
             }
         }
         value.pending_sender = static_cast<thread_id_t>(-1);
+        value.pending_sender_generation = 0U;
     }
 } // namespace sys::kernel::thread

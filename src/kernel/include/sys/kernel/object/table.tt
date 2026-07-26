@@ -1,0 +1,3 @@
+#include <sys/kernel/object/table.hh>
+
+static_assert(sizeof(sys::kernel::object::reference_t) == 16U);

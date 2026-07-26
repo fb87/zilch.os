@@ -4,7 +4,15 @@
 #include <sys/arch/irq.hh>
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/entry.hh>
+#include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/ipc/endpoint.hh>
+#include <sys/kernel/object/table.hh>
+#include <sys/kernel/boot/bootinfo.hh>
+#include <sys/kernel/memory/manager.hh>
+#include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/printk.hh>
+#include <sys/kernel/profile.hh>
+#include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
 #include <sys/types.hh>
 
@@ -13,6 +21,7 @@ namespace sys::kernel::thread
     inline constexpr u32 user_thread_count = 10U;
     inline constexpr u32 maximum_cpu_count = 4U;
     inline thread user_threads[user_thread_count]{};
+    inline task::task user_tasks[user_thread_count]{};
     inline u32 current_user_thread[maximum_cpu_count]{};
     inline bool user_execution_active[maximum_cpu_count]{};
     inline bool user_cpu_idle[maximum_cpu_count]{};
@@ -20,20 +29,179 @@ namespace sys::kernel::thread
     extern "C" [[noreturn]] void sys_kernel_user_idle() noexcept;
     inline volatile u64 per_cpu_switches[maximum_cpu_count]{};
 
-    inline void initialize_user_threads() noexcept
+    [[nodiscard]] inline error_t initialize_user_threads() noexcept
     {
+        error_t profile_result = profile::initialize_objects();
+        if (profile_result != error_t::success) return profile_result;
+
+        for (u32 index = 0U; index < ipc::endpoint_count; ++index) {
+            ipc::initialize(ipc::endpoints[index]);
+            const error_t result = object::register_object(
+                ipc::endpoints[index].object,
+                static_cast<object_id_t>(32U + index),
+                object::type_t::endpoint);
+            if (result != error_t::success) return result;
+        }
+
         for (u32 id = 0U; id < user_thread_count; ++id) {
+            task::initialize(user_tasks[id], static_cast<space_id_t>(id));
+            error_t result = object::register_object(
+                user_tasks[id].object, static_cast<object_id_t>(16U + id),
+                object::type_t::task);
+            if (result != error_t::success) return result;
+
             initialize_user(user_threads[id], static_cast<thread_id_t>(id),
                             static_cast<cpu_id_t>(id % maximum_cpu_count),
                             static_cast<word_t>(id),
                             static_cast<word_t>(initial_fuzz_seed(id)));
+            user_threads[id].owner = &user_tasks[id];
+            user_tasks[id].fault_endpoint = 10U;
+            result = object::register_object(
+                user_threads[id].object, static_cast<object_id_t>(id),
+                object::type_t::thread);
+            if (result != error_t::success) return result;
+
+            result = object::register_object(
+                user_threads[id].address_space.object,
+                static_cast<object_id_t>(60U + id),
+                object::type_t::address_space);
+            if (result != error_t::success) return result;
+            result = object::register_object(
+                user_threads[id].scheduling_context.object,
+                static_cast<object_id_t>(50U + id),
+                object::type_t::scheduling_context);
+            if (result != error_t::success) return result;
+
+            user_tasks[id].root = id == 0U;
+            result = capability::install(
+                user_tasks[id].cspace, 1U,
+                object::reference(user_tasks[id].object),
+                {static_cast<u32>(capability::right_t::read)
+                 | static_cast<u32>(capability::right_t::control)});
+            if (result != error_t::success) return result;
+            result = capability::install(
+                user_tasks[id].cspace, 2U,
+                object::reference(user_threads[id].object),
+                {static_cast<u32>(capability::right_t::read)
+                 | static_cast<u32>(capability::right_t::write)
+                 | static_cast<u32>(capability::right_t::control)});
+            if (result != error_t::success) return result;
+            result = capability::install(
+                user_tasks[id].cspace, 3U,
+                object::reference(user_threads[id].address_space.object),
+                {static_cast<u32>(capability::right_t::read)
+                 | static_cast<u32>(capability::right_t::write)
+                 | static_cast<u32>(capability::right_t::control)});
+            if (result != error_t::success) return result;
+            result = capability::install(
+                user_tasks[id].cspace, 4U,
+                object::reference(user_threads[id].scheduling_context.object),
+                {static_cast<u32>(capability::right_t::read)
+                 | static_cast<u32>(capability::right_t::control)});
+            if (result != error_t::success) return result;
+
+            const capability::rights_t client_rights =
+                capability::rights(capability::right_t::write);
+            result = capability::install(
+                user_tasks[id].cspace, 10U,
+                object::reference(ipc::endpoints[0].object),
+                id == 0U
+                    ? capability::rights_t{
+                        static_cast<u32>(capability::right_t::read)
+                        | static_cast<u32>(capability::right_t::write)
+                        | static_cast<u32>(capability::right_t::grant)
+                        | static_cast<u32>(capability::right_t::control)}
+                    : client_rights);
+            if (result != error_t::success) return result;
+            result = capability::install(
+                user_tasks[id].cspace, 11U,
+                object::reference(ipc::endpoints[1].object),
+                id == 1U
+                    ? capability::rights_t{
+                        static_cast<u32>(capability::right_t::read)
+                        | static_cast<u32>(capability::right_t::write)
+                        | static_cast<u32>(capability::right_t::grant)
+                        | static_cast<u32>(capability::right_t::control)}
+                    : client_rights);
+            if (result != error_t::success) return result;
         }
+        task::task& root_task = user_tasks[0];
+        const capability::rights_t root_memory_rights{
+            static_cast<u32>(capability::right_t::read)
+            | static_cast<u32>(capability::right_t::write)
+            | static_cast<u32>(capability::right_t::grant)
+            | static_cast<u32>(capability::right_t::control)};
+        error_t root_result = capability::install(
+            root_task.cspace, 12U,
+            object::reference(memory::frames[0].object), root_memory_rights);
+        if (root_result != error_t::success) return root_result;
+        root_result = capability::install(
+            root_task.cspace, 13U,
+            object::reference(memory::page_tables[0].object), root_memory_rights);
+        if (root_result != error_t::success) return root_result;
+        root_result = capability::install(
+            root_task.cspace, 14U,
+            object::reference(profile::root_notification.object),
+            {static_cast<u32>(capability::right_t::read)
+             | static_cast<u32>(capability::right_t::write)
+             | static_cast<u32>(capability::right_t::control)});
+        if (root_result != error_t::success) return root_result;
+        root_result = capability::install(
+            root_task.cspace, 15U,
+            object::reference(profile::root_timer_interrupt.object),
+            {static_cast<u32>(capability::right_t::read)
+             | static_cast<u32>(capability::right_t::control)});
+        if (root_result != error_t::success) return root_result;
+
+        boot::root_bootinfo.cpu_count = maximum_cpu_count;
+        boot::root_bootinfo.root_task = 1U;
+        boot::root_bootinfo.root_thread = 2U;
+        boot::root_bootinfo.root_space = 3U;
+        boot::root_bootinfo.root_fault_endpoint = 10U;
+        boot::root_bootinfo.capability_count = 8U;
+        const capability_id_t selectors[8]{1U, 2U, 3U, 4U, 10U, 12U, 14U, 15U};
+        for (u32 index = 0U; index < 8U; ++index) {
+            const capability::slot_t& slot = root_task.cspace.slots[selectors[index]];
+            boot::root_bootinfo.capabilities[index] = {
+                selectors[index], slot.object, slot.rights.bits};
+        }
+
         for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
             current_user_thread[cpu] = cpu;
             user_execution_active[cpu] = false;
             user_cpu_idle[cpu] = false;
             per_cpu_switches[cpu] = 0U;
         }
+        return error_t::success;
+    }
+
+
+    [[nodiscard]] inline error_t validate_kernel_profile() noexcept
+    {
+        task::task& root = user_tasks[0];
+        error_t result = capability::copy(
+            root.cspace, 16U, root.cspace, 10U,
+            capability::rights(capability::right_t::write));
+        if (result != error_t::success) return result;
+        result = capability::move(root.cspace, 17U, root.cspace, 16U);
+        if (result != error_t::success) return result;
+        result = capability::delete_capability(root.cspace, 17U);
+        if (result != error_t::success) return result;
+
+        result = memory::map(user_threads[0].address_space, memory::frames[0],
+                             0x10002000ULL,
+                             static_cast<memory::permission>(
+                                 static_cast<u8>(memory::permission::read)
+                                 | static_cast<u8>(memory::permission::write)));
+        if (result != error_t::success) return result;
+        result = memory::unmap(user_threads[0].address_space,
+                               memory::frames[0]);
+        if (result != error_t::success) return result;
+
+        notification::signal(profile::root_notification, 1U);
+        if (notification::consume(profile::root_notification) != 1U)
+            return error_t::invalid_argument;
+        return error_t::success;
     }
 
     inline void log_cpu_assignment(cpu_id_t cpu) noexcept
@@ -255,6 +423,66 @@ namespace sys::kernel::thread
         }
     }
 
+
+    [[nodiscard]] inline bool deliver_fault_ipc(thread& value,
+                                                 arch::thread::context& frame,
+                                                 u64 syndrome,
+                                                 vaddr_t fault_address) noexcept
+    {
+        if (value.owner == nullptr || value.owner->fault_endpoint == 0U)
+            return false;
+        object::header_t* endpoint_header = nullptr;
+        const error_t lookup_result = capability::lookup(
+            value.owner->cspace, value.owner->fault_endpoint,
+            object::type_t::endpoint, capability::right_t::write,
+            endpoint_header);
+        if (lookup_result != error_t::success || endpoint_header == nullptr)
+            return false;
+
+        value.last_fault.type = fault::kind::data_abort;
+        value.last_fault.thread = value.id;
+        value.last_fault.thread_generation = value.object.generation;
+        value.last_fault.syndrome = syndrome;
+        value.last_fault.address = fault_address;
+        value.last_fault.instruction_pointer = frame.instruction_pointer;
+        value.fault_disposition = fault::disposition::pending;
+        value.message[0] = static_cast<word_t>(fault::disposition::terminate);
+        value.message[1] = static_cast<word_t>(value.last_fault.type);
+        value.message[2] = static_cast<word_t>(fault_address);
+        value.message[3] = static_cast<word_t>(frame.instruction_pointer);
+        value.waiting_endpoint = value.owner->fault_endpoint;
+        prepare_block(frame, state::blocked_fault);
+
+        auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
+        ipc::lock(endpoint);
+        if (endpoint.receiver.type != object::type_t::none) {
+            const object::reference_t receiver_reference = endpoint.receiver;
+            endpoint.receiver = {};
+            object::header_t* receiver_header = object::resolve(receiver_reference);
+            if (receiver_header != nullptr
+                && receiver_header->type == object::type_t::thread) {
+                thread& receiver = *reinterpret_cast<thread*>(receiver_header);
+                publish_pending(receiver, pending_ipc::incoming_call,
+                                value.id, value.object.generation,
+                                value.message);
+                wake(receiver);
+                ipc::remote_reschedule(receiver.pinned_cpu,
+                                       arch::cpu::current_id());
+                ipc::unlock(endpoint);
+                schedule_prepared(frame);
+                return true;
+            }
+        }
+        if (!ipc::enqueue_sender(endpoint, object::reference(value.object))) {
+            ipc::unlock(endpoint);
+            store_state(value, state::faulted);
+            return false;
+        }
+        ipc::unlock(endpoint);
+        schedule_prepared(frame);
+        return true;
+    }
+
     [[nodiscard]] inline bool handle_user_fault(arch::thread::context& frame,
                                                 u64 vector, u64 syndrome,
                                                 vaddr_t fault_address) noexcept
@@ -268,13 +496,16 @@ namespace sys::kernel::thread
 
         thread& value = current();
         ++value.faults;
-        store_state(value, state::faulted);
-        pr_warn("user fault contained thread=%llu cpu=%u esr=%llx far=%llx pc=%llx\n",
+        pr_warn("user fault delivered thread=%llu cpu=%u esr=%llx far=%llx pc=%llx pager=%llu\n",
                 static_cast<unsigned long long>(value.id),
                 static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(syndrome),
                 static_cast<unsigned long long>(fault_address),
-                static_cast<unsigned long long>(frame.instruction_pointer));
+                static_cast<unsigned long long>(frame.instruction_pointer),
+                static_cast<unsigned long long>(value.owner != nullptr
+                    ? value.owner->fault_endpoint : 0U));
+        if (deliver_fault_ipc(value, frame, syndrome, fault_address)) return true;
+        store_state(value, state::faulted);
         const u32 next = next_runnable(cpu, current_index());
         if (next == current_index() && !runnable(user_threads[next])) {
             /*

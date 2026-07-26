@@ -1,0 +1,1 @@
+static_assert(sys::kernel::capability::cspace_slot_count >= 16U);

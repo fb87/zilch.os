@@ -62,6 +62,42 @@ namespace sys::arch::space
                          : : "r"(operand) : "memory");
     }
 
+
+    [[nodiscard]] inline error_t map_page(address_space& value,
+                                          vaddr_t address, void* page,
+                                          bool writable,
+                                          bool executable) noexcept
+    {
+        if ((address & (memory::page_size - 1U)) != 0U
+            || address < user_code || address >= user_stack_base
+            || (writable && executable)) return error_t::invalid_argument;
+        const usize_t l2_index = static_cast<usize_t>((address >> 21U) & 0x1ffU);
+        if (l2_index != static_cast<usize_t>((user_code >> 21U) & 0x1ffU))
+            return error_t::unsupported;
+        const usize_t l3_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
+        if (value.l3.entry[l3_index] != 0U) return error_t::busy;
+        u64 descriptor = (reinterpret_cast<u64>(page) & ~0xfffULL)
+            | memory::descriptor_page | memory::access_flag
+            | memory::inner_shareable | memory::attr_normal;
+        descriptor |= writable ? memory::ap_el0_rw : memory::ap_el0_ro;
+        if (!executable) descriptor |= memory::pxn | memory::uxn;
+        value.l3.entry[l3_index] = descriptor;
+        invalidate_asid(value.asid);
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t unmap_page(address_space& value,
+                                            vaddr_t address) noexcept
+    {
+        if ((address & (memory::page_size - 1U)) != 0U)
+            return error_t::invalid_argument;
+        const usize_t l3_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
+        if (value.l3.entry[l3_index] == 0U) return error_t::not_found;
+        value.l3.entry[l3_index] = 0U;
+        invalidate_asid(value.asid);
+        return error_t::success;
+    }
+
     [[nodiscard]] inline constexpr vaddr_t entry() noexcept { return user_code; }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept
     {

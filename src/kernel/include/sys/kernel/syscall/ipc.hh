@@ -4,6 +4,7 @@
 #include <sys/arch/cpu.hh>
 #include <sys/arch/syscall/entry.hh>
 #include <sys/arch/smp.hh>
+#include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/thread/scheduler.hh>
@@ -72,6 +73,33 @@ namespace sys::kernel::syscall
             previous_cpu_switches[cpu] = switches;
             previous_cpu_ticks[cpu] = ticks;
         }
+    }
+
+
+    [[nodiscard]] inline error_t resolve_endpoint(
+        thread::thread& current, capability_id_t selector,
+        capability::right_t required, ipc::endpoint*& endpoint) noexcept
+    {
+        endpoint = nullptr;
+        if (current.owner == nullptr) return error_t::denied;
+        object::header_t* object = nullptr;
+        const error_t result = capability::lookup(
+            current.owner->cspace, selector, object::type_t::endpoint,
+            required, object);
+        if (result != error_t::success) return result;
+        endpoint = reinterpret_cast<ipc::endpoint*>(object);
+        return error_t::success;
+    }
+
+
+
+    [[nodiscard]] inline thread::thread* resolve_thread_reference(
+        const object::reference_t& reference) noexcept
+    {
+        if (reference.type != object::type_t::thread) return nullptr;
+        object::header_t* header = object::resolve(reference);
+        if (header == nullptr) return nullptr;
+        return reinterpret_cast<thread::thread*>(header);
     }
 
     inline void set_error(arch::thread::context& frame, error_t result) noexcept
@@ -157,40 +185,68 @@ namespace sys::kernel::syscall
                                     thread::thread& sender) noexcept
     {
         thread::publish_pending(receiver, thread::pending_ipc::incoming_call,
-                                sender.id, sender.message);
+                                sender.id, sender.object.generation,
+                                sender.message);
         thread::wake(receiver);
         ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
     }
 
     inline void reply_to_caller(thread::thread& server) noexcept
     {
-        if (server.reply_to >= thread::user_thread_count) return;
-        thread::thread& caller = thread::user_threads[server.reply_to];
+        const thread::reply_capability reply = server.reply;
+        server.reply = {};
+        if (!reply.valid || reply.caller >= thread::user_thread_count) return;
+        thread::thread& caller = thread::user_threads[reply.caller];
+        const thread::state caller_state = thread::load_state(caller);
+        if (caller.object.generation != reply.generation
+            || (caller_state != thread::state::blocked_reply
+                && caller_state != thread::state::blocked_fault)) {
+            return;
+        }
+        if (caller_state == thread::state::blocked_fault) {
+            const auto disposition = static_cast<fault::disposition>(server.message[0]);
+            caller.fault_disposition = disposition;
+            if (disposition == fault::disposition::resume) {
+                thread::wake(caller);
+                ipc::remote_reschedule(caller.pinned_cpu,
+                                       arch::cpu::current_id());
+            } else {
+                thread::store_state(caller, thread::state::terminated);
+            }
+            return;
+        }
         thread::publish_pending(caller, thread::pending_ipc::reply,
-                                server.id, server.message);
+                                server.id, server.object.generation,
+                                server.message);
         thread::wake(caller);
         ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
-        server.reply_to = static_cast<thread_id_t>(-1);
     }
 
     inline bool receive(thread::thread& current,
                         arch::thread::context& frame,
                         capability_id_t selector) noexcept
     {
-        ipc::endpoint* endpoint = ipc::lookup(selector);
-        if (endpoint == nullptr) {
-            set_error(frame, error_t::denied);
+        ipc::endpoint* endpoint = nullptr;
+        const error_t lookup_result = resolve_endpoint(
+            current, selector, capability::right_t::read, endpoint);
+        if (lookup_result != error_t::success) {
+            set_error(frame, lookup_result);
             return true;
         }
         ipc::lock(*endpoint);
-        thread_id_t sender_id{};
-        if (ipc::dequeue_sender(*endpoint, sender_id)) {
-            thread::thread& sender = thread::user_threads[sender_id];
+        object::reference_t sender_reference{};
+        while (ipc::dequeue_sender(*endpoint, sender_reference)) {
+            thread::thread* sender_pointer = resolve_thread_reference(sender_reference);
+            if (sender_pointer == nullptr) continue;
+            thread::thread& sender = *sender_pointer;
             set_error(frame, error_t::success);
             frame.x[1] = static_cast<word_t>(sender.id);
             for (usize_t i = 0U; i < 4U; ++i) frame.x[i + 2U] = sender.message[i];
-            current.reply_to = sender.id;
-            thread::store_state(sender, thread::state::blocked_reply);
+            current.reply.caller = sender.id;
+            current.reply.generation = sender.object.generation;
+            current.reply.valid = true;
+            if (thread::load_state(sender) != thread::state::blocked_fault)
+                thread::store_state(sender, thread::state::blocked_reply);
             __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
             const bool valid = ipc::validate(*endpoint);
             ipc::unlock(*endpoint);
@@ -198,7 +254,7 @@ namespace sys::kernel::syscall
                                static_cast<unsigned long long>(selector));
             return true;
         }
-        if (endpoint->receiver != static_cast<thread_id_t>(-1)) {
+        if (endpoint->receiver.type != object::type_t::none) {
             ipc::unlock(*endpoint);
             set_error(frame, error_t::busy);
             return true;
@@ -210,7 +266,7 @@ namespace sys::kernel::syscall
          */
         current.waiting_endpoint = selector;
         thread::prepare_block(frame, thread::state::blocked_receive);
-        endpoint->receiver = current.id;
+        endpoint->receiver = object::reference(current.object);
         ipc::unlock(*endpoint);
         thread::schedule_prepared(frame);
         return true;
@@ -220,30 +276,34 @@ namespace sys::kernel::syscall
                      arch::thread::context& frame,
                      capability_id_t selector) noexcept
     {
-        ipc::endpoint* endpoint = ipc::lookup(selector);
-        if (endpoint == nullptr) {
-            set_error(frame, error_t::denied);
+        ipc::endpoint* endpoint = nullptr;
+        const error_t lookup_result = resolve_endpoint(
+            current, selector, capability::right_t::write, endpoint);
+        if (lookup_result != error_t::success) {
+            set_error(frame, lookup_result);
             return true;
         }
         copy_message_from_frame(current, frame);
         current.waiting_endpoint = selector;
         ipc::lock(*endpoint);
-        if (endpoint->receiver != static_cast<thread_id_t>(-1)) {
-            thread::thread& receiver = thread::user_threads[endpoint->receiver];
-            endpoint->receiver = static_cast<thread_id_t>(-1);
+        if (endpoint->receiver.type != object::type_t::none) {
+            const object::reference_t receiver_reference = endpoint->receiver;
+            endpoint->receiver = {};
+            thread::thread* receiver_pointer = resolve_thread_reference(receiver_reference);
+            if (receiver_pointer != nullptr) {
+                thread::thread& receiver = *receiver_pointer;
 
-            /*
-             * The caller must become blocked before the receiver is made
-             * runnable.  A receiver on another CPU may reply immediately.
-             * Publishing blocked_reply first prevents that wakeup from being
-             * overwritten by this CPU after the reply has already arrived.
-             */
-            thread::prepare_block(frame, thread::state::blocked_reply);
-            deliver_to_receiver(receiver, current);
-            __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
-            ipc::unlock(*endpoint);
-            thread::schedule_prepared(frame);
-            return true;
+                /*
+                 * The caller must become blocked before the receiver is made
+                 * runnable.  A receiver on another CPU may reply immediately.
+                 */
+                thread::prepare_block(frame, thread::state::blocked_reply);
+                deliver_to_receiver(receiver, current);
+                __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
+                ipc::unlock(*endpoint);
+                thread::schedule_prepared(frame);
+                return true;
+            }
         }
 
         /*
@@ -252,7 +312,7 @@ namespace sys::kernel::syscall
          * this CPU has left the syscall path.
          */
         thread::prepare_block(frame, thread::state::blocked_send);
-        if (!ipc::enqueue_sender(*endpoint, current.id)) {
+        if (!ipc::enqueue_sender(*endpoint, object::reference(current.object))) {
             store_state(current, thread::state::running);
             ipc::unlock(*endpoint);
             set_error(frame, error_t::busy);

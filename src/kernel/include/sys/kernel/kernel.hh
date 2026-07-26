@@ -17,7 +17,7 @@ namespace sys::kernel
 {
     inline constexpr const char* name = "zilch";
     inline constexpr u16 version_major = 0U;
-    inline constexpr u16 version_minor = 2U;
+    inline constexpr u16 version_minor = 3U;
     inline constexpr u16 version_patch = 0U;
 
     inline void verify_contracts() noexcept
@@ -111,8 +111,28 @@ namespace sys::kernel
                 static_cast<unsigned int>(expected),
                 online ? "online" : "timeout");
         if constexpr (arch::space::user_available) {
-            thread::initialize_user_threads();
-            pr_info("user smp: address-spaces=%u threads=%u cpus=%u ipc=call/reply_receive fuzz=deterministic\n",
+            const error_t user_result = thread::initialize_user_threads();
+            if (user_result != error_t::success) {
+                pr_err("user object initialization failed=%d\n",
+                       static_cast<int>(user_result));
+                arch::cpu::halt();
+            }
+            const error_t profile_result = thread::validate_kernel_profile();
+            if (profile_result != error_t::success) {
+                pr_err("kernel profile self-test failed=%d\n",
+                       static_cast<int>(profile_result));
+                arch::cpu::halt();
+            }
+            pr_info("kernel profile=1.0 checkpoints=K2-K6 authority=verified memory=verified notification=verified\n");
+            pr_info("root bootstrap: task=0 bootinfo=v%u caps=%u pager_endpoint=%u mode=compatibility-fuzz\n",
+                    static_cast<unsigned int>(boot::root_bootinfo.version),
+                    static_cast<unsigned int>(boot::root_bootinfo.capability_count),
+                    static_cast<unsigned int>(boot::root_bootinfo.root_fault_endpoint));
+            pr_info("user authority: tasks=%u cspaces=%u endpoints=%u object-table=generation-checked\n",
+                    static_cast<unsigned int>(thread::user_thread_count),
+                    static_cast<unsigned int>(thread::user_thread_count),
+                    static_cast<unsigned int>(ipc::endpoint_count));
+            pr_info("user smp: address-spaces=%u threads=%u cpus=%u ipc=capability-call/reply_receive fault-ipc=enabled fuzz=deterministic\n",
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(expected));

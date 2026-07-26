@@ -1,0 +1,3 @@
+#include <sys/kernel/capability/cspace.hh>
+
+static_assert(sys::kernel::capability::cspace_slot_count == 32U);

@@ -6,6 +6,7 @@ namespace sys::kernel::object
 {
     enum class type_t : u8 {
         none,
+        task,
         thread,
         address_space,
         endpoint,
