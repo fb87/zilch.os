@@ -4,6 +4,7 @@
 #include <sys/arch/irq.hh>
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/entry.hh>
+#include <sys/kernel/acceptance/acceptance.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/object/table.hh>
@@ -13,6 +14,7 @@
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/profile.hh>
 #include <sys/kernel/task/task.hh>
+#include <sys/kernel/syscall/control.hh>
 #include <sys/kernel/thread/thread.hh>
 #include <sys/types.hh>
 
@@ -201,6 +203,7 @@ namespace sys::kernel::thread
         notification::signal(profile::root_notification, 1U);
         if (notification::consume(profile::root_notification) != 1U)
             return error_t::invalid_argument;
+        acceptance::mark_profile_self_tests(true, true, true);
         return error_t::success;
     }
 
@@ -496,6 +499,7 @@ namespace sys::kernel::thread
 
         thread& value = current();
         ++value.faults;
+        acceptance::mark_fault_ipc();
         pr_warn("user fault delivered thread=%llu cpu=%u esr=%llx far=%llx pc=%llx pager=%llu\n",
                 static_cast<unsigned long long>(value.id),
                 static_cast<unsigned int>(cpu),

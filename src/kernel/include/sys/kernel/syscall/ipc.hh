@@ -4,6 +4,7 @@
 #include <sys/arch/cpu.hh>
 #include <sys/arch/syscall/entry.hh>
 #include <sys/arch/smp.hh>
+#include <sys/kernel/acceptance/acceptance.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/printk.hh>
@@ -49,6 +50,7 @@ namespace sys::kernel::syscall
         const u32 count = online < thread::maximum_cpu_count
                             ? online
                             : thread::maximum_cpu_count;
+        bool all_cpus_advanced = count != 0U;
         for (u32 cpu = 0U; cpu < count; ++cpu) {
             const u64 cpu_operations = cpu_fuzz_operations(cpu);
             const u64 switches = __atomic_load_n(
@@ -57,6 +59,7 @@ namespace sys::kernel::syscall
             const bool advanced = cpu_operations > previous_cpu_operations[cpu]
                 && switches > previous_cpu_switches[cpu]
                 && ticks > previous_cpu_ticks[cpu];
+            all_cpus_advanced = all_cpus_advanced && advanced;
             const u32 current = __atomic_load_n(
                 &thread::current_user_thread[cpu], __ATOMIC_ACQUIRE);
 
@@ -73,6 +76,10 @@ namespace sys::kernel::syscall
             previous_cpu_switches[cpu] = switches;
             previous_cpu_ticks[cpu] = ticks;
         }
+        acceptance::report_final(
+            operations,
+            __atomic_load_n(&total_fuzz_failures, __ATOMIC_ACQUIRE),
+            all_cpus_advanced);
     }
 
 

@@ -7,6 +7,7 @@ namespace sys::abi::v1
     enum class syscall : word_t
     {
         ipc = 0U,
+        control = 1U,
     };
 
     enum class ipc_operation : word_t

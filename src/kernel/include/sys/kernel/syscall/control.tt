@@ -1,0 +1,4 @@
+control syscall rejects raw object identifiers; every target is a CSpace selector
+control syscall attenuates capability rights on copy
+control syscall requires control authority for task, thread, address-space, IRQ, and scheduler operations
+control syscall map rejects writable executable mappings

@@ -17,7 +17,7 @@ namespace sys::kernel
 {
     inline constexpr const char* name = "zilch";
     inline constexpr u16 version_major = 0U;
-    inline constexpr u16 version_minor = 3U;
+    inline constexpr u16 version_minor = 5U;
     inline constexpr u16 version_patch = 0U;
 
     inline void verify_contracts() noexcept
@@ -123,7 +123,7 @@ namespace sys::kernel
                        static_cast<int>(profile_result));
                 arch::cpu::halt();
             }
-            pr_info("kernel profile=1.0 checkpoints=K2-K6 authority=verified memory=verified notification=verified\n");
+            pr_info("kernel profile=1.0 runtime-certification=enabled completion-api=enabled authority=verified memory=verified notification=verified\n");
             pr_info("root bootstrap: task=0 bootinfo=v%u caps=%u pager_endpoint=%u mode=compatibility-fuzz\n",
                     static_cast<unsigned int>(boot::root_bootinfo.version),
                     static_cast<unsigned int>(boot::root_bootinfo.capability_count),
