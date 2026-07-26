@@ -1,5 +1,6 @@
 #include <sys/arch/arch.hh>
 #include <sys/kernel/thread/scheduler.hh>
+#include <sys/kernel/syscall/control.hh>
 #include <sys/kernel/syscall/ipc.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
@@ -69,7 +70,13 @@ extern "C" void sys_arm64_exception_handler(
 
         /* EL0 AArch64 synchronous exceptions enter EL1 through vector 8. */
         if (level == 1U &&
-            sys::kernel::syscall::dispatch_ipc(sys::kernel::thread::current(), *frame, vector, syndrome)) {
+            sys::kernel::syscall::dispatch_control(
+                sys::kernel::thread::current(), *frame, vector, syndrome)) {
+            return;
+        }
+        if (level == 1U &&
+            sys::kernel::syscall::dispatch_ipc(
+                sys::kernel::thread::current(), *frame, vector, syndrome)) {
             return;
         }
         if (level == 1U &&

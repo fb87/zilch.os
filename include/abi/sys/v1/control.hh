@@ -20,5 +20,7 @@ namespace sys::abi::v1
         interrupt_bind = 11U,
         interrupt_ack = 12U,
         scheduling_configure = 13U,
+        acceptance_report = 14U,
+        acceptance_finalize = 15U,
     };
 }

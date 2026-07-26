@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/arch/exception.hh>
+#include <sys/arch/space/address_space.hh>
 #include <sys/types.hh>
 
 namespace sys::arch::thread
@@ -31,10 +32,10 @@ namespace sys::arch::thread
 
     [[nodiscard]] inline bool valid_user(const context& value) noexcept
     {
-        constexpr vaddr_t user_code_begin = 0x10000000ULL;
-        constexpr vaddr_t user_code_end = 0x10001000ULL;
-        constexpr vaddr_t user_stack_begin = 0x10010000ULL;
-        constexpr vaddr_t user_stack_end = 0x10011000ULL;
+        constexpr vaddr_t user_code_begin = arch::space::user_code;
+        constexpr vaddr_t user_code_end = arch::space::user_code + 0x1000ULL;
+        constexpr vaddr_t user_stack_begin = arch::space::user_stack_base;
+        constexpr vaddr_t user_stack_end = arch::space::user_stack_base + 0x1000ULL;
 
         return value.instruction_pointer >= user_code_begin
             && value.instruction_pointer < user_code_end

@@ -7,8 +7,20 @@
 namespace sys::arch::space
 {
     inline constexpr bool user_available = true;
+#if CONFIG_ROOT_ONLY_BOOT
+    inline constexpr vaddr_t user_code = 0x20000000ULL;
+    inline constexpr vaddr_t user_stack_base = 0x20010000ULL;
+#else
     inline constexpr vaddr_t user_code = 0x10000000ULL;
     inline constexpr vaddr_t user_stack_base = 0x10010000ULL;
+#endif
+
+    // TTBR0 currently preserves the kernel identity block at 0x40000000.
+    // User mappings must remain below that L1 block until kernel mappings
+    // move to TTBR1_EL1.
+    inline constexpr vaddr_t kernel_identity_base = 0x40000000ULL;
+    static_assert(user_code < kernel_identity_base);
+    static_assert(user_stack_base < kernel_identity_base);
 
     extern "C" char sys_arm64_user_image_start[];
 

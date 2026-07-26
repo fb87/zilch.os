@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 USER_OBJDIR := $(OBJTREE)/user
 USER_ELF := $(USER_OBJDIR)/init.elf
+USER_BIN := $(USER_OBJDIR)/init.bin
 USER_MAP := $(USER_OBJDIR)/init.map
 USER_SOURCES := \
     src/user/init/main.cc \
@@ -16,7 +17,11 @@ USER_CXXFLAGS := $(KBUILD_CXXFLAGS)
 USER_AFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) -ffreestanding
 
 .PHONY: userspace
-userspace: $(USER_ELF)
+userspace: $(USER_ELF) $(USER_BIN)
+
+$(USER_BIN): $(USER_ELF)
+	@printf '  UOBJCOPY %s\n' '$@'
+	@$(OBJCOPY) -O binary $< $@
 
 $(USER_ELF): $(USER_CRT) $(USER_OBJECTS) $(USER_LDSCRIPT)
 	@mkdir -p $(dir $@)

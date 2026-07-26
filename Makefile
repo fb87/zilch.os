@@ -5,7 +5,8 @@ MAKEFLAGS += --no-builtin-rules
 .DEFAULT_GOAL := all
 
 PROJECT ?= zilch
-VERSION ?= 0.1.0
+VERSION ?= 0.5.0
+BOOT_PROFILE ?= root
 ARCH ?= arm64
 ifeq ($(origin PLATFORM),command line)
 else
@@ -70,7 +71,7 @@ INCLUDES := -I$(SRCTREE)/src/arch/$(ARCH)/include \
             -I$(SRCTREE)/include/abi \
             -I$(OBJTREE)/include/generated
 WARNINGS := -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wundef -Wcast-align -Wcast-qual -Wformat=2 -Wimplicit-fallthrough
-KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES)
+KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_BOOT=$(if $(filter root,$(BOOT_PROFILE)),1,0)
 KBUILD_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections $(WARNINGS)
 KBUILD_AFLAGS := -ffreestanding
 export SRCTREE OBJTREE ARCH PLATFORM CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION KBUILD_CPPFLAGS KBUILD_CXXFLAGS KBUILD_AFLAGS
@@ -90,13 +91,14 @@ format-check:
 	@failed=0; for file in $(FORMAT_FILES); do case "$$file" in *.tt) extra="--assume-filename=$${file%.tt}.cc";; *) extra="";; esac; $(CLANG_FORMAT) $$extra --dry-run --Werror "$$file" || failed=1; done; exit $$failed
 
 USER_ELF := $(OBJTREE)/user/init.elf
+USER_BIN := $(OBJTREE)/user/init.bin
 EARLYFS := $(OBJTREE)/image/earlyfs.tar
 MANIFEST ?= $(SRCTREE)/src/image/manifests/minimal.toml
 include $(SRCTREE)/tools/build/Makefile.user
 
 .PHONY: all kernel image userspace arm64 amd64 run clean release
-all: kernel userspace image
-kernel: $(KERNEL_ELF) $(KERNEL_BIN)
+all: userspace kernel image
+kernel: userspace $(KERNEL_ELF) $(KERNEL_BIN)
 image: $(EARLYFS)
 $(EARLYFS): $(USER_ELF) $(MANIFEST)
 	@mkdir -p $(dir $@)
@@ -105,7 +107,7 @@ $(EARLYFS): $(USER_ELF) $(MANIFEST)
 $(OBJTREE)/%/built-in.o: FORCE
 	@mkdir -p $(dir $@)
 	@$(MAKE) -s --no-print-directory -f $(SRCTREE)/tools/build/Makefile.build obj=$* __build
-$(KERNEL_ELF): $(core-builtins) $(LDSCRIPT)
+$(KERNEL_ELF): $(USER_BIN) $(core-builtins) $(LDSCRIPT)
 	@mkdir -p $(dir $@)
 	@printf '  LD      %s\n' '$@'
 	@$(LD) $(LD_EMULATION) -T $(LDSCRIPT) --gc-sections --build-id=none -Map=$(KERNEL_MAP) -o $@ $(core-builtins)

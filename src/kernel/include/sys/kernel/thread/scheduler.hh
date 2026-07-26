@@ -21,6 +21,7 @@
 namespace sys::kernel::thread
 {
     inline constexpr u32 user_thread_count = 10U;
+    inline constexpr u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
     inline constexpr u32 maximum_cpu_count = 4U;
     inline thread user_threads[user_thread_count]{};
     inline task::task user_tasks[user_thread_count]{};
@@ -45,7 +46,7 @@ namespace sys::kernel::thread
             if (result != error_t::success) return result;
         }
 
-        for (u32 id = 0U; id < user_thread_count; ++id) {
+        for (u32 id = 0U; id < active_user_thread_count; ++id) {
             task::initialize(user_tasks[id], static_cast<space_id_t>(id));
             error_t result = object::register_object(
                 user_tasks[id].object, static_cast<object_id_t>(16U + id),
@@ -54,8 +55,8 @@ namespace sys::kernel::thread
 
             initialize_user(user_threads[id], static_cast<thread_id_t>(id),
                             static_cast<cpu_id_t>(id % maximum_cpu_count),
-                            static_cast<word_t>(id),
-                            static_cast<word_t>(initial_fuzz_seed(id)));
+                            CONFIG_ROOT_ONLY_BOOT ? 0U : static_cast<word_t>(id),
+                            CONFIG_ROOT_ONLY_BOOT ? 0U : static_cast<word_t>(initial_fuzz_seed(id)));
             user_threads[id].owner = &user_tasks[id];
             user_tasks[id].fault_endpoint = 10U;
             result = object::register_object(
@@ -146,6 +147,7 @@ namespace sys::kernel::thread
             object::reference(profile::root_notification.object),
             {static_cast<u32>(capability::right_t::read)
              | static_cast<u32>(capability::right_t::write)
+             | static_cast<u32>(capability::right_t::grant)
              | static_cast<u32>(capability::right_t::control)});
         if (root_result != error_t::success) return root_result;
         root_result = capability::install(
@@ -169,7 +171,7 @@ namespace sys::kernel::thread
         }
 
         for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
-            current_user_thread[cpu] = cpu;
+            current_user_thread[cpu] = CONFIG_ROOT_ONLY_BOOT ? 0U : cpu;
             user_execution_active[cpu] = false;
             user_cpu_idle[cpu] = false;
             per_cpu_switches[cpu] = 0U;
@@ -191,7 +193,7 @@ namespace sys::kernel::thread
         if (result != error_t::success) return result;
 
         result = memory::map(user_threads[0].address_space, memory::frames[0],
-                             0x10002000ULL,
+                             CONFIG_ROOT_ONLY_BOOT ? 0x20002000ULL : 0x10002000ULL,
                              static_cast<memory::permission>(
                                  static_cast<u8>(memory::permission::read)
                                  | static_cast<u8>(memory::permission::write)));
@@ -211,7 +213,7 @@ namespace sys::kernel::thread
     {
         thread_id_t assigned[3]{};
         u32 count = 0U;
-        for (u32 index = 0U; index < user_thread_count; ++index) {
+        for (u32 index = 0U; index < active_user_thread_count; ++index) {
             if (user_threads[index].pinned_cpu != cpu) continue;
             if (count < 3U) assigned[count] = user_threads[index].id;
             ++count;
@@ -245,7 +247,7 @@ namespace sys::kernel::thread
 
     inline void log_pinning_table(u32 online_cpu_count) noexcept
     {
-        static_assert(((user_thread_count + maximum_cpu_count - 1U)
+        static_assert(((active_user_thread_count + maximum_cpu_count - 1U)
                        / maximum_cpu_count) <= 3U);
         pr_info("user scheduler pinning table:\n");
         const u32 count = online_cpu_count < maximum_cpu_count
@@ -290,8 +292,8 @@ namespace sys::kernel::thread
 
     [[nodiscard]] inline u32 next_runnable(cpu_id_t cpu, u32 after) noexcept
     {
-        for (u32 offset = 1U; offset <= user_thread_count; ++offset) {
-            const u32 candidate = (after + offset) % user_thread_count;
+        for (u32 offset = 1U; offset <= active_user_thread_count; ++offset) {
+            const u32 candidate = (after + offset) % active_user_thread_count;
             if (user_threads[candidate].pinned_cpu == cpu
                 && runnable(user_threads[candidate])) {
                 return candidate;
@@ -322,7 +324,7 @@ namespace sys::kernel::thread
         if (load_state(old) == state::running) store_state(old, state::ready);
 
         u32 candidate = id;
-        for (u32 attempts = 0U; attempts < user_thread_count; ++attempts) {
+        for (u32 attempts = 0U; attempts < active_user_thread_count; ++attempts) {
             thread& value = user_threads[candidate];
             if (value.pinned_cpu == cpu && runnable(value)
                 && validate_user_context(value)) {

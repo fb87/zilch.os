@@ -124,18 +124,23 @@ namespace sys::kernel
                 arch::cpu::halt();
             }
             pr_info("kernel profile=1.0 runtime-certification=enabled completion-api=enabled authority=verified memory=verified notification=verified\n");
-            pr_info("root bootstrap: task=0 bootinfo=v%u caps=%u pager_endpoint=%u mode=compatibility-fuzz\n",
+            pr_info("root bootstrap: task=0 bootinfo=v%u caps=%u pager_endpoint=%u mode=%s\n",
                     static_cast<unsigned int>(boot::root_bootinfo.version),
                     static_cast<unsigned int>(boot::root_bootinfo.capability_count),
-                    static_cast<unsigned int>(boot::root_bootinfo.root_fault_endpoint));
+                    static_cast<unsigned int>(boot::root_bootinfo.root_fault_endpoint),
+                    CONFIG_ROOT_ONLY_BOOT ? "root-only" : "compatibility-fuzz");
             pr_info("user authority: tasks=%u cspaces=%u endpoints=%u object-table=generation-checked\n",
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(thread::user_thread_count),
                     static_cast<unsigned int>(ipc::endpoint_count));
-            pr_info("user smp: address-spaces=%u threads=%u cpus=%u ipc=capability-call/reply_receive fault-ipc=enabled fuzz=deterministic\n",
-                    static_cast<unsigned int>(thread::user_thread_count),
-                    static_cast<unsigned int>(thread::user_thread_count),
-                    static_cast<unsigned int>(expected));
+            if constexpr (CONFIG_ROOT_ONLY_BOOT) {
+                pr_info("root-only boot: initial_tasks=1 initial_threads=1 image=init.elf\n");
+            } else {
+                pr_info("user smp: address-spaces=%u threads=%u cpus=%u ipc=capability-call/reply_receive fault-ipc=enabled fuzz=deterministic\n",
+                        static_cast<unsigned int>(thread::active_user_thread_count),
+                        static_cast<unsigned int>(thread::active_user_thread_count),
+                        static_cast<unsigned int>(expected));
+            }
         }
         if constexpr (arch::hypervisor::active) {
             pr_info("exceptions=EL1 hypervisor=EL2 gic=GICv3 timer=virtual@%uHz\n",
@@ -212,10 +217,15 @@ namespace sys::kernel
                 static_cast<unsigned int>(thread::user_thread_count));
 
         if constexpr (arch::space::user_available) {
-            thread::log_pinning_table(expected);
+            thread::log_pinning_table(CONFIG_ROOT_ONLY_BOOT ? 1U : expected);
             thread::launch_user_scheduler();
-            pr_info("user smp: cpu=0 entering server thread=0 seed=%llx\n",
-                    static_cast<unsigned long long>(thread::user_threads[0].fuzz_seed));
+            if constexpr (CONFIG_ROOT_ONLY_BOOT) {
+                pr_info("root-only boot: cpu=0 entering init.elf entry=%llx\n",
+                        static_cast<unsigned long long>(arch::space::entry()));
+            } else {
+                pr_info("user smp: cpu=0 entering server thread=0 seed=%llx\n",
+                        static_cast<unsigned long long>(thread::user_threads[0].fuzz_seed));
+            }
             thread::enter_first_user_thread();
         }
         arch::cpu::halt();

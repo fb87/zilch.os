@@ -1,3 +1,13 @@
+#if CONFIG_ROOT_ONLY_BOOT
+.section .user_text,"ax"
+.balign 4096
+.global sys_arm64_user_image_start
+sys_arm64_user_image_start:
+.incbin "out/build/arm64/qemu-arm64-virt/user/init.bin"
+.balign 4096
+.global sys_arm64_user_image_end
+sys_arm64_user_image_end:
+#else
 .section .user_text,"ax"
 .balign 4096
 .global sys_arm64_user_image_start
@@ -120,3 +130,5 @@ sys_arm64_user_image_start:
 .balign 4096
 .global sys_arm64_user_image_end
 sys_arm64_user_image_end:
+
+#endif

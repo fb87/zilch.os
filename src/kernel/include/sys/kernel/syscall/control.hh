@@ -6,6 +6,7 @@
 #include <sys/kernel/interrupt.hh>
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
+#include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduling/context.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
@@ -245,6 +246,32 @@ namespace sys::kernel::syscall
         }
         case abi::v1::control_operation::interrupt_ack:
             result = error_t::success;
+            break;
+        case abi::v1::control_operation::acceptance_report: {
+            if (current.owner == nullptr || !current.owner->root) {
+                result = error_t::denied;
+                break;
+            }
+            const char* name = "unknown";
+            switch (a1) {
+            case 1U: name = "root_only_boot"; break;
+            case 2U: name = "bootinfo_contract"; break;
+            case 3U: name = "capability_control"; break;
+            case 4U: name = "notification_control"; break;
+            default: break;
+            }
+            pr_info("[TEST] name=%s result=%s\n", name, a2 != 0U ? "PASS" : "FAIL");
+            result = a2 != 0U ? error_t::success : error_t::invalid_argument;
+            break;
+        }
+        case abi::v1::control_operation::acceptance_finalize:
+            if (current.owner == nullptr || !current.owner->root) {
+                result = error_t::denied;
+                break;
+            }
+            pr_info("[ACCEPTANCE] profile=1.0 boot=root-only result=%s failures=%u\n",
+                    a1 != 0U ? "PASS" : "FAIL", a1 != 0U ? 0U : 1U);
+            result = a1 != 0U ? error_t::success : error_t::invalid_argument;
             break;
         case abi::v1::control_operation::scheduling_configure: {
             thread::thread* target = nullptr;
