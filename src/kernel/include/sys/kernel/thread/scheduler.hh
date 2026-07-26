@@ -36,6 +36,55 @@ namespace sys::kernel::thread
         }
     }
 
+    inline void log_cpu_assignment(cpu_id_t cpu) noexcept
+    {
+        thread_id_t assigned[3]{};
+        u32 count = 0U;
+        for (u32 index = 0U; index < user_thread_count; ++index) {
+            if (user_threads[index].pinned_cpu != cpu) continue;
+            if (count < 3U) assigned[count] = user_threads[index].id;
+            ++count;
+        }
+
+        switch (count) {
+        case 0U:
+            pr_info("user scheduler: cpu=%u threads=[]\n",
+                    static_cast<unsigned int>(cpu));
+            break;
+        case 1U:
+            pr_info("user scheduler: cpu=%u threads=[%llu]\n",
+                    static_cast<unsigned int>(cpu),
+                    static_cast<unsigned long long>(assigned[0]));
+            break;
+        case 2U:
+            pr_info("user scheduler: cpu=%u threads=[%llu,%llu]\n",
+                    static_cast<unsigned int>(cpu),
+                    static_cast<unsigned long long>(assigned[0]),
+                    static_cast<unsigned long long>(assigned[1]));
+            break;
+        default:
+            pr_info("user scheduler: cpu=%u threads=[%llu,%llu,%llu]\n",
+                    static_cast<unsigned int>(cpu),
+                    static_cast<unsigned long long>(assigned[0]),
+                    static_cast<unsigned long long>(assigned[1]),
+                    static_cast<unsigned long long>(assigned[2]));
+            break;
+        }
+    }
+
+    inline void log_pinning_table(u32 online_cpu_count) noexcept
+    {
+        static_assert(((user_thread_count + maximum_cpu_count - 1U)
+                       / maximum_cpu_count) <= 3U);
+        pr_info("user scheduler pinning table:\n");
+        const u32 count = online_cpu_count < maximum_cpu_count
+                            ? online_cpu_count
+                            : maximum_cpu_count;
+        for (u32 cpu = 0U; cpu < count; ++cpu) {
+            log_cpu_assignment(static_cast<cpu_id_t>(cpu));
+        }
+    }
+
     inline void launch_user_scheduler() noexcept
     {
         __atomic_store_n(&user_scheduler_ready, true, __ATOMIC_RELEASE);

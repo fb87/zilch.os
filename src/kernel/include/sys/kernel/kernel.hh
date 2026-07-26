@@ -53,8 +53,6 @@ namespace sys::kernel
         arch::irq::enable();
         if constexpr (arch::space::user_available) {
             thread::wait_until_ready();
-            pr_info("user scheduler: cpu=%u entering pinned user threads\n",
-                    static_cast<unsigned int>(arch::cpu::current_id()));
             thread::enter_first_user_thread();
         }
         arch::cpu::halt();
@@ -194,6 +192,7 @@ namespace sys::kernel
                 static_cast<unsigned int>(thread::user_thread_count));
 
         if constexpr (arch::space::user_available) {
+            thread::log_pinning_table(expected);
             thread::launch_user_scheduler();
             pr_info("user smp: cpu=0 entering server thread=0 seed=%llx\n",
                     static_cast<unsigned long long>(thread::user_threads[0].fuzz_seed));

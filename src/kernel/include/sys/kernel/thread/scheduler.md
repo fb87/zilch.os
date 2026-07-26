@@ -44,3 +44,18 @@ IRQs interrupting syscall handling, fault containment, logging, endpoint code,
 or any other EL1 path return to the interrupted kernel instruction unchanged.
 This prevents a nested timer or reschedule SGI from converting an arbitrary EL1
 exception frame into an EL0 return frame.
+
+## Boot diagnostics
+
+Before releasing the user-scheduler launch gate, the boot CPU prints the
+assignment derived from every thread's `pinned_cpu` field. The table is therefore
+the scheduler's actual configuration rather than a separately maintained
+example. With ten threads and four CPUs, the expected output is:
+
+```text
+[INFO] user scheduler pinning table:
+[INFO] user scheduler: cpu=0 threads=[0,4,8]
+[INFO] user scheduler: cpu=1 threads=[1,5,9]
+[INFO] user scheduler: cpu=2 threads=[2,6]
+[INFO] user scheduler: cpu=3 threads=[3,7]
+```

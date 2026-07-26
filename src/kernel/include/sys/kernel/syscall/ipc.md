@@ -33,3 +33,12 @@ The deterministic test harness uses `x6 == fuzz_magic` only for a single
 validation call. The kernel clears the saved `x6` before returning, and normal
 user IPC stubs clear `x6` before `svc #0`. This prevents a fuzz discriminator
 from leaking into the next ordinary endpoint call.
+
+## SMP progress reporting
+
+The deterministic fuzz progress report is a consolidated snapshot of every
+online CPU rather than the CPU that happened to cross a global operation
+threshold. Each snapshot reports per-CPU fuzz operations, user-context
+switches, timer ticks, current pinned thread, idle state, and whether all three
+progress counters advanced since the preceding snapshot. This makes stalled or
+missing CPUs explicit without increasing the report frequency.
