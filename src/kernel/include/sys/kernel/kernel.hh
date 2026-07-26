@@ -17,7 +17,7 @@ namespace sys::kernel
 {
     inline constexpr const char* name = "zilch";
     inline constexpr u16 version_major = 0U;
-    inline constexpr u16 version_minor = 5U;
+    inline constexpr u16 version_minor = 6U;
     inline constexpr u16 version_patch = 0U;
 
     inline void verify_contracts() noexcept

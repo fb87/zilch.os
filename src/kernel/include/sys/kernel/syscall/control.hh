@@ -10,6 +10,8 @@
 #include <sys/kernel/scheduling/context.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
+#include <sys/kernel/thread/scheduler.hh>
+#include <sys/platform/interrupt.hh>
 #include <sys/types.hh>
 
 namespace sys::kernel::syscall
@@ -137,6 +139,7 @@ namespace sys::kernel::syscall
         const word_t a2 = arch::syscall::argument(frame, 2U);
         const word_t a3 = arch::syscall::argument(frame, 3U);
         const word_t a4 = arch::syscall::argument(frame, 4U);
+        const word_t a5 = arch::syscall::argument(frame, 5U);
         error_t result = error_t::unsupported;
 
         switch (operation) {
@@ -164,6 +167,8 @@ namespace sys::kernel::syscall
                                     target);
             if (result == error_t::success) {
                 thread::store_state(*target, thread::state::suspended);
+                platform::interrupt::send_ipi_all_others(
+                    platform::interrupt::reschedule_ipi);
             }
             break;
         }
@@ -258,6 +263,9 @@ namespace sys::kernel::syscall
             case 2U: name = "bootinfo_contract"; break;
             case 3U: name = "capability_control"; break;
             case 4U: name = "notification_control"; break;
+            case 5U: name = "root_created_objects"; break;
+            case 6U: name = "root_created_smp_fuzz"; break;
+            case 7U: name = "object_destroy_reuse"; break;
             default: break;
             }
             pr_info("[TEST] name=%s result=%s\n", name, a2 != 0U ? "PASS" : "FAIL");
@@ -283,6 +291,69 @@ namespace sys::kernel::syscall
                 target->scheduling_context.period_ticks = a4;
             }
             break;
+        }
+        case abi::v1::control_operation::child_create:
+            if (current.owner == nullptr || !current.owner->root) {
+                result = error_t::denied;
+                break;
+            }
+            result = thread::create_user_bundle(
+                *current.owner, static_cast<cpu_id_t>(a1), a2,
+                static_cast<capability_id_t>(a3),
+                static_cast<capability_id_t>(a4),
+                static_cast<capability_id_t>(a5));
+            if (result == error_t::success) {
+                platform::interrupt::send_ipi_all_others(
+                    platform::interrupt::reschedule_ipi);
+            }
+            break;
+        case abi::v1::control_operation::child_destroy:
+            if (current.owner == nullptr || !current.owner->root) {
+                result = error_t::denied;
+                break;
+            }
+            result = thread::destroy_user_bundle(
+                *current.owner, static_cast<capability_id_t>(a1),
+                static_cast<capability_id_t>(a2),
+                static_cast<capability_id_t>(a3));
+            break;
+        case abi::v1::control_operation::acceptance_worker_tick: {
+            const cpu_id_t cpu = arch::cpu::current_id();
+            if (cpu >= thread::maximum_cpu_count || current.owner == nullptr
+                || current.owner->root) {
+                result = error_t::denied;
+                break;
+            }
+            const u64 operations = __atomic_add_fetch(
+                &thread::certification_operations[cpu], 1U, __ATOMIC_RELAXED);
+            if (operations == 4096U) {
+                pr_info("root fuzz cpu=%u operations=%llu failures=%llu status=PASS\n",
+                        static_cast<unsigned int>(cpu),
+                        static_cast<unsigned long long>(operations),
+                        static_cast<unsigned long long>(
+                            __atomic_load_n(&thread::certification_failures[cpu],
+                                            __ATOMIC_ACQUIRE)));
+            }
+            if (a1 != 0U) {
+                __atomic_fetch_add(&thread::certification_failures[cpu], a1,
+                                   __ATOMIC_RELAXED);
+            }
+            result = error_t::success;
+            break;
+        }
+        case abi::v1::control_operation::acceptance_query: {
+            if (current.owner == nullptr || !current.owner->root
+                || a1 >= thread::maximum_cpu_count) {
+                result = error_t::denied;
+                break;
+            }
+            const u64 value = a2 == 0U
+                ? __atomic_load_n(&thread::certification_operations[a1],
+                                  __ATOMIC_ACQUIRE)
+                : __atomic_load_n(&thread::certification_failures[a1],
+                                  __ATOMIC_ACQUIRE);
+            arch::syscall::set_result(frame, static_cast<word_t>(value));
+            return true;
         }
         }
         set_control_result(frame, result);

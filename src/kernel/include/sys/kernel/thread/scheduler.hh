@@ -14,14 +14,13 @@
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/profile.hh>
 #include <sys/kernel/task/task.hh>
-#include <sys/kernel/syscall/control.hh>
 #include <sys/kernel/thread/thread.hh>
 #include <sys/types.hh>
 
 namespace sys::kernel::thread
 {
     inline constexpr u32 user_thread_count = 10U;
-    inline constexpr u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
+    inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
     inline constexpr u32 maximum_cpu_count = 4U;
     inline thread user_threads[user_thread_count]{};
     inline task::task user_tasks[user_thread_count]{};
@@ -180,6 +179,146 @@ namespace sys::kernel::thread
     }
 
 
+    inline volatile u64 certification_operations[maximum_cpu_count]{};
+    inline volatile u64 certification_failures[maximum_cpu_count]{};
+
+    [[nodiscard]] inline error_t create_user_bundle(
+        task::task& root, cpu_id_t cpu, word_t role,
+        capability_id_t thread_selector, capability_id_t task_selector,
+        capability_id_t space_selector) noexcept
+    {
+        if (!root.root || cpu == 0U || cpu >= maximum_cpu_count
+            || thread_selector >= capability::cspace_slot_count
+            || task_selector >= capability::cspace_slot_count
+            || space_selector >= capability::cspace_slot_count) {
+            return error_t::invalid_argument;
+        }
+
+        const u32 id = cpu;
+        if (id >= user_thread_count
+            || load_state(user_threads[id]) != state::inactive) {
+            return error_t::busy;
+        }
+
+        task::initialize(user_tasks[id], static_cast<space_id_t>(id));
+        error_t result = object::register_object(
+            user_tasks[id].object, static_cast<object_id_t>(16U + id),
+            object::type_t::task);
+        if (result != error_t::success) return result;
+
+        initialize_user(user_threads[id], static_cast<thread_id_t>(id), cpu,
+                        role, initial_fuzz_seed(id));
+        user_threads[id].owner = &user_tasks[id];
+        user_tasks[id].fault_endpoint = 10U;
+        result = object::register_object(
+            user_threads[id].object, static_cast<object_id_t>(id),
+            object::type_t::thread);
+        if (result != error_t::success) return result;
+        result = object::register_object(
+            user_threads[id].address_space.object,
+            static_cast<object_id_t>(60U + id),
+            object::type_t::address_space);
+        if (result != error_t::success) return result;
+        result = object::register_object(
+            user_threads[id].scheduling_context.object,
+            static_cast<object_id_t>(50U + id),
+            object::type_t::scheduling_context);
+        if (result != error_t::success) return result;
+
+        const capability::rights_t control_rights{
+            static_cast<u32>(capability::right_t::read)
+            | static_cast<u32>(capability::right_t::write)
+            | static_cast<u32>(capability::right_t::grant)
+            | static_cast<u32>(capability::right_t::control)};
+        result = capability::install(root.cspace, thread_selector,
+                                     object::reference(user_threads[id].object),
+                                     control_rights);
+        if (result != error_t::success) return result;
+        result = capability::install(root.cspace, task_selector,
+                                     object::reference(user_tasks[id].object),
+                                     control_rights);
+        if (result != error_t::success) return result;
+        result = capability::install(
+            root.cspace, space_selector,
+            object::reference(user_threads[id].address_space.object),
+            control_rights);
+        if (result != error_t::success) return result;
+
+        result = capability::install(
+            user_tasks[id].cspace, 1U, object::reference(user_tasks[id].object),
+            control_rights);
+        if (result != error_t::success) return result;
+        result = capability::install(
+            user_tasks[id].cspace, 2U, object::reference(user_threads[id].object),
+            control_rights);
+        if (result != error_t::success) return result;
+        result = capability::install(
+            user_tasks[id].cspace, 3U,
+            object::reference(user_threads[id].address_space.object),
+            control_rights);
+        if (result != error_t::success) return result;
+
+        if (id >= active_user_thread_count) {
+            __atomic_store_n(&active_user_thread_count, id + 1U,
+                             __ATOMIC_RELEASE);
+        }
+        certification_operations[cpu] = 0U;
+        certification_failures[cpu] = 0U;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t destroy_user_bundle(
+        task::task& root, capability_id_t thread_selector,
+        capability_id_t task_selector, capability_id_t space_selector) noexcept
+    {
+        object::header_t* header = nullptr;
+        error_t result = capability::lookup(
+            root.cspace, thread_selector, object::type_t::thread,
+            capability::right_t::control, header);
+        if (result != error_t::success) return result;
+        auto& target = *reinterpret_cast<thread*>(header);
+        if (target.id == 0U || target.id >= user_thread_count)
+            return error_t::denied;
+        if (load_state(target) == state::running) return error_t::busy;
+
+        store_state(target, state::terminated);
+        capability::revoke_in(root.cspace, object::reference(target.object));
+        capability::revoke_in(root.cspace, object::reference(target.owner->object));
+        capability::revoke_in(
+            root.cspace, object::reference(target.address_space.object));
+        (void)capability::delete_capability(root.cspace, thread_selector);
+        (void)capability::delete_capability(root.cspace, task_selector);
+        (void)capability::delete_capability(root.cspace, space_selector);
+
+        (void)object::unregister_object(
+            object::reference(target.scheduling_context.object));
+        (void)object::unregister_object(
+            object::reference(target.address_space.object));
+        task::task* owner = target.owner;
+        (void)object::unregister_object(object::reference(target.object));
+        (void)object::unregister_object(object::reference(owner->object));
+        target.owner = nullptr;
+        target.object.id = 0U;
+        target.object.generation = 0U;
+        target.object.type = object::type_t::none;
+        target.address_space.object.id = 0U;
+        target.address_space.object.generation = 0U;
+        target.address_space.object.type = object::type_t::none;
+        target.scheduling_context.object.id = 0U;
+        target.scheduling_context.object.generation = 0U;
+        target.scheduling_context.object.type = object::type_t::none;
+        store_state(target, state::inactive);
+        capability::initialize(owner->cspace);
+        owner->object.id = 0U;
+        owner->object.generation = 0U;
+        owner->object.type = object::type_t::none;
+        owner->address_space_id = 0U;
+        owner->fault_endpoint = 0U;
+        owner->root = false;
+        return error_t::success;
+    }
+
+
     [[nodiscard]] inline error_t validate_kernel_profile() noexcept
     {
         task::task& root = user_tasks[0];
@@ -247,7 +386,7 @@ namespace sys::kernel::thread
 
     inline void log_pinning_table(u32 online_cpu_count) noexcept
     {
-        static_assert(((active_user_thread_count + maximum_cpu_count - 1U)
+        static_assert(((user_thread_count + maximum_cpu_count - 1U)
                        / maximum_cpu_count) <= 3U);
         pr_info("user scheduler pinning table:\n");
         const u32 count = online_cpu_count < maximum_cpu_count
@@ -364,9 +503,16 @@ namespace sys::kernel::thread
     [[nodiscard]] inline bool is_kernel_idle_frame(
         const arch::thread::context& frame) noexcept
     {
-        return frame.instruction_pointer
-                   == reinterpret_cast<uintptr_t>(&sys_kernel_user_idle)
-            && (frame.status & 0xfU) == 0x5U;
+        /*
+         * An IRQ interrupts at an instruction inside sys_kernel_user_idle(),
+         * normally the architecture wait-for-event instruction, rather than
+         * at the function entry address.  The per-CPU user_cpu_idle flag is
+         * published only when the scheduler deliberately enters this EL1h
+         * idle context and is cleared before installing an EL0 context.
+         * Combined with the lower-EL IRQ vector check in arch.cc, EL1h is the
+         * correct architectural provenance test here.
+         */
+        return (frame.status & 0xfU) == 0x5U;
     }
 
     [[nodiscard]] inline bool resume_user_from_idle(
@@ -533,10 +679,25 @@ namespace sys::kernel::thread
     {
         const cpu_id_t cpu = arch::cpu::current_id();
         arch::irq::disable();
-        u32 first = cpu;
-        if (!runnable(user_threads[first])) first = next_runnable(cpu, first);
-        current_user_thread[cpu] = first;
         user_execution_active[cpu] = true;
+
+        u32 first = cpu < active_user_thread_count ? cpu : 0U;
+        if (first >= active_user_thread_count
+            || user_threads[first].pinned_cpu != cpu
+            || !runnable(user_threads[first])) {
+            first = next_runnable(cpu, first);
+        }
+        if (first >= active_user_thread_count
+            || user_threads[first].pinned_cpu != cpu
+            || !runnable(user_threads[first])) {
+            current_user_thread[cpu] = 0U;
+            user_cpu_idle[cpu] = true;
+            arch::irq::enable();
+            sys_kernel_user_idle();
+        }
+
+        current_user_thread[cpu] = first;
+        user_cpu_idle[cpu] = false;
         store_state(user_threads[first], state::running);
         consume_pending(user_threads[first]);
         user_threads[first].address_space.activate();

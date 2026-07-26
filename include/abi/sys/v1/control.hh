@@ -22,5 +22,9 @@ namespace sys::abi::v1
         scheduling_configure = 13U,
         acceptance_report = 14U,
         acceptance_finalize = 15U,
+        child_create = 16U,
+        child_destroy = 17U,
+        acceptance_worker_tick = 18U,
+        acceptance_query = 19U,
     };
 }

@@ -35,7 +35,7 @@ An IRQ may replace its exception frame with a user context only when all of the
 following are true:
 
 - the ARM64 vector is current-EL using SPx IRQ (vector 5);
-- the saved `ELR_EL1` equals `sys_kernel_user_idle`;
+- the interrupt used the EL1h IRQ vector and the per-CPU scheduler state says the CPU is in the dedicated user-idle context;
 - the saved `SPSR_EL1` selects EL1h;
 - the per-CPU scheduler is marked idle; and
 - a pinned user thread is runnable.
