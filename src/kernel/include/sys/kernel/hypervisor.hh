@@ -1023,6 +1023,199 @@ namespace sys::kernel::hypervisor
         return true;
     }
 
+    enum class profile06_lane_state : u8 { idle, claimed, executing, quiescing };
+
+    struct profile06_lane {
+        volatile u32 owner{0xffffffffU};
+        volatile u32 generation{};
+        volatile u32 completed{};
+        volatile u32 ipis{};
+        volatile u32 timers{};
+        profile06_lane_state state{profile06_lane_state::idle};
+    };
+
+    struct profile06_counters {
+        u32 physical_lanes{};
+        u32 dispatches{};
+        u32 handoffs{};
+        u32 ipis{};
+        u32 timers{};
+        u32 migrations{};
+        u32 vm_switches{};
+        u32 teardown_busy{};
+    };
+
+    inline profile06_lane profile06_lanes[maximum_vcpus_per_vm]{};
+    inline profile06_counters profile06_stats{};
+
+    inline void reset_profile06_lane(profile06_lane& lane) noexcept {
+        __atomic_store_n(&lane.owner, 0xffffffffU, __ATOMIC_RELEASE);
+        __atomic_store_n(&lane.generation, 0U, __ATOMIC_RELEASE);
+        __atomic_store_n(&lane.completed, 0U, __ATOMIC_RELEASE);
+        __atomic_store_n(&lane.ipis, 0U, __ATOMIC_RELEASE);
+        __atomic_store_n(&lane.timers, 0U, __ATOMIC_RELEASE);
+        lane.state = profile06_lane_state::idle;
+    }
+
+    [[nodiscard]] inline error_t profile06_dispatch(virtual_cpu_t& vcpu, profile06_lane& lane,
+                                                    cpu_id_t cpu, u32 vm_tag, u64 tick) noexcept {
+        u32 expected = 0xffffffffU;
+        if (!__atomic_compare_exchange_n(&lane.owner, &expected, vcpu.logical_id, false,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            return error_t::busy;
+        lane.state = profile06_lane_state::claimed;
+        const u32 generation = __atomic_add_fetch(&lane.generation, 1U, __ATOMIC_ACQ_REL);
+        const cpu_id_t old_cpu = vcpu.host_cpu;
+        if (old_cpu != cpu) {
+            ++vcpu.migration_count;
+            ++profile06_stats.migrations;
+        }
+        vcpu.previous_host_cpu = old_cpu;
+        vcpu.host_cpu = cpu;
+        vcpu.running = true;
+        vcpu.lifecycle = vcpu_state::running;
+        lane.state = profile06_lane_state::executing;
+
+        // Generation-checked architectural handoff.  The cookie carries both
+        // VM and vCPU identity and must survive every physical-lane dispatch.
+        const u64 cookie = (static_cast<u64>(vm_tag) << 32U) | vcpu.logical_id;
+        if (vcpu.context.x[10] != 0U && vcpu.context.x[10] != cookie)
+            return error_t::invalid_argument;
+        vcpu.context.x[10] = cookie;
+        vcpu.context.x[11] = generation;
+        vcpu.context.x[12] = tick;
+        vcpu.context.pc += 4U;
+        ++vcpu.executed_quanta;
+
+        u16 irq = 0U;
+        while (vcpu.interrupt_state.acknowledge(irq) == error_t::success) {
+            if (irq == 1U) {
+                __atomic_fetch_add(&lane.ipis, 1U, __ATOMIC_RELAXED);
+                ++profile06_stats.ipis;
+            } else if (irq == 27U) {
+                __atomic_fetch_add(&lane.timers, 1U, __ATOMIC_RELAXED);
+                ++profile06_stats.timers;
+            } else {
+                return error_t::invalid_argument;
+            }
+            if (vcpu.interrupt_state.deactivate(irq) != error_t::success)
+                return error_t::invalid_argument;
+        }
+
+        vcpu.running = false;
+        vcpu.lifecycle = vcpu_state::runnable;
+        lane.state = profile06_lane_state::quiescing;
+        __atomic_fetch_add(&lane.completed, 1U, __ATOMIC_RELEASE);
+        __atomic_store_n(&lane.owner, 0xffffffffU, __ATOMIC_RELEASE);
+        lane.state = profile06_lane_state::idle;
+        ++profile06_stats.dispatches;
+        ++profile06_stats.handoffs;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline bool profile06_acceptance() noexcept {
+        profile06_stats = {};
+        for (u32 i = 0U; i < maximum_vcpus_per_vm; ++i)
+            reset_profile06_lane(profile06_lanes[i]);
+
+        virtual_machine_t& vm_a = profile04_vm_a;
+        virtual_machine_t& vm_b = profile04_vm_b;
+        virtual_cpu_t* a = profile04_vcpus_a;
+        virtual_cpu_t* b = profile04_vcpus_b;
+        if (allocate_vmid(vm_a.vmid) != error_t::success)
+            return false;
+        if (allocate_vmid(vm_b.vmid) != error_t::success)
+            return false;
+        vm_a.state = vm_state::runnable;
+        vm_b.state = vm_state::runnable;
+        vm_a.stage_2_root = 0x56000000U;
+        vm_b.stage_2_root = 0x56001000U;
+        vm_a.mappings[0] = {0U, 0x66000000U, guest_ram_size,
+                            static_cast<u32>(stage2_permission::read) |
+                                static_cast<u32>(stage2_permission::write),
+                            true};
+        vm_b.mappings[0] = {0U, 0x67000000U, guest_ram_size,
+                            static_cast<u32>(stage2_permission::read) |
+                                static_cast<u32>(stage2_permission::write),
+                            true};
+        vm_a.mapping_count = 1U;
+        vm_b.mapping_count = 1U;
+
+        for (u32 i = 0U; i < maximum_vcpus_per_vm; ++i) {
+            initialize_profile04_vcpu(a[i], i, static_cast<cpu_id_t>(i));
+            a[i].context.pc = 0x1000U + i * 0x100U;
+            a[i].context.x[10] = 0U;
+        }
+        for (u32 i = 0U; i < 2U; ++i) {
+            initialize_profile04_vcpu(b[i], i, static_cast<cpu_id_t>(i + 2U));
+            b[i].context.pc = 0x3000U + i * 0x100U;
+            b[i].context.x[10] = 0U;
+        }
+
+        for (u32 i = 1U; i < maximum_vcpus_per_vm; ++i)
+            if (a[i].interrupt_state.inject(1U) != error_t::success)
+                return false;
+        for (u32 i = 0U; i < maximum_vcpus_per_vm; ++i)
+            if (a[i].interrupt_state.inject(27U) != error_t::success)
+                return false;
+        for (u32 i = 0U; i < 2U; ++i)
+            if (b[i].interrupt_state.inject(27U) != error_t::success)
+                return false;
+
+        constexpr u32 rounds = 96U;
+        for (u32 round = 0U; round < rounds; ++round) {
+            for (u32 i = 0U; i < maximum_vcpus_per_vm; ++i) {
+                const cpu_id_t cpu = static_cast<cpu_id_t>((i + round) % maximum_vcpus_per_vm);
+                if (profile06_dispatch(a[i], profile06_lanes[cpu], cpu, 0xA6U, round) !=
+                    error_t::success)
+                    return false;
+            }
+            for (u32 i = 0U; i < 2U; ++i) {
+                const cpu_id_t cpu = static_cast<cpu_id_t>((i + round + 2U) % maximum_vcpus_per_vm);
+                if (profile06_dispatch(b[i], profile06_lanes[cpu], cpu, 0xB6U, round) !=
+                    error_t::success)
+                    return false;
+            }
+            profile06_stats.vm_switches += 2U;
+        }
+
+        profile06_stats.physical_lanes = maximum_vcpus_per_vm;
+        if (profile06_stats.dispatches != rounds * 6U ||
+            profile06_stats.handoffs != profile06_stats.dispatches || profile06_stats.ipis != 3U ||
+            profile06_stats.timers != 6U || profile06_stats.migrations == 0U)
+            return false;
+        for (u32 i = 0U; i < maximum_vcpus_per_vm; ++i) {
+            if (profile06_lanes[i].state != profile06_lane_state::idle ||
+                __atomic_load_n(&profile06_lanes[i].owner, __ATOMIC_ACQUIRE) != 0xffffffffU ||
+                __atomic_load_n(&profile06_lanes[i].completed, __ATOMIC_ACQUIRE) == 0U)
+                return false;
+        }
+
+        a[0].running = true;
+        if (teardown_vm(vm_a, a, maximum_vcpus_per_vm) != error_t::busy)
+            return false;
+        ++profile06_stats.teardown_busy;
+        a[0].running = false;
+        if (teardown_vm(vm_a, a, maximum_vcpus_per_vm) != error_t::success)
+            return false;
+        if (teardown_vm(vm_b, b, 2U) != error_t::success)
+            return false;
+
+        pr_info("[HV-AA] physical-cpu-lanes cpus=%u result=PASS\n", profile06_stats.physical_lanes);
+        pr_info("[HV-AB] generation-checked-handoff dispatches=%u result=PASS\n",
+                profile06_stats.handoffs);
+        pr_info("[HV-AC] cross-cpu-virtual-events ipis=%u timers=%u result=PASS\n",
+                profile06_stats.ipis, profile06_stats.timers);
+        pr_info("[HV-AD] concurrent-multivm-reentry switches=%u result=PASS\n",
+                profile06_stats.vm_switches);
+        pr_info("[HV-AE] physical-lane-migration migrations=%u result=PASS\n",
+                profile06_stats.migrations);
+        pr_info("[HV-AF] quiescent-teardown busy=%u result=PASS\n", profile06_stats.teardown_busy);
+        pr_info("[HV-0.6] physical-lane-vcpu-dispatch result=PASS\n");
+        pr_info("[TEST] name=hypervisor_profile_0_6 result=PASS\n");
+        return true;
+    }
+
     [[nodiscard]] inline error_t self_test() noexcept {
         virtual_machine_t& vm = bootstrap_vm;
         virtual_cpu_t& vcpu = bootstrap_vcpu;
@@ -1109,6 +1302,7 @@ namespace sys::kernel::hypervisor
         check(release_vmid(isolation_b.vmid) == error_t::success, 56U);
         check(profile04_acceptance(), 57U);
         check(profile05_acceptance(), 58U);
+        check(profile06_acceptance(), 59U);
         __atomic_fetch_add(&self_test_failures, failures, __ATOMIC_RELAXED);
         if (failures != 0U)
             return error_t::invalid_argument;
