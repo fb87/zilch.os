@@ -21,3 +21,11 @@
 - Added an embedded guest EL1 payload with console, time query, and shutdown HVCs.
 - Added structured unexpected-exit and guest-register diagnostics.
 - Fixed the parallel build dependency between the embedded root payload and the ARM64 boot object.
+
+## Profile 0.2 follow-up
+
+- Added guest stage-1 MMU setup and identity mappings.
+- Added guest EL1 vectors and lower-EL SVC handling.
+- Added WFI exits and HCR_EL2.VI virtual IRQ injection.
+- Added guest EL0 execution and report-mask acceptance.
+- Split stage-2 guest RAM into RX code and RW/NX data regions.

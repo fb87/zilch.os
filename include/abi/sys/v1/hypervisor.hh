@@ -35,5 +35,7 @@ namespace sys::abi::v1
         time_query = 2U,
         irq_acknowledge = 3U,
         shutdown = 4U,
+        report = 5U,
+        diagnostic = 6U,
     };
 }

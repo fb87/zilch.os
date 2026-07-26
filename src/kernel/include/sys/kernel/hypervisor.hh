@@ -273,8 +273,13 @@ namespace sys::kernel::hypervisor
         ++vm.active_vcpus;
         vcpu.host_cpu = arch::cpu::current_id();
         ++vcpu.run_generation;
+        const bool pending_irq = __atomic_load_n(&vcpu.virtual_irq_pending,
+                                                   __ATOMIC_ACQUIRE);
         const error_t result = arch::hypervisor::run_guest(vm.vmid, vm.stage_2_root,
-                                                            vcpu.context, exit);
+                                                            vcpu.context, exit,
+                                                            pending_irq);
+        if (pending_irq && result == error_t::success)
+            __atomic_store_n(&vcpu.virtual_irq_pending, false, __ATOMIC_RELEASE);
         vcpu.last_exit = exit;
         --vm.active_vcpus;
         __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
@@ -331,26 +336,42 @@ namespace sys::kernel::hypervisor
         constexpr u64 inner_shareable = 0x3ULL << 8U;
         constexpr u64 access_flag = 1ULL << 10U;
         constexpr u64 stage2_read_only = 1ULL << 6U;
+        constexpr u64 stage2_read_write = 3ULL << 6U;
+        constexpr u64 stage2_execute_never = 1ULL << 54U;
+        constexpr u32 executable_pages = 4U;
         for (u32 page = 0U; page < guest_ram_pages; ++page) {
             const paddr_t physical = ram + static_cast<paddr_t>(page) * page_size;
+            const bool executable = page < executable_pages;
             stage2_l3[page] = (physical & 0x0000fffffffff000ULL)
                 | 0x3ULL | normal_memory | inner_shareable | access_flag
-                | stage2_read_only;
+                | (executable ? stage2_read_only
+                              : stage2_read_write | stage2_execute_never);
         }
         bootstrap_vm.stage_2_root = reinterpret_cast<paddr_t>(&stage2_l1[0]);
         const error_t reset_result = reset(bootstrap_vm);
         if (reset_result != error_t::success) return reset_result;
-        const error_t map_result = stage2_map(
-            bootstrap_vm, 0U, ram, guest_ram_size,
+        const u64 executable_size = static_cast<u64>(executable_pages) * page_size;
+        const error_t code_map_result = stage2_map(
+            bootstrap_vm, 0U, ram, executable_size,
             static_cast<u32>(stage2_permission::read)
                 | static_cast<u32>(stage2_permission::execute));
-        if (map_result != error_t::success) return map_result;
+        if (code_map_result != error_t::success) return code_map_result;
+        const error_t data_map_result = stage2_map(
+            bootstrap_vm, executable_size, ram + executable_size,
+            guest_ram_size - executable_size,
+            static_cast<u32>(stage2_permission::read)
+                | static_cast<u32>(stage2_permission::write));
+        if (data_map_result != error_t::success) return data_map_result;
         for (u64 offset = 0U; offset < image_size; offset += 64U) {
             const paddr_t address = ram + offset;
             __asm__ volatile("dc cvau, %0" :: "r"(address) : "memory");
         }
         __asm__ volatile("dsb ish; ic iallu; dsb ish; isb" ::: "memory");
-        const error_t configure_result = configure_vcpu(bootstrap_vcpu, 0U, 0x5U, 0xf000U);
+        // Enter guest EL1h with D/A/I/F masked until the guest installs VBAR_EL1.
+        // A pending host PPI must not reach the guest reset trampoline.
+        constexpr u64 guest_reset_pstate = 0x3c5U;
+        const error_t configure_result = configure_vcpu(
+            bootstrap_vcpu, 0U, guest_reset_pstate, 0xf000U);
         if (configure_result != error_t::success) return configure_result;
         // Guest starts at EL1h with its stage-1 MMU and caches disabled.
         // SCTLR_EL1 RES1 bits: 29, 28, 23, 22, 20, and 11.
@@ -362,7 +383,7 @@ namespace sys::kernel::hypervisor
         bootstrap_vcpu.context.vbar_el1 = 0U;
         bootstrap_vcpu.context.sp_el1 = 0xf000U;
         bootstrap_vcpu.context.elr_el1 = 0U;
-        bootstrap_vcpu.context.spsr_el1 = 0x5U;
+        bootstrap_vcpu.context.spsr_el1 = guest_reset_pstate;
         bootstrap_vcpu.context.cntv_ctl_el0 = 0U;
         bootstrap_vcpu.context.cntv_cval_el0 = 0U;
         return error_t::success;
@@ -380,16 +401,31 @@ namespace sys::kernel::hypervisor
                 static_cast<unsigned long long>(bootstrap_vm.stage_2_root),
                 static_cast<unsigned long long>(reinterpret_cast<paddr_t>(&guest_ram[0])),
                 static_cast<unsigned long long>(guest_ram_size));
-        const error_t result = run(bootstrap_vcpu, exit);
+        error_t result = run(bootstrap_vcpu, exit);
         if (result != error_t::success) return result;
-        if (exit.reason != abi::v1::vm_exit_reason::shutdown) {
+        if (exit.reason != abi::v1::vm_exit_reason::wait) {
             diagnose(bootstrap_vm, 31U, error_t::invalid_argument,
                      exit.guest_pc, exit.syndrome);
             return error_t::invalid_argument;
         }
-        pr_info("[HV-E] guest-console-time-shutdown result=PASS pc=%llx time=%llx\n",
-                static_cast<unsigned long long>(exit.guest_pc),
-                static_cast<unsigned long long>(bootstrap_vcpu.context.x[1]));
+        pr_info("[HV-G] guest-mmu-vectors result=PASS pc=%llx\n",
+                static_cast<unsigned long long>(exit.guest_pc));
+        const error_t inject_result = inject_irq(bootstrap_vcpu, 27U);
+        if (inject_result != error_t::success) return inject_result;
+        exit = {};
+        result = run(bootstrap_vcpu, exit);
+        if (result != error_t::success) return result;
+        constexpr u64 required_reports = 0x7ULL;
+        if (exit.reason != abi::v1::vm_exit_reason::shutdown
+            || (exit.qualification & required_reports) != required_reports) {
+            diagnose(bootstrap_vm, 32U, error_t::invalid_argument,
+                     exit.guest_pc, exit.qualification);
+            return error_t::invalid_argument;
+        }
+        pr_info("[HV-H] virtual-timer-irq result=PASS irq=27 reports=%llx\n",
+                static_cast<unsigned long long>(exit.qualification));
+        pr_info("[HV-I] guest-el0-svc result=PASS pc=%llx\n",
+                static_cast<unsigned long long>(exit.guest_pc));
         return error_t::success;
     }
 
@@ -435,6 +471,7 @@ namespace sys::kernel::hypervisor
                 static_cast<unsigned long long>(self_test_operations));
         pr_info("[HV-C] vcpu-state-machine result=PASS irq=27\n");
         pr_info("[HV-F] single-vcpu-zilch-guest result=PASS\n");
+        pr_info("[HV-0.2] guest-mmu-timer-el0 result=PASS\n");
         return error_t::success;
     }
 }

@@ -41,3 +41,11 @@ Expected new records:
 ```
 
 A runtime failure should include `hv guest-exit` and `hv guest-regs` records.
+
+## Profile 0.2 MMU bootstrap return diagnostics
+
+The EL2-mediated guest MMU enable path invalidates guest EL1 translation and
+instruction-cache state after writing `SCTLR_EL1`, then executes `AT S12E1R`
+for the post-enable PC.  The `[HV-MMU] phase=el2-resume` record reports the
+combined stage-1 plus stage-2 `PAR_EL1` result and the final EL1/EL2 control
+register readbacks immediately before the common EL2 exception epilogue.

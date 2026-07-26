@@ -366,7 +366,7 @@ namespace sys::kernel::thread
         if constexpr (arch::hypervisor::active) {
             result = hypervisor::self_test();
             if (result != error_t::success) return result;
-            pr_info("[HV-DIAG] profile=0.1 self-test=PASS operations=%llu failures=%llu\n",
+            pr_info("[HV-DIAG] profile=0.2 self-test=PASS operations=%llu failures=%llu\n",
                     static_cast<unsigned long long>(hypervisor::self_test_operations),
                     static_cast<unsigned long long>(hypervisor::self_test_failures));
         }

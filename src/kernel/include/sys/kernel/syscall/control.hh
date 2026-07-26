@@ -299,7 +299,7 @@ namespace sys::kernel::syscall
             case 5U: name = "root_created_objects"; break;
             case 6U: name = "root_created_smp_fuzz"; break;
             case 7U: name = "object_destroy_reuse"; break;
-            case 8U: name = "hypervisor_profile_0_1"; break;
+            case 8U: name = "hypervisor_profile_0_2"; break;
             case 9U: name = "hypervisor_negative_fuzz"; break;
             default: break;
             }
