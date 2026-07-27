@@ -1,3 +1,12 @@
+## 0111 — Physical extent ownership and bounded retyping
+
+- Add explicit physical extents to memory-resource objects.
+- Carve page-aligned extents from parent resources during delegation.
+- Allocate resource-backed frames and page tables only from owned extents.
+- Merge empty child extents back into the parent on destruction.
+- Prevent unrestricted allocation from consuming active child extents.
+- Add nested split/retype/exhaust/reclaim certification coverage.
+
 ## 0109 — Userspace memory-resource delegation
 
 - Add bounded parent/child memory-resource capability objects.

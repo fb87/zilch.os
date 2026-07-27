@@ -40,6 +40,13 @@ namespace sys::kernel::memory
         mapping_record mappings[maximum_mappings_per_frame]{};
     };
 
+    inline constexpr u32 maximum_extents_per_resource = 16U;
+
+    struct resource_extent {
+        paddr_t base{};
+        u32 pages{};
+    };
+
     struct resource {
         object::header_t object{};
         object::reference_t owner_task{};
@@ -47,6 +54,8 @@ namespace sys::kernel::memory
         u32 quota_pages{};
         volatile u32 used_pages{};
         volatile u32 delegated_pages{};
+        u32 extent_count{};
+        resource_extent extents[maximum_extents_per_resource]{};
         bool root{};
         bool in_use{};
     };

@@ -126,3 +126,12 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | MEM-005, MEM-006, MEM-009 | `memory::resource`, root selector 32, per-task selector 15, parent/child quota delegation | `memory_resource_delegation` certification test | Bounded resource objects; no physical extent retyping |
 | MEM-007, MEM-008, MEM-010 | resource-backed frame/page-table creation and atomic used-page accounting | quota-two allocation/exhaustion/release cycle | Fixed object pools and simple quota policy |
 | USR-006, USR-008, USR-011, USR-012 | PL3 memory server uses `resource_frame_create` through delegated selector 15 | userspace pager service plus resource exhaustion test | General allocation protocol and pressure policy remain open |
+
+## Batch 0111 — physical extent ownership and bounded retyping
+
+| Requirement | Implementation evidence | Runtime/certification evidence | Remaining limitations |
+|---|---|---|---|
+| MEM-006, MEM-009 | `memory::resource_extent`; parent delegation carves page-aligned physical ranges and child destruction merges empty ranges back. | `[TEST] name=memory_extent_retype result=PASS`. | Bounded 16 extents per resource; no scalable tree or restartable retype operation. |
+| MEM-007, MEM-008 | Resource-backed frame and page-table creation allocates only from the authority resource's owned extents. | Existing pager/resource tests plus nested parent/child allocation exhaustion. | Fixed frame/page-table metadata pools remain. |
+| MEM-010, MEM-012 | Quota, extent ownership, global allocation bitmap, zero/release, and parent/child accounting are enforced together. | Parent and child each exhaust exactly their physically owned pages, then return them without leaks. | Controlled concurrent split/retype/reclaim fuzz remains open. |
+| TST-023 | Nested four-page parent/two-page child split, retype, exhaustion, destroy, merge, and reuse sequence. | `[TEST] name=memory_extent_retype result=PASS`. | Full-RAM exhaustion, fragmentation permutations, and long-duration pressure remain open. |

@@ -32,6 +32,7 @@ namespace
         memory_authority_revoke = 15U,
         memory_attributes_pressure = 16U,
         memory_resource_delegation = 17U,
+        memory_extent_retype = 18U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -201,6 +202,67 @@ namespace
             passed;
         passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
                               child_resource_selector) == success &&
+                 passed;
+        return passed;
+    }
+
+    [[nodiscard]] bool test_memory_extent_retype() noexcept {
+        constexpr sys::word_t root_task_selector = 1U;
+        constexpr sys::word_t root_resource_selector = 32U;
+        constexpr sys::word_t parent_resource = 37U;
+        constexpr sys::word_t child_resource = 38U;
+        constexpr sys::word_t parent_frame0 = 39U;
+        constexpr sys::word_t parent_frame1 = 40U;
+        constexpr sys::word_t parent_frame2 = 41U;
+        constexpr sys::word_t child_frame0 = 42U;
+        constexpr sys::word_t child_frame1 = 43U;
+        constexpr sys::word_t child_frame2 = 44U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t no_memory = static_cast<sys::word_t>(sys::error_t::no_memory);
+
+        bool passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                                   root_task_selector, root_resource_selector, parent_resource,
+                                   4U) == success;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                              root_task_selector, parent_resource, child_resource, 2U) == success &&
+                 passed;
+
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              parent_resource, parent_frame0) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              parent_resource, parent_frame1) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              parent_resource, parent_frame2) == no_memory &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              child_resource, child_frame0) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              child_resource, child_frame1) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              child_resource, child_frame2) == no_memory &&
+                 passed;
+
+        passed =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, child_frame0) == success &&
+            passed;
+        passed =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, child_frame1) == success &&
+            passed;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                              child_resource) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, parent_frame0) ==
+                     success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, parent_frame1) ==
+                     success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                              parent_resource) == success &&
                  passed;
         return passed;
     }
@@ -560,6 +622,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::memory_attributes_pressure, attributes_pressure_pass);
     const bool resource_delegation_pass = test_memory_resource_delegation();
     record(ledger, test_id::memory_resource_delegation, resource_delegation_pass);
+    const bool extent_retype_pass = test_memory_extent_retype();
+    record(ledger, test_id::memory_extent_retype, extent_retype_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

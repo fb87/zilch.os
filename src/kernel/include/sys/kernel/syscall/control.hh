@@ -268,6 +268,9 @@ namespace sys::kernel::syscall
                     case 17U:
                         name = "memory_resource_delegation";
                         break;
+                    case 18U:
+                        name = "memory_extent_retype";
+                        break;
                     default:
                         break;
                 }
