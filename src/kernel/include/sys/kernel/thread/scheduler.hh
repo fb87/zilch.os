@@ -450,6 +450,10 @@ namespace sys::kernel::thread
 
 #if CONFIG_SELFTEST
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
+        constexpr vaddr_t scratch_mapping_address = arch::space::user_code + 0x8000ULL;
+        constexpr vaddr_t dynamic_mapping_address = arch::space::user_code + 0x9000ULL;
+        static_assert(dynamic_mapping_address < arch::space::user_stack_base);
+
         task::task& root = user_tasks[0];
         error_t result = capability::copy(root.cspace, 16U, root.cspace, 10U,
                                           capability::rights(capability::right_t::write));
@@ -472,8 +476,7 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
 
         result =
-            memory::map(user_threads[0].address_space, memory::frames[0],
-                        CONFIG_ROOT_ONLY_BOOT ? 0x20002000ULL : 0x10002000ULL,
+            memory::map(user_threads[0].address_space, memory::frames[0], scratch_mapping_address,
                         static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
                                                         static_cast<u8>(memory::permission::write)),
                         0U, 0U);
@@ -508,8 +511,7 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
         auto& dynamic_frame = *reinterpret_cast<memory::frame*>(dynamic_header);
         result =
-            memory::map(user_threads[0].address_space, dynamic_frame,
-                        CONFIG_ROOT_ONLY_BOOT ? 0x20003000ULL : 0x10003000ULL,
+            memory::map(user_threads[0].address_space, dynamic_frame, dynamic_mapping_address,
                         static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
                                                         static_cast<u8>(memory::permission::write)),
                         0U, 0U);

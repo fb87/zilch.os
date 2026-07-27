@@ -156,6 +156,7 @@ namespace sys::kernel::memory
         target.owner_task = owner_task;
         target.mapping_count = 0U;
         target.allocated = true;
+        target.device = false;
         target.in_use = true;
         for (auto& mapping : target.mappings)
             mapping = {};
@@ -167,13 +168,15 @@ namespace sys::kernel::memory
             return error_t::not_found;
         if (target.mapping_count != 0U)
             return error_t::busy;
-        const error_t result = release_physical_page(target.physical_address);
+        const error_t result =
+            target.device ? error_t::success : release_physical_page(target.physical_address);
         if (result != error_t::success)
             return result;
         target.physical_address = 0U;
         target.owner = 0U;
         target.owner_task = {};
         target.allocated = false;
+        target.device = false;
         return error_t::success;
     }
 
@@ -261,6 +264,56 @@ namespace sys::kernel::memory
         return result;
     }
 
+    [[nodiscard]] inline error_t create_device_frame(task::task& owner, capability_id_t destination,
+                                                     paddr_t address) noexcept {
+        if (!owner.root || destination >= capability::cspace_slot_count ||
+            (address & (page_size - 1U)) != 0U || !platform::memory::valid_device_page(address))
+            return error_t::denied;
+        frame* target = nullptr;
+        for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
+            bool expected = false;
+            if (__atomic_compare_exchange_n(&frames[index].in_use, &expected, true, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                target = &frames[index];
+                break;
+            }
+        }
+        if (target == nullptr)
+            return error_t::no_memory;
+        error_t result = object::register_dynamic_object(target->object, object::type_t::frame);
+        if (result == error_t::success) {
+            target->physical_address = address;
+            target->owner = owner.address_space_id;
+            target->owner_task = object::reference(owner.object);
+            target->mapping_count = 0U;
+            target->allocated = true;
+            target->device = true;
+            for (auto& mapping : target->mappings)
+                mapping = {};
+            const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
+                                              static_cast<u32>(capability::right_t::write) |
+                                              static_cast<u32>(capability::right_t::grant) |
+                                              static_cast<u32>(capability::right_t::control)};
+            result = capability::install(owner.cspace, destination,
+                                         object::reference(target->object), rights);
+        }
+        if (result != error_t::success) {
+            if (target->object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target->object));
+            target->object = {};
+            target->physical_address = 0U;
+            target->owner = 0U;
+            target->owner_task = {};
+            target->mapping_count = 0U;
+            target->allocated = false;
+            target->device = false;
+            for (auto& mapping : target->mappings)
+                mapping = {};
+            __atomic_store_n(&target->in_use, false, __ATOMIC_RELEASE);
+        }
+        return result;
+    }
+
     [[nodiscard]] inline error_t destroy_frame(task::task& owner,
                                                capability_id_t selector) noexcept {
         object::header_t* header = nullptr;
@@ -273,6 +326,7 @@ namespace sys::kernel::memory
             return error_t::denied;
         if (target.owner != owner.address_space_id && !owner.root)
             return error_t::denied;
+        const bool was_device = target.device;
         result = release_frame(target);
         if (result != error_t::success)
             return result;
@@ -284,7 +338,8 @@ namespace sys::kernel::memory
         target.object = {};
         target.owner = 0U;
         __atomic_store_n(&target.in_use, false, __ATOMIC_RELEASE);
-        uncharge_page(owner);
+        if (!was_device)
+            uncharge_page(owner);
         return error_t::success;
     }
 
@@ -364,8 +419,10 @@ namespace sys::kernel::memory
     [[nodiscard]] inline error_t map(space::address_space& target, frame& source, vaddr_t address,
                                      permission permissions,
                                      capability::derivation_id_t frame_authority,
-                                     capability::derivation_id_t space_authority) noexcept {
-        if (!valid_permission(permissions) || !source.allocated)
+                                     capability::derivation_id_t space_authority,
+                                     mapping_attributes attributes = {}) noexcept {
+        if (!valid_permission(permissions) || !source.allocated ||
+            !valid_attributes(attributes, permissions, source.device))
             return error_t::denied;
         const object::reference_t space_reference = object::reference(target.object);
         if (!valid_reference(space_reference))
@@ -393,7 +450,8 @@ namespace sys::kernel::memory
 
         const error_t result = target.map_page(
             address, reinterpret_cast<void*>(static_cast<uintptr_t>(source.physical_address)),
-            writable(permissions), executable(permissions));
+            writable(permissions), executable(permissions), source.device,
+            attributes.share == shareability::inner_shareable);
         if (result != error_t::success) {
             unlock_mappings();
             return result;
@@ -402,8 +460,8 @@ namespace sys::kernel::memory
         u32 generation = next_mapping_generation++;
         if (generation == 0U)
             generation = next_mapping_generation++;
-        *free_record = {space_reference, address,    permissions, frame_authority,
-                        space_authority, generation, true};
+        *free_record = {space_reference, address,         permissions, attributes,
+                        frame_authority, space_authority, generation,  true};
         ++source.mapping_count;
         unlock_mappings();
         return error_t::success;

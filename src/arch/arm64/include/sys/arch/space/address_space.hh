@@ -192,7 +192,8 @@ namespace sys::arch::space
     }
 
     [[nodiscard]] inline error_t map_page(address_space& value, vaddr_t address, void* page,
-                                          bool writable, bool executable) noexcept {
+                                          bool writable, bool executable, bool device,
+                                          bool inner_shareable_mapping) noexcept {
         if ((address & (memory::page_size - 1U)) != 0U || address < user_code ||
             address >= user_stack_base || (writable && executable))
             return error_t::invalid_argument;
@@ -203,7 +204,9 @@ namespace sys::arch::space
         if (value.l3.entry[l3_index] != 0U)
             return error_t::busy;
         u64 descriptor = (reinterpret_cast<u64>(page) & ~0xfffULL) | memory::descriptor_page |
-                         memory::access_flag | memory::inner_shareable | memory::attr_normal;
+                         memory::access_flag |
+                         (inner_shareable_mapping ? memory::inner_shareable : 0ULL) |
+                         (device ? memory::attr_device : memory::attr_normal);
         descriptor |= writable ? memory::ap_el0_rw : memory::ap_el0_ro;
         if (!executable)
             descriptor |= memory::pxn | memory::uxn;

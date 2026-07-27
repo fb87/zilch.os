@@ -30,6 +30,7 @@ namespace
         memory_resource_lifecycle = 13U,
         memory_mapping_database = 14U,
         memory_authority_revoke = 15U,
+        memory_attributes_pressure = 16U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -220,9 +221,9 @@ namespace
             return false;
 
         bool passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
-                                   frame_selector, first_address, read_write) == success;
+                                   frame_selector, first_address, read_write, 0x100U) == success;
         passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
-                              frame_selector, second_address, read_write) == success &&
+                              frame_selector, second_address, read_write, 0x100U) == success &&
                  passed;
         passed =
             sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) == busy &&
@@ -266,7 +267,7 @@ namespace
         bool passed = sys::control(sys::abi::v1::control_operation::capability_copy, 0U,
                                    derived_selector, frame_selector, cap_write) == success;
         passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
-                              derived_selector, address, read_write) == success &&
+                              derived_selector, address, read_write, 0x100U) == success &&
                  passed;
         passed = sys::control(sys::abi::v1::control_operation::capability_revoke, 0U, 0U,
                               frame_selector) == success &&
@@ -285,6 +286,55 @@ namespace
                                derived_selector);
             (void)sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector);
         }
+        return passed;
+    }
+
+    [[nodiscard]] bool test_memory_attributes_pressure() noexcept {
+        constexpr sys::word_t device_selector = 16U;
+        constexpr sys::word_t frame_selector = 17U;
+        constexpr sys::word_t root_space_selector = 3U;
+        constexpr sys::word_t device_address = 0x20007000U;
+        constexpr sys::word_t normal_address = 0x20008000U;
+        constexpr sys::word_t read_write = 3U;
+        constexpr sys::word_t read_execute = 5U;
+        constexpr sys::word_t device_outer = 0x201U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t denied = static_cast<sys::word_t>(sys::error_t::denied);
+
+        bool passed = sys::control(sys::abi::v1::control_operation::device_frame_create,
+                                   device_selector, 0x09000000U) == success;
+        passed =
+            sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
+                         device_selector, device_address, read_execute, device_outer) == denied &&
+            passed;
+        passed =
+            sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
+                         device_selector, device_address, read_write, device_outer) == success &&
+            passed;
+        passed = sys::control(sys::abi::v1::control_operation::unmap_frame, root_space_selector,
+                              device_selector, device_address) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, device_selector) ==
+                     success &&
+                 passed;
+
+        sys::word_t owned_before = 0U;
+        passed = sys::control_result1(owned_before,
+                                      sys::abi::v1::control_operation::memory_query) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_create, 0U, frame_selector) ==
+                     success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
+                              frame_selector, normal_address, read_write, device_outer) == denied &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) ==
+                     success &&
+                 passed;
+        sys::word_t owned_after = 0U;
+        passed = sys::control_result1(owned_after, sys::abi::v1::control_operation::memory_query) ==
+                     success &&
+                 owned_after == owned_before && passed;
         return passed;
     }
 
@@ -462,6 +512,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::memory_mapping_database, mapping_database_pass);
     const bool authority_revoke_pass = test_memory_authority_revoke();
     record(ledger, test_id::memory_authority_revoke, authority_revoke_pass);
+    const bool attributes_pressure_pass = test_memory_attributes_pressure();
+    record(ledger, test_id::memory_attributes_pressure, attributes_pressure_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

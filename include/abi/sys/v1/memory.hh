@@ -11,6 +11,23 @@ namespace sys::abi::v1
         execute = 4U,
     };
 
+    enum class memory_type : u8 {
+        normal = 0U,
+        device = 1U,
+    };
+
+    enum class memory_shareability : u8 {
+        non_shareable = 0U,
+        inner_shareable = 1U,
+        outer_shareable = 2U,
+    };
+
+    [[nodiscard]] inline constexpr word_t
+    encode_mapping_attributes(memory_type type, memory_shareability shareability) noexcept {
+        return static_cast<word_t>(static_cast<u8>(type)) |
+               (static_cast<word_t>(static_cast<u8>(shareability)) << 8U);
+    }
+
     [[nodiscard]] inline constexpr memory_permission operator|(memory_permission left,
                                                                memory_permission right) noexcept {
         return static_cast<memory_permission>(static_cast<u8>(left) | static_cast<u8>(right));

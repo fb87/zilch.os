@@ -1,3 +1,11 @@
+## 0106 - Reserve bootstrap certification mapping window
+
+- Move kernel bootstrap scratch mappings away from the growing `init.elf` load segment.
+- Reserve `user_code + 0x8000` and `user_code + 0x9000` for bootstrap-only mapping checks.
+- Add a compile-time guard keeping the reserved test window below the user stack.
+- Fix certification boot failure `kernel bootstrap self-test failed=-5` caused by a legitimate page collision.
+- No production ABI or runtime memory policy changes.
+
 ## 0100 - Dynamic physical-memory lifecycle foundation
 
 
@@ -167,3 +175,11 @@
 - Remove mappings automatically when their authorizing capability is deleted or recursively revoked.
 - Preserve descendant-only revoke semantics while keeping the selected ancestor capability valid.
 - Add PL3 certification for revoke-driven unmapping and subsequent frame destruction.
+
+## 0105 - Memory attributes and pressure rollback
+
+- Add public normal/device memory type and shareability mapping attributes.
+- Add root-only platform-allowlisted device-frame creation.
+- Emit ARM64 normal or device page descriptors according to validated attributes.
+- Reject executable device mappings and normal/device attribute mismatches.
+- Add bounded certification for MMIO lifecycle and failed-map accounting rollback.

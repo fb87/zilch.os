@@ -40,5 +40,6 @@ namespace sys::abi::v1
         endpoint_destroy = 33U,
         notification_create = 34U,
         notification_destroy = 35U,
+        device_frame_create = 36U,
     };
 } // namespace sys::abi::v1

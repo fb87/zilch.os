@@ -21,8 +21,10 @@ namespace sys::kernel::space
         }
 
         [[nodiscard]] inline error_t map_page(vaddr_t address, void* page, bool writable,
-                                              bool executable) noexcept {
-            return arch::space::map_page(native, address, page, writable, executable);
+                                              bool executable, bool device,
+                                              bool inner_shareable) noexcept {
+            return arch::space::map_page(native, address, page, writable, executable, device,
+                                         inner_shareable);
         }
 
         [[nodiscard]] inline error_t unmap_page(vaddr_t address) noexcept {

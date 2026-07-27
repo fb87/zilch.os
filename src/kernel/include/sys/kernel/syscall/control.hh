@@ -262,6 +262,9 @@ namespace sys::kernel::syscall
                     case 15U:
                         name = "memory_authority_revoke";
                         break;
+                    case 16U:
+                        name = "memory_attributes_pressure";
+                        break;
                     default:
                         break;
                 }
@@ -397,9 +400,10 @@ namespace sys::kernel::syscall
                     if (target_space == nullptr || source_frame == nullptr)
                         result = error_t::not_found;
                     else
-                        result = memory::map(*target_space, *source_frame, a3,
-                                             static_cast<memory::permission>(a4),
-                                             frame_cap.derivation, space_cap.derivation);
+                        result =
+                            memory::map(*target_space, *source_frame, a3,
+                                        static_cast<memory::permission>(a4), frame_cap.derivation,
+                                        space_cap.derivation, memory::decode_attributes(a5));
                 }
                 capability::unlock_authority();
                 break;
@@ -414,6 +418,13 @@ namespace sys::kernel::syscall
                     result = memory::create_frame(*target_task, static_cast<capability_id_t>(a2));
                 break;
             }
+            case abi::v1::control_operation::device_frame_create:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = memory::create_device_frame(*current.owner,
+                                                         static_cast<capability_id_t>(a1), a2);
+                break;
             case abi::v1::control_operation::frame_destroy:
                 if (current.owner == nullptr)
                     result = error_t::denied;

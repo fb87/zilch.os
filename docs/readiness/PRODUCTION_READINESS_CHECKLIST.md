@@ -202,8 +202,8 @@ Every completed requirement must link to:
 - [-] **MEM-014** Up to eight mappings per frame are supported with serialized transactions; scalable representation remains open.
 - [-] **MEM-015** Per-frame reverse mappings use generation-checked address-space references, and address-space teardown removes records for the exact object generation; scalable indexing remains open.
 - [-] **MEM-016** Unmap by frame/address-space, frame-wide teardown, and capability-delete/revoke-driven unmapping exist with serialized authority transactions; scalable indexing and controlled race evidence remain open.
-- [ ] **MEM-017** Cacheability/shareability attributes validated.
-- [ ] **MEM-018** Device-memory mappings use correct attributes.
+- [-] **MEM-017** Normal and device mappings validate explicit cacheability class and shareability; broader architecture/platform combinations remain open.
+- [-] **MEM-018** Root-authorized allowlisted MMIO frames use device attributes and reject executable mappings; general device-resource delegation remains open.
 - [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root and removes all tracked frame mappings before clearing user page tables; stress and scalable mapping-database evidence remain open.
 - [x] **MEM-020** SMP TLB shootdown implemented and runtime verified on four CPUs.
 - [ ] **MEM-021** ASID allocation, rollover, and reuse implemented.
@@ -563,8 +563,8 @@ Every completed requirement must link to:
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
-- [-] **TST-023** Certification exercises bounded allocation/accounting plus multi-map, partial-unmap, destroy rejection, cleanup, and reuse; full allocator exhaustion and sustained pressure remain open.
-- [ ] **TST-024** Fault injection covers every allocation and teardown stage.
+- [-] **TST-023** Certification exercises bounded allocation/accounting, multi-map cleanup, attribute rejection, MMIO lifecycle, and rollback accounting; full allocator exhaustion and sustained pressure remain open.
+- [-] **TST-024** Attribute and mapping rejection paths verify cleanup/accounting rollback; systematic per-stage allocation fault injection remains open.
 
 ## 12.4 Long-duration certification
 
