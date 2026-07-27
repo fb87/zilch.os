@@ -108,14 +108,14 @@ Every completed requirement must link to:
 - [x] **CAP-003** CSpaces use a two-level 4×64 radix with explicit root/leaf selector geometry.
 - [x] **CAP-004** Every capability operation validates the CSpace's eight-bit guard before resolving a radix path; wrong-guard lookup is rejected.
 - [x] **CAP-005** Per-leaf occupancy bitmaps and a rotating allocation hint allocate across all 256 slots without a linear occupied-slot scan.
-- [-] **CAP-006** Capability badges implemented. Basic badges/minting and scalable guarded CSpace semantics exist; complete badge-delivery semantics remain open.
+- [x] **CAP-006** Endpoint badges are snapshotted from the invoking capability and delivered on both queued and direct rendezvous paths; internal caller identity remains confined to reply authority.
 - [-] **CAP-007** Rights attenuation enforced during derivation. Bounded implementation exists; concurrency proof remains open.
 
 ## 2.2 Derivation and revocation
 
 - [-] **CAP-008** Bounded capability derivation tree implemented. Parent/child records and recursive traversal exist; storage is fixed-size and revoke is not yet scalable or restartable.
 - [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
-- [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation and wrong-guard access are rejected; complete badge-delivery semantics remain open.
+- [x] **CAP-010** Mint creates a rights-attenuated, badged derivation; delivery, wrong-right rejection, post-accept deletion semantics, and generation-tagged per-task endpoint badges are certified.
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
 - [-] **CAP-012** Single-capability delete, atomic lookup snapshots, and exception-scoped lookup/use quiescence exist; generalized non-exception readers and long-duration interleaving evidence remain open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.

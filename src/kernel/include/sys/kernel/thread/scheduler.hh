@@ -13,6 +13,7 @@
 #endif
 #if CONFIG_SELFTEST
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
+#include <sys/kernel/tests/ipc/badge_delivery.hh>
 #endif
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/bootstrap.hh>
@@ -113,6 +114,12 @@ namespace sys::kernel::thread
     inline volatile bool user_scheduler_ready = false;
     extern "C" [[noreturn]] void sys_kernel_user_idle() noexcept;
     inline volatile u64 per_cpu_switches[maximum_cpu_count]{};
+
+    [[nodiscard]] inline constexpr capability::badge_t
+    endpoint_badge(const thread& value) noexcept {
+        return (static_cast<capability::badge_t>(value.object.generation) << 32U) |
+               static_cast<capability::badge_t>(value.id + 1U);
+    }
 
     [[nodiscard]] inline error_t initialize_user_threads() noexcept {
         error_t bootstrap_result = bootstrap::initialize_objects();
@@ -376,6 +383,8 @@ namespace sys::kernel::thread
         }
         target.pending_sender = static_cast<thread_id_t>(-1);
         target.pending_sender_generation = 0U;
+        target.pending_badge = 0U;
+        target.ipc_badge = 0U;
         target.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
         target.pending_result = error_t::success;
         target.ipc_deadline = 0U;
@@ -492,8 +501,8 @@ namespace sys::kernel::thread
                 role == capability_race_server_role) {
                 endpoint_rights.bits |= static_cast<u32>(capability::right_t::read);
             }
-            result = capability::install(
-                owner.cspace, 10U, object::reference(ipc::endpoints[0].object), endpoint_rights);
+            result = capability::mint(owner.cspace, 10U, root.cspace, 10U, endpoint_rights,
+                                      endpoint_badge(target));
         }
         if (result == error_t::success)
             result = capability::install(owner.cspace, 14U,
@@ -570,6 +579,7 @@ namespace sys::kernel::thread
         }
         target.ipc_timeout_active = false;
         target.transfer = {};
+        target.ipc_badge = 0U;
         target.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
         unlock_ipc_lifecycle();
         platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
@@ -822,6 +832,9 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=donation_chain_bound result=PASS maximum=8\n");
 
         result = tests::interrupt::run(root, guarded_cspace);
+        if (result != error_t::success)
+            return result;
+        result = tests::ipc::run_badge_delivery(root);
         if (result != error_t::success)
             return result;
 
@@ -1163,6 +1176,7 @@ namespace sys::kernel::thread
             }
             value.ipc_timeout_active = false;
             value.transfer = {};
+            value.ipc_badge = 0U;
             value.pending_result = error_t::timed_out;
             if (current_state == state::blocked_fault) {
                 value.fault_disposition = fault::disposition::terminate;
@@ -1421,12 +1435,14 @@ namespace sys::kernel::thread
         if (value.last_fault.type != fault::kind::none &&
             value.fault_disposition == fault::disposition::pending)
             return false;
-        object::header_t* endpoint_header = nullptr;
-        const error_t lookup_result = capability::lookup(
+        capability::slot_t endpoint_slot{};
+        const error_t lookup_result = capability::lookup_slot(
             value.owner->cspace, value.owner->fault_endpoint, object::type_t::endpoint,
-            capability::right_t::write, endpoint_header);
+            capability::right_t::write, endpoint_slot);
+        object::header_t* endpoint_header = object::resolve(endpoint_slot.object);
         if (lookup_result != error_t::success || endpoint_header == nullptr)
             return false;
+        value.ipc_badge = endpoint_slot.badge;
 
         value.last_fault.type = fault_kind;
         value.last_fault.thread = value.id;
@@ -1454,7 +1470,8 @@ namespace sys::kernel::thread
             if (receiver_header != nullptr && receiver_header->type == object::type_t::thread) {
                 thread& receiver = *reinterpret_cast<thread*>(receiver_header);
                 publish_pending(receiver, pending_ipc::incoming_call, value.id,
-                                value.object.generation, value.message);
+                                value.object.generation, value.ipc_badge, value.message);
+                value.ipc_badge = 0U;
                 (void)wake(receiver);
                 ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
                 ipc::unlock(endpoint);

@@ -81,16 +81,22 @@ namespace sys::kernel::syscall
 
     [[nodiscard]] inline error_t resolve_endpoint(thread::thread& current, capability_id_t selector,
                                                   capability::right_t required,
-                                                  ipc::endpoint*& endpoint) noexcept {
+                                                  ipc::endpoint*& endpoint,
+                                                  capability::badge_t& badge) noexcept {
         endpoint = nullptr;
+        badge = 0U;
         if (current.owner == nullptr)
             return error_t::denied;
-        object::header_t* object = nullptr;
-        const error_t result = capability::lookup(current.owner->cspace, selector,
-                                                  object::type_t::endpoint, required, object);
+        capability::slot_t slot{};
+        const error_t result = capability::lookup_slot(current.owner->cspace, selector,
+                                                       object::type_t::endpoint, required, slot);
         if (result != error_t::success)
             return result;
+        object::header_t* object = object::resolve(slot.object);
+        if (object == nullptr)
+            return error_t::not_found;
         endpoint = reinterpret_cast<ipc::endpoint*>(object);
+        badge = slot.badge;
         return error_t::success;
     }
 
@@ -245,7 +251,8 @@ namespace sys::kernel::syscall
             return transfer_result;
         install_reply(receiver, sender);
         thread::publish_pending(receiver, thread::pending_ipc::incoming_call, sender.id,
-                                sender.object.generation, sender.message);
+                                sender.object.generation, sender.ipc_badge, sender.message);
+        sender.ipc_badge = 0U;
         (void)thread::wake(receiver);
         ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
         return error_t::success;
@@ -303,7 +310,7 @@ namespace sys::kernel::syscall
         }
         caller.ipc_timeout_active = false;
         thread::publish_pending(caller, thread::pending_ipc::reply, server.id,
-                                server.object.generation, server.message);
+                                server.object.generation, 0U, server.message);
         (void)thread::wake(caller);
         ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
         thread::unlock_ipc_lifecycle();
@@ -313,8 +320,9 @@ namespace sys::kernel::syscall
     inline bool receive(thread::thread& current, arch::thread::context& frame,
                         capability_id_t selector) noexcept {
         ipc::endpoint* endpoint = nullptr;
+        capability::badge_t ignored_badge{};
         const error_t lookup_result =
-            resolve_endpoint(current, selector, capability::right_t::read, endpoint);
+            resolve_endpoint(current, selector, capability::right_t::read, endpoint, ignored_badge);
         if (lookup_result != error_t::success) {
             set_error(frame, lookup_result);
             return true;
@@ -343,7 +351,8 @@ namespace sys::kernel::syscall
                 continue;
             }
             set_error(frame, error_t::success);
-            frame.x[1] = static_cast<word_t>(sender.id);
+            frame.x[1] = static_cast<word_t>(sender.ipc_badge);
+            sender.ipc_badge = 0U;
             for (usize_t i = 0U; i < 4U; ++i)
                 frame.x[i + 2U] = sender.message[i];
             install_reply(current, sender);
@@ -382,8 +391,9 @@ namespace sys::kernel::syscall
     inline bool call(thread::thread& current, arch::thread::context& frame,
                      capability_id_t selector) noexcept {
         ipc::endpoint* endpoint = nullptr;
-        const error_t lookup_result =
-            resolve_endpoint(current, selector, capability::right_t::write, endpoint);
+        capability::badge_t endpoint_badge{};
+        const error_t lookup_result = resolve_endpoint(
+            current, selector, capability::right_t::write, endpoint, endpoint_badge);
         if (lookup_result != error_t::success) {
             set_error(frame, lookup_result);
             return true;
@@ -392,6 +402,7 @@ namespace sys::kernel::syscall
         capture_transfer(current, frame);
         capture_timeout(current, frame);
         current.waiting_endpoint = selector;
+        current.ipc_badge = endpoint_badge;
         ipc::lock(*endpoint);
         if (endpoint->receiver.type != object::type_t::none) {
             const object::reference_t receiver_reference = endpoint->receiver;
@@ -420,7 +431,9 @@ namespace sys::kernel::syscall
                 thread::prepare_block(frame, thread::state::blocked_reply);
                 install_reply(receiver, current);
                 thread::publish_pending(receiver, thread::pending_ipc::incoming_call, current.id,
-                                        current.object.generation, current.message);
+                                        current.object.generation, current.ipc_badge,
+                                        current.message);
+                current.ipc_badge = 0U;
                 (void)thread::wake(receiver);
                 thread::unlock_ipc_lifecycle();
                 ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
@@ -476,12 +489,13 @@ namespace sys::kernel::syscall
         }
         if (target.owner != nullptr && target.waiting_endpoint < capability::cspace_slot_count) {
             ipc::endpoint* endpoint = nullptr;
+            capability::badge_t ignored_badge{};
             const capability::right_t endpoint_right =
                 target_state == thread::state::blocked_receive ? capability::right_t::read
                                                                : capability::right_t::write;
             if (target_state != thread::state::blocked_reply &&
-                resolve_endpoint(target, target.waiting_endpoint, endpoint_right, endpoint) ==
-                    error_t::success) {
+                resolve_endpoint(target, target.waiting_endpoint, endpoint_right, endpoint,
+                                 ignored_badge) == error_t::success) {
                 (void)ipc::cancel_thread(*endpoint, object::reference(target.object));
             }
         }
@@ -503,6 +517,7 @@ namespace sys::kernel::syscall
         }
         target.ipc_timeout_active = false;
         target.transfer = {};
+        target.ipc_badge = 0U;
         target.pending_result = error_t::timed_out;
         (void)thread::wake(target);
         ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());

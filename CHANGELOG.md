@@ -1,3 +1,10 @@
+## 0146 - Deliver endpoint capability badges through IPC
+
+- Snapshot the invoking endpoint capability's badge for direct, queued, and fault IPC.
+- Return the badge instead of exposing a kernel thread ID to receiving servers.
+- Mint generation-tagged endpoint authority for dynamically created tasks.
+- Certify rights attenuation and post-accept capability deletion semantics.
+
 ## 0145 - Enforce physical IRQ ownership and containment
 
 - Add an exclusive generation-safe IRQ registry and notification binding.

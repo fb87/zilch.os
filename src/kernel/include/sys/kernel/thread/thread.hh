@@ -97,6 +97,8 @@ namespace sys::kernel::thread
         word_t pending_message[4]{};
         thread_id_t pending_sender{static_cast<thread_id_t>(-1)};
         u32 pending_sender_generation{};
+        capability::badge_t pending_badge{};
+        capability::badge_t ipc_badge{};
         volatile u8 pending_ipc_kind{static_cast<u8>(pending_ipc::none)};
         u64 reports{};
         u64 fuzz_seed{};
@@ -126,6 +128,8 @@ namespace sys::kernel::thread
         value.pending_result = error_t::success;
         value.pending_sender = static_cast<thread_id_t>(-1);
         value.pending_sender_generation = 0U;
+        value.pending_badge = 0U;
+        value.ipc_badge = 0U;
         value.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
         for (usize_t index = 0U; index < 4U; ++index) {
             value.pending_message[index] = 0U;
@@ -177,9 +181,11 @@ namespace sys::kernel::thread
     }
 
     inline void publish_pending(thread& value, pending_ipc kind, thread_id_t sender,
-                                u32 sender_generation, const word_t message[4]) noexcept {
+                                u32 sender_generation, capability::badge_t badge,
+                                const word_t message[4]) noexcept {
         value.pending_sender = sender;
         value.pending_sender_generation = sender_generation;
+        value.pending_badge = badge;
         for (usize_t index = 0U; index < 4U; ++index) {
             value.pending_message[index] = message[index];
         }
@@ -202,7 +208,7 @@ namespace sys::kernel::thread
         value.pending_result = error_t::success;
         value.ipc_timeout_active = false;
         if (kind == pending_ipc::incoming_call) {
-            value.context.x[1] = static_cast<word_t>(value.pending_sender);
+            value.context.x[1] = static_cast<word_t>(value.pending_badge);
             for (usize_t index = 0U; index < 4U; ++index) {
                 value.context.x[index + 2U] = value.pending_message[index];
             }
@@ -221,5 +227,6 @@ namespace sys::kernel::thread
         }
         value.pending_sender = static_cast<thread_id_t>(-1);
         value.pending_sender_generation = 0U;
+        value.pending_badge = 0U;
     }
 } // namespace sys::kernel::thread

@@ -38,7 +38,7 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | CAP-007 | IN PROGRESS | `capability/cspace.hh` rights attenuation | `capability_control` rejects escalation | Transfer and scalable CSpace work remain |
 | CAP-008 | IN PROGRESS | bounded derivation parent records | 128 derive/revoke/reuse cycles | Bounded table, no scalable CDT |
 | CAP-009 | IN PROGRESS | `capability::copy` with parent tracking | `capability_control` | Concurrency stress incomplete |
-| CAP-010 | IN PROGRESS | `capability::mint` with reduced rights and badge | escalation rejection | Badge delivery semantics incomplete |
+| CAP-006/010 | COMPLETE | `capability/cspace.hh`, `syscall/ipc.hh`, `thread/thread.hh`, `docs/readiness/IPC_BADGE_PROTOCOL.md` | `ipc_badge_delivery`, `ipc_badge_authority_snapshot`, userspace memory-server ownership protocol | Badge zero remains valid for deliberately unbadged bootstrap authority |
 | CAP-011 | IN PROGRESS | locked atomic `capability::move` | compile/integration baseline | Dedicated runtime race evidence missing |
 | CAP-012 | IN PROGRESS | single-slot delete | descendant removal negative checks | Concurrent lookup evidence missing |
 | CAP-013 | IN PROGRESS | global descendant revoke | child/grandchild become absent | Scalable/restartable revoke missing |
