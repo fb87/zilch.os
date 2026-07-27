@@ -40,3 +40,10 @@ The tree intentionally contains no project-owned `.h` headers.
 ## Hypervisor object-table reservation
 
 Hypervisor Profile 0.1 reserves object-table slots 80 and 81 for the bootstrap VM and vCPU. The lower ranges are already occupied by threads, tasks, endpoints, frames, page tables, notifications, interrupts, scheduling contexts, and address spaces.
+
+The bounded ARM64 ELF64 bootstrap-loader increment and its limitations are
+recorded in `PRODUCTION_ELF64_LOADER_BATCH.md`.
+
+## Recent architecture-alignment work
+
+- [Product/test separation batch 0079](PRODUCT_TEST_SEPARATION_BATCH.md)

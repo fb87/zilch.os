@@ -75,7 +75,8 @@ LD_EMULATION := -m elf_x86_64
 LDSCRIPT := $(SRCTREE)/src/arch/amd64/kernel.ld
 endif
 
-INCLUDES := -I$(SRCTREE)/src/arch/$(ARCH)/include \
+TEST_INCLUDES := $(if $(filter 1,$(CONFIG_SELFTEST)),-I$(SRCTREE)/tests/include,)
+INCLUDES := $(TEST_INCLUDES) -I$(SRCTREE)/src/arch/$(ARCH)/include \
             -I$(SRCTREE)/src/platform/$(PLATFORM_DIR)/include \
             -I$(SRCTREE)/src/kernel/include \
             -I$(SRCTREE)/include \
@@ -87,9 +88,9 @@ KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_
     -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \
     -DCONFIG_VERBOSE_DIAGNOSTICS=$(CONFIG_VERBOSE_DIAGNOSTICS) \
     -DCONFIG_QEMU_RAM_MB=$(MEMORY_MB) -DCONFIG_QEMU_CPUS=$(CPUS) \
-    -DUSER_BIN_PATH=\"$(OBJTREE)/user/init.bin\" \
-    -DMEMORY_SERVER_BIN_PATH=\"$(OBJTREE)/user/memory-server.bin\" \
-    -DPAGER_CLIENT_BIN_PATH=\"$(OBJTREE)/user/pager-client.bin\"
+    -DUSER_ELF_PATH=\"$(OBJTREE)/user/init.elf\" \
+    -DMEMORY_SERVER_ELF_PATH=\"$(OBJTREE)/user/memory-server.elf\" \
+    -DPAGER_CLIENT_ELF_PATH=\"$(OBJTREE)/user/pager-client.elf\"
 KBUILD_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections $(WARNINGS)
 KBUILD_AFLAGS := -ffreestanding
 export SRCTREE OBJTREE ARCH PLATFORM BUILD_VARIANT CONFIG_SELFTEST CONFIG_HYPERVISOR_SELFTEST CONFIG_VERBOSE_DIAGNOSTICS CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION KBUILD_CPPFLAGS KBUILD_CXXFLAGS KBUILD_AFLAGS
@@ -118,15 +119,15 @@ include $(SRCTREE)/tools/build/Makefile.user
 all: userspace kernel image
 kernel: userspace $(KERNEL_ELF) $(KERNEL_BIN)
 image: $(EARLYFS)
-$(EARLYFS): $(USER_ELF) $(MANIFEST)
+$(EARLYFS): $(USER_PROGRAM_ELFS) $(MANIFEST)
 	@mkdir -p $(dir $@)
 	@printf '  EARLYFS %s\n' '$@'
-	@$(SRCTREE)/tools/image/make_earlyfs.sh $(USER_ELF) $(MANIFEST) $@
+	@$(SRCTREE)/tools/image/make_earlyfs.sh $(USER_OBJDIR)/init.elf $(USER_OBJDIR)/memory-server.elf $(USER_OBJDIR)/pager-client.elf $(MANIFEST) $@
 $(OBJTREE)/%/built-in.o: FORCE
 	@mkdir -p $(dir $@)
 	@$(MAKE) -s --no-print-directory -f $(SRCTREE)/tools/build/Makefile.build obj=$* __build
 ifeq ($(ARCH),arm64)
-$(OBJTREE)/src/arch/arm64/built-in.o: $(USER_BIN) $(MEMORY_SERVER_BIN) $(PAGER_CLIENT_BIN)
+$(OBJTREE)/src/arch/arm64/built-in.o: $(USER_PROGRAM_ELFS)
 endif
 $(KERNEL_ELF): $(USER_BIN) $(core-builtins) $(LDSCRIPT)
 	@mkdir -p $(dir $@)

@@ -1019,7 +1019,7 @@ namespace sys::kernel::hypervisor
                 profile05_stats.timer_events);
         pr_info("[HV-Z] active-vcpu-teardown busy=%u result=PASS\n", profile05_stats.teardown_busy);
         pr_info("[HV-0.5] secondary-vcpu-context-reentry result=PASS\n");
-        pr_info("[TEST] name=hypervisor_profile_0_5 result=PASS\n");
+        pr_info("[TEST] name=hypervisor_control_model_0_5 result=PASS\n");
         return true;
     }
 
@@ -1212,7 +1212,7 @@ namespace sys::kernel::hypervisor
                 profile06_stats.migrations);
         pr_info("[HV-AF] quiescent-teardown busy=%u result=PASS\n", profile06_stats.teardown_busy);
         pr_info("[HV-0.6] physical-lane-vcpu-dispatch result=PASS\n");
-        pr_info("[TEST] name=hypervisor_profile_0_6 result=PASS\n");
+        pr_info("[TEST] name=hypervisor_control_model_0_6 result=PASS\n");
         return true;
     }
 
@@ -1312,12 +1312,13 @@ namespace sys::kernel::hypervisor
         pr_info("[HV-C] vcpu-state-machine result=PASS irq=27\n");
         pr_info("[HV-F] single-vcpu-zilch-guest result=PASS\n");
         pr_info("[HV-0.2] guest-mmu-timer-el0 result=PASS\n");
-        pr_info("[HV-J] guest-smp-model cpus=%u result=PASS\n", maximum_vcpus_per_vm);
+        pr_info("[HV-MODEL-J] guest-smp-state cpus=%u result=PASS execution=modeled\n",
+                maximum_vcpus_per_vm);
         pr_info("[HV-K] virtual-irq-controller result=PASS irqs=%u\n", maximum_virtual_irqs);
         pr_info("[HV-L] vcpu-lifecycle-migration result=PASS migrations=1\n");
-        pr_info("[HV-M] multi-vm-isolation result=PASS vms=2\n");
+        pr_info("[HV-MODEL-M] multi-vm-isolation result=PASS vms=2 execution=modeled\n");
         pr_info("[HV-N] vm-teardown-vmid-reuse result=PASS\n");
-        pr_info("[HV-0.3] multi-vcpu-multivm-lifecycle result=PASS\n");
+        pr_info("[HV-MODEL-0.3] multi-vcpu-multivm-lifecycle result=PASS execution=modeled\n");
         return error_t::success;
     }
 } // namespace sys::kernel::hypervisor

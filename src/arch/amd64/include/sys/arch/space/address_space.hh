@@ -16,6 +16,9 @@ namespace sys::arch::space
     inline constexpr vaddr_t entry() noexcept {
         return 0U;
     }
+    inline constexpr vaddr_t entry(const address_space&) noexcept {
+        return 0U;
+    }
     inline constexpr vaddr_t stack_top() noexcept {
         return 0U;
     }

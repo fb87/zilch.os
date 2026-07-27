@@ -6,12 +6,16 @@
 
 namespace
 {
+    volatile sys::word_t bss_zero_probe;
     inline constexpr sys::word_t endpoint = 10U;
     inline constexpr sys::word_t fault_address = 0x20004000U;
     inline constexpr sys::word_t completion_magic = 0x50414745U;
 } // namespace
 
 extern "C" int main(sys::word_t role, sys::word_t) noexcept {
+    if (bss_zero_probe != 0U)
+        return 4;
+    bss_zero_probe = role;
     const sys::word_t client_index = role - 0x101U;
     if (client_index >= 2U)
         return 1;

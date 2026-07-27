@@ -74,16 +74,16 @@ Every completed requirement must link to:
 
 - [x] **PRD-001** Add `CONFIG_SELFTEST`. Evidence: `Makefile` release/certification selection.
 - [x] **PRD-002** Add `CONFIG_HYPERVISOR_SELFTEST`. Evidence: `Makefile` and guarded hypervisor test entry points.
-- [-] **PRD-003** Exclude all self-test code from production builds. Release guards and source gates exist; binary-level retained evidence and complete fixture audit remain open.
+- [-] **PRD-003** Exclude all self-test code from production builds. Test dispatch and the embedded guest fixture are excluded; hypervisor model implementation still needs extraction from production headers.
 - [x] **PRD-004** Ensure production kernel boots with all self-test options disabled. Runtime evidence: release boot reports `selftests=disabled`.
-- [ ] **PRD-005** Ensure production binary contains no profile-specific guest images or test fixtures.
+- [x] **PRD-005** Ensure production binary contains no profile-specific guest images or test fixtures. Evidence: release ELF symbol/string gate in batch 0079.
 - [-] **PRD-006** Add CI jobs for both production and self-test configurations. Local build gates exist; hosted CI evidence is not yet retained.
 
 ## 1.2 ABI cleanup
 
-- [ ] **PRD-007** Remove acceptance-report operations from the production ABI.
-- [ ] **PRD-008** Remove worker-tick and test-object creation operations from the production ABI.
-- [x] **PRD-009** Move hypervisor self-test entry points behind test configuration. Guarded by `CONFIG_HYPERVISOR_SELFTEST`.
+- [x] **PRD-007** Remove acceptance-report operations from the production ABI. Evidence: separate `sys::test_abi` in batch 0079.
+- [x] **PRD-008** Remove worker-tick and other certification operations from the production ABI. Product process/object operations remain product ABI mechanisms.
+- [x] **PRD-009** Move hypervisor self-test entry points behind test configuration. Evidence: separate certification ABI and `CONFIG_HYPERVISOR_SELFTEST` guest-object gating in batch 0079.
 - [-] **PRD-010** Version the native `sys` ABI. Headers use `sys/v1`, but compatibility/deprecation guarantees are not frozen.
 - [ ] **PRD-011** Document compatibility and deprecation rules.
 - [ ] **PRD-012** Add ABI layout checks for all public structures.
@@ -593,7 +593,7 @@ Every completed requirement must link to:
 - [ ] **DOC-002** `detail_design.md` reflects implemented mechanisms.
 - [x] **DOC-003** Every mandatory requirement has a stable ID in this checklist.
 - [ ] **DOC-004** Every requirement maps to implementation and tests.
-- [-] **DOC-005** This checklist distinguishes model-only evidence; legacy profile documents and runtime labels still require renaming.
+- [-] **DOC-005** Model-only runtime results now use `HV-MODEL` and `hypervisor_control_model`; legacy profile documents still require complete renaming and archival.
 - [ ] **DOC-006** Unsupported features are explicitly documented.
 - [ ] **DOC-007** Threat model documented.
 - [ ] **DOC-008** Trust boundaries documented.
@@ -729,3 +729,18 @@ The following are **implemented foundations**, not full production completion:
 Until the release gates above pass, the correct status is:
 
 > **Zilch is an advanced production-development baseline, not yet a production-ready kernel or hypervisor.**
+
+## Evidence update — batch 0077
+
+- **USR-013 remains `[-] IN PROGRESS`:** a real ARM64 ELF64 `PT_LOAD` parser and
+  loader now executes the three independent bootstrap programs, but selection
+  is still through an embedded role registry rather than an earlyfs pathname.
+- **USR-014 remains `[-] IN PROGRESS`:** bounds, overlap, alignment, executable
+  entry, and W^X are enforced for the bounded bootstrap loader; full process
+  policy and retained negative-test evidence remain open.
+- **USR-015 remains `[ ] NOT STARTED` for production completion:** the current
+  fixed stack entry remains; TLS, argv/envp, and auxiliary-vector construction
+  are not implemented.
+- **TST-012 remains `[-] IN PROGRESS`:** the two-client pager integration now
+  additionally exercises independent ELF loading and BSS zero-fill, but full
+  production pager policy and stress gates remain open.

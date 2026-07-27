@@ -218,7 +218,8 @@ namespace sys::kernel
             thread::launch_user_scheduler();
             if constexpr (CONFIG_ROOT_ONLY_BOOT) {
                 pr_info("root-only boot: cpu=0 entering init.elf entry=%llx\n",
-                        static_cast<unsigned long long>(arch::space::entry()));
+                        static_cast<unsigned long long>(
+                            arch::space::entry(thread::user_threads[0].address_space.native)));
             } else {
                 pr_info("user smp: cpu=0 entering server thread=0 seed=%llx\n",
                         static_cast<unsigned long long>(thread::user_threads[0].fuzz_seed));

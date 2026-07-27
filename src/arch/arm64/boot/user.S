@@ -3,21 +3,21 @@
 .balign 4096
 .global sys_arm64_user_image_start
 sys_arm64_user_image_start:
-.incbin USER_BIN_PATH
+.incbin USER_ELF_PATH
 .balign 4096
 .global sys_arm64_user_image_end
 sys_arm64_user_image_end:
 
 .global sys_arm64_memory_server_image_start
 sys_arm64_memory_server_image_start:
-.incbin MEMORY_SERVER_BIN_PATH
+.incbin MEMORY_SERVER_ELF_PATH
 .balign 4096
 .global sys_arm64_memory_server_image_end
 sys_arm64_memory_server_image_end:
 
 .global sys_arm64_pager_client_image_start
 sys_arm64_pager_client_image_start:
-.incbin PAGER_CLIENT_BIN_PATH
+.incbin PAGER_CLIENT_ELF_PATH
 .balign 4096
 .global sys_arm64_pager_client_image_end
 sys_arm64_pager_client_image_end:

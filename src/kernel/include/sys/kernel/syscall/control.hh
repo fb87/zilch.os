@@ -16,6 +16,9 @@
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/hypervisor.hh>
 #include <abi/sys/v1/syscall_numbers.hh>
+#if CONFIG_SELFTEST
+#include <sys/test_abi/v1/certification.hh>
+#endif
 
 namespace sys::kernel::syscall
 {
@@ -165,8 +168,127 @@ namespace sys::kernel::syscall
         if (arch::syscall::number(frame) != static_cast<word_t>(abi::v1::syscall::control))
             return false;
 
-        const auto operation =
-            static_cast<abi::v1::control_operation>(arch::syscall::argument(frame, 0U));
+        const word_t raw_operation = arch::syscall::argument(frame, 0U);
+#if CONFIG_SELFTEST
+        const auto test_operation = static_cast<test_abi::v1::control_operation>(raw_operation);
+        switch (test_operation) {
+            case test_abi::v1::control_operation::acceptance_report: {
+                if (current.owner == nullptr || !current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                const word_t test_id = arch::syscall::argument(frame, 1U);
+                const word_t passed = arch::syscall::argument(frame, 2U);
+                const char* name = "unknown";
+                switch (test_id) {
+                    case 1U:
+                        name = "root_only_boot";
+                        break;
+                    case 2U:
+                        name = "bootinfo_contract";
+                        break;
+                    case 3U:
+                        name = "capability_control";
+                        break;
+                    case 4U:
+                        name = "notification_control";
+                        break;
+                    case 5U:
+                        name = "root_created_objects";
+                        break;
+                    case 6U:
+                        name = "root_created_smp_fuzz";
+                        break;
+                    case 7U:
+                        name = "object_destroy_reuse";
+                        break;
+                    case 8U:
+                        name = "hypervisor_real_single_vcpu";
+                        break;
+                    case 9U:
+                        name = "hypervisor_negative_fuzz";
+                        break;
+                    case 10U:
+                        name = "hypervisor_control_model_0_4";
+                        break;
+                    case 11U:
+                        name = "userspace_pager_service";
+                        break;
+                    case 12U:
+                        name = "dynamic_ipc_objects";
+                        break;
+                    default:
+                        break;
+                }
+                pr_info("[TEST] name=%s result=%s\n", name, passed != 0U ? "PASS" : "FAIL");
+                set_control_result(frame,
+                                   passed != 0U ? error_t::success : error_t::invalid_argument);
+                return true;
+            }
+            case test_abi::v1::control_operation::acceptance_finalize: {
+                if (current.owner == nullptr || !current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                const word_t passed = arch::syscall::argument(frame, 1U);
+                pr_info("[ACCEPTANCE] profile=1.0 boot=root-only result=%s failures=%u\n",
+                        passed != 0U ? "PASS" : "FAIL", passed != 0U ? 0U : 1U);
+                set_control_result(frame,
+                                   passed != 0U ? error_t::success : error_t::invalid_argument);
+                return true;
+            }
+            case test_abi::v1::control_operation::acceptance_worker_tick: {
+                const cpu_id_t cpu = arch::cpu::current_id();
+                if (cpu >= thread::maximum_cpu_count || current.owner == nullptr ||
+                    current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                const word_t failure = arch::syscall::argument(frame, 1U);
+                const u64 operations = __atomic_add_fetch(&thread::certification_operations[cpu],
+                                                          1U, __ATOMIC_RELAXED);
+                if (failure != 0U) {
+                    __atomic_fetch_add(&thread::certification_failures[cpu], failure,
+                                       __ATOMIC_RELAXED);
+                }
+                if (operations == 4096U) {
+                    pr_info("root fuzz cpu=%u operations=%llu failures=%llu status=PASS\n",
+                            static_cast<unsigned int>(cpu),
+                            static_cast<unsigned long long>(operations),
+                            static_cast<unsigned long long>(__atomic_load_n(
+                                &thread::certification_failures[cpu], __ATOMIC_ACQUIRE)));
+                }
+                set_control_result(frame, error_t::success);
+                return true;
+            }
+            case test_abi::v1::control_operation::acceptance_query: {
+                const word_t cpu = arch::syscall::argument(frame, 1U);
+                const word_t selector = arch::syscall::argument(frame, 2U);
+                if (current.owner == nullptr || !current.owner->root ||
+                    cpu >= thread::maximum_cpu_count) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                const u64 value =
+                    selector == 0U
+                        ? __atomic_load_n(&thread::certification_operations[cpu], __ATOMIC_ACQUIRE)
+                        : __atomic_load_n(&thread::certification_failures[cpu], __ATOMIC_ACQUIRE);
+                arch::syscall::set_result(frame, static_cast<word_t>(value));
+                return true;
+            }
+            case test_abi::v1::control_operation::hypervisor_self_test:
+#if CONFIG_HYPERVISOR_SELFTEST
+                if (current.owner == nullptr || !current.owner->root)
+                    set_control_result(frame, error_t::denied);
+                else
+                    set_control_result(frame, hypervisor::self_test());
+#else
+                set_control_result(frame, error_t::unsupported);
+#endif
+                return true;
+        }
+#endif
+        const auto operation = static_cast<abi::v1::control_operation>(raw_operation);
         const word_t a1 = arch::syscall::argument(frame, 1U);
         const word_t a2 = arch::syscall::argument(frame, 2U);
         const word_t a3 = arch::syscall::argument(frame, 3U);
@@ -446,67 +568,6 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::interrupt_ack:
                 result = error_t::success;
                 break;
-#if CONFIG_SELFTEST
-            case abi::v1::control_operation::acceptance_report: {
-                if (current.owner == nullptr || !current.owner->root) {
-                    result = error_t::denied;
-                    break;
-                }
-                const char* name = "unknown";
-                switch (a1) {
-                    case 1U:
-                        name = "root_only_boot";
-                        break;
-                    case 2U:
-                        name = "bootinfo_contract";
-                        break;
-                    case 3U:
-                        name = "capability_control";
-                        break;
-                    case 4U:
-                        name = "notification_control";
-                        break;
-                    case 5U:
-                        name = "root_created_objects";
-                        break;
-                    case 6U:
-                        name = "root_created_smp_fuzz";
-                        break;
-                    case 7U:
-                        name = "object_destroy_reuse";
-                        break;
-                    case 8U:
-                        name = "hypervisor_profile_0_2";
-                        break;
-                    case 9U:
-                        name = "hypervisor_negative_fuzz";
-                        break;
-                    case 10U:
-                        name = "hypervisor_profile_0_4";
-                        break;
-                    case 11U:
-                        name = "userspace_pager_service";
-                        break;
-                    case 12U:
-                        name = "dynamic_ipc_objects";
-                        break;
-                    default:
-                        break;
-                }
-                pr_info("[TEST] name=%s result=%s\n", name, a2 != 0U ? "PASS" : "FAIL");
-                result = a2 != 0U ? error_t::success : error_t::invalid_argument;
-                break;
-            }
-            case abi::v1::control_operation::acceptance_finalize:
-                if (current.owner == nullptr || !current.owner->root) {
-                    result = error_t::denied;
-                    break;
-                }
-                pr_info("[ACCEPTANCE] profile=1.0 boot=root-only result=%s failures=%u\n",
-                        a1 != 0U ? "PASS" : "FAIL", a1 != 0U ? 0U : 1U);
-                result = a1 != 0U ? error_t::success : error_t::invalid_argument;
-                break;
-#endif
             case abi::v1::control_operation::scheduling_configure: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);
@@ -540,39 +601,6 @@ namespace sys::kernel::syscall
                     *current.owner, static_cast<capability_id_t>(a1),
                     static_cast<capability_id_t>(a2), static_cast<capability_id_t>(a3));
                 break;
-#if CONFIG_SELFTEST
-            case abi::v1::control_operation::acceptance_worker_tick: {
-                const cpu_id_t cpu = arch::cpu::current_id();
-                if (cpu >= thread::maximum_cpu_count || current.owner == nullptr ||
-                    current.owner->root) {
-                    result = error_t::denied;
-                    break;
-                }
-                const u64 operations = __atomic_add_fetch(&thread::certification_operations[cpu],
-                                                          1U, __ATOMIC_RELAXED);
-                if (operations == 4096U) {
-                    pr_info("root fuzz cpu=%u operations=%llu failures=%llu status=PASS\n",
-                            static_cast<unsigned int>(cpu),
-                            static_cast<unsigned long long>(operations),
-                            static_cast<unsigned long long>(__atomic_load_n(
-                                &thread::certification_failures[cpu], __ATOMIC_ACQUIRE)));
-                }
-                if (a1 != 0U) {
-                    __atomic_fetch_add(&thread::certification_failures[cpu], a1, __ATOMIC_RELAXED);
-                }
-                result = error_t::success;
-                break;
-            }
-#endif
-#if CONFIG_HYPERVISOR_SELFTEST
-            case abi::v1::control_operation::hypervisor_self_test:
-                if (current.owner == nullptr || !current.owner->root) {
-                    result = error_t::denied;
-                    break;
-                }
-                result = hypervisor::self_test();
-                break;
-#endif
             case abi::v1::control_operation::hypervisor_invoke: {
                 const auto hv_operation = static_cast<abi::v1::hypervisor_operation>(a1);
                 hypervisor::virtual_machine_t* vm = nullptr;
@@ -637,32 +665,9 @@ namespace sys::kernel::syscall
                             frame.x[4] = vm->last_diagnostic.value;
                         }
                         break;
-#if CONFIG_HYPERVISOR_SELFTEST
-                    case abi::v1::hypervisor_operation::fuzz:
-                        if (current.owner == nullptr || !current.owner->root)
-                            result = error_t::denied;
-                        else
-                            result = hypervisor::self_test();
-                        break;
-#endif
                 }
                 break;
             }
-#if CONFIG_SELFTEST
-            case abi::v1::control_operation::acceptance_query: {
-                if (current.owner == nullptr || !current.owner->root ||
-                    a1 >= thread::maximum_cpu_count) {
-                    result = error_t::denied;
-                    break;
-                }
-                const u64 value =
-                    a2 == 0U
-                        ? __atomic_load_n(&thread::certification_operations[a1], __ATOMIC_ACQUIRE)
-                        : __atomic_load_n(&thread::certification_failures[a1], __ATOMIC_ACQUIRE);
-                arch::syscall::set_result(frame, static_cast<word_t>(value));
-                return true;
-            }
-#endif
         }
         set_control_result(frame, result);
         return true;

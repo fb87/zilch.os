@@ -94,3 +94,18 @@ Required initial runtime records:
 These records establish loader behavior only; they do not complete USR-013
 through USR-018 until path-based userspace process management, startup state,
 failure reporting, and the associated evidence gates are satisfied.
+
+## Batch 0077 — bounded ARM64 ELF64 bootstrap loader
+
+- [-] Parse and validate ELF64 `PT_LOAD` program headers for independently
+  linked ARM64 bootstrap programs.
+- [-] Copy segments into private address-space storage and zero BSS.
+- [-] Enforce final RX/R/RW permissions and reject W+X.
+- [-] Validate that the entry lies in an executable segment.
+- [ ] Locate executables by path in earlyfs at runtime.
+- [ ] Allocate segment backing from dynamically delegated frames.
+- [ ] Build production initial stack, TLS, argv/envp, and auxiliary vector.
+
+The completed implementation is intentionally tracked as IN PROGRESS against
+USR-013 through USR-015 because the earlyfs path and dynamic resource model are
+not yet present.

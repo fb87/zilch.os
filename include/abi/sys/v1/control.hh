@@ -40,14 +40,5 @@ namespace sys::abi::v1
         endpoint_destroy = 33U,
         notification_create = 34U,
         notification_destroy = 35U,
-#if CONFIG_SELFTEST
-        acceptance_report = 0x80000000U,
-        acceptance_finalize = 0x80000001U,
-        acceptance_worker_tick = 0x80000002U,
-        acceptance_query = 0x80000003U,
-#endif
-#if CONFIG_HYPERVISOR_SELFTEST
-        hypervisor_self_test = 0x80000100U,
-#endif
     };
 } // namespace sys::abi::v1

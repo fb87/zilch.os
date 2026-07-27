@@ -3,9 +3,11 @@
 #endif
 
 #if CONFIG_SELFTEST
+#include <sys/certification.hh>
 #include <sys/control.hh>
 #include <sys/hypervisor.hh>
 #include <sys/ipc.hh>
+#include <sys/test_abi/v1/certification.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/control.hh>
@@ -20,9 +22,9 @@ namespace
         root_created_objects = 5U,
         root_created_smp_fuzz = 6U,
         object_destroy_reuse = 7U,
-        hypervisor_profile_0_2 = 8U,
+        hypervisor_real_single_vcpu = 8U,
         hypervisor_negative_fuzz = 9U,
-        hypervisor_profile_0_4 = 10U,
+        hypervisor_control_model_0_4 = 10U,
         userspace_pager_service = 11U,
         dynamic_ipc_objects = 12U,
     };
@@ -156,9 +158,9 @@ namespace
     }
 
     [[nodiscard]] bool report(test_id id, bool pass) noexcept {
-        return sys::control(sys::abi::v1::control_operation::acceptance_report,
-                            static_cast<sys::word_t>(id),
-                            pass ? 1U : 0U) == static_cast<sys::word_t>(sys::error_t::success);
+        return sys::certification::control(sys::test_abi::v1::control_operation::acceptance_report,
+                                           static_cast<sys::word_t>(id), pass ? 1U : 0U) ==
+               static_cast<sys::word_t>(sys::error_t::success);
     }
 
     [[nodiscard]] sys::word_t xorshift(sys::word_t& state) noexcept {
@@ -195,8 +197,8 @@ namespace
                     break;
             }
             const sys::word_t failure = result == expected ? 0U : 1U;
-            (void)sys::control(sys::abi::v1::control_operation::acceptance_worker_tick, failure,
-                               role, state);
+            (void)sys::certification::control(
+                sys::test_abi::v1::control_operation::acceptance_worker_tick, failure, role, state);
         }
     }
 
@@ -211,10 +213,10 @@ namespace
         for (sys::word_t spins = 0U; spins < 10000000U; ++spins) {
             bool complete = true;
             for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
-                const sys::word_t operations =
-                    sys::control(sys::abi::v1::control_operation::acceptance_query, cpu, 0U);
-                const sys::word_t failures =
-                    sys::control(sys::abi::v1::control_operation::acceptance_query, cpu, 1U);
+                const sys::word_t operations = sys::certification::control(
+                    sys::test_abi::v1::control_operation::acceptance_query, cpu, 0U);
+                const sys::word_t failures = sys::certification::control(
+                    sys::test_abi::v1::control_operation::acceptance_query, cpu, 1U);
                 if (operations < worker_threshold || failures != 0U) {
                     complete = false;
                 }
@@ -271,10 +273,10 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
            pass;
 
     const sys::word_t hv_self_test =
-        sys::control(sys::abi::v1::control_operation::hypervisor_self_test);
+        sys::certification::control(sys::test_abi::v1::control_operation::hypervisor_self_test);
     const bool hypervisor_pass = hv_self_test == static_cast<sys::word_t>(sys::error_t::success);
-    pass = report(test_id::hypervisor_profile_0_2, hypervisor_pass) && pass;
-    pass = report(test_id::hypervisor_profile_0_4, hypervisor_pass) && pass;
+    pass = report(test_id::hypervisor_real_single_vcpu, hypervisor_pass) && pass;
+    pass = report(test_id::hypervisor_control_model_0_4, hypervisor_pass) && pass;
     sys::word_t hv_fuzz_failures = 0U;
     for (sys::word_t iteration = 0U; iteration < 4096U; ++iteration) {
         const sys::word_t result = sys::hypervisor_invoke(
@@ -312,7 +314,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     }
     pass = report(test_id::object_destroy_reuse, destroyed && reused) && pass;
 
-    (void)sys::control(sys::abi::v1::control_operation::acceptance_finalize, pass ? 1U : 0U);
+    (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,
+                                      pass ? 1U : 0U);
     return pass ? 0 : 1;
 }
 

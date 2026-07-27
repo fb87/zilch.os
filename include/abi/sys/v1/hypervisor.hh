@@ -13,9 +13,6 @@ namespace sys::abi::v1
         vcpu_suspend = 5U,
         virtual_irq_inject = 6U,
         diagnostics = 7U,
-#if CONFIG_HYPERVISOR_SELFTEST
-        fuzz = 0x80000000U,
-#endif
     };
 
     enum class vm_exit_reason : word_t {

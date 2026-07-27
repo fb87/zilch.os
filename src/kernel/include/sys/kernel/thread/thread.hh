@@ -105,8 +105,8 @@ namespace sys::kernel::thread
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
         value.address_space.initialize(static_cast<u16>(id + 1U), argument0);
-        arch::thread::initialize_user(value.context, arch::space::entry(), arch::space::stack_top(),
-                                      argument0, argument1);
+        arch::thread::initialize_user(value.context, arch::space::entry(value.address_space.native),
+                                      arch::space::stack_top(), argument0, argument1);
     }
 
     [[nodiscard]] inline state load_state(const thread& value) noexcept {

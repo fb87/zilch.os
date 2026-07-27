@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/arch/memory.hh>
+#include <sys/arch/space/elf64.hh>
 #include <sys/types.hh>
 
 namespace sys::arch::space
@@ -45,16 +46,32 @@ namespace sys::arch::space
         return {sys_arm64_user_image_start, sys_arm64_user_image_end};
     }
 
-    [[nodiscard]] inline usize_t user_image_size() noexcept {
-        return static_cast<usize_t>(sys_arm64_user_image_end - sys_arm64_user_image_start);
+    [[nodiscard]] inline constexpr vaddr_t user_image_end() noexcept {
+        return user_code + elf64::bootstrap_size;
     }
 
-    [[nodiscard]] inline usize_t user_image_pages() noexcept {
-        return (user_image_size() + memory::page_size - 1U) / memory::page_size;
-    }
+    inline void synchronize_instruction_cache(void* start, usize_t size) noexcept {
+        if (size == 0U)
+            return;
 
-    [[nodiscard]] inline vaddr_t user_image_end() noexcept {
-        return user_code + static_cast<vaddr_t>(user_image_pages()) * memory::page_size;
+        u64 ctr = 0U;
+        __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+        const usize_t data_line = static_cast<usize_t>(4U)
+                                  << static_cast<usize_t>((ctr >> 16U) & 0xfU);
+        const usize_t instruction_line = static_cast<usize_t>(4U)
+                                         << static_cast<usize_t>(ctr & 0xfU);
+        const vaddr_t begin = reinterpret_cast<vaddr_t>(start);
+        const vaddr_t end = begin + size;
+
+        for (vaddr_t address = begin & ~(data_line - 1U); address < end; address += data_line) {
+            __asm__ volatile("dc cvau, %0" : : "r"(address) : "memory");
+        }
+        __asm__ volatile("dsb ish" : : : "memory");
+        for (vaddr_t address = begin & ~(instruction_line - 1U); address < end;
+             address += instruction_line) {
+            __asm__ volatile("ic ivau, %0" : : "r"(address) : "memory");
+        }
+        __asm__ volatile("dsb ish\n\tisb" : : : "memory");
     }
 
     struct address_space {
@@ -62,7 +79,11 @@ namespace sys::arch::space
         memory::table_t l1{};
         memory::table_t l2{};
         memory::table_t l3{};
+        alignas(memory::page_size) u8 image_storage[elf64::bootstrap_size]{};
+        elf64::page_permissions image_permissions[elf64::bootstrap_pages]{};
         alignas(memory::page_size) u8 stack[memory::page_size]{};
+        vaddr_t image_entry{user_code};
+        error_t image_status{error_t::invalid_argument};
         u16 asid{};
         volatile u32 active_cpu_mask{};
     };
@@ -71,22 +92,34 @@ namespace sys::arch::space
         value.asid = asid;
         value.active_cpu_mask = 0U;
         memory::build_kernel_table(value.l0, value.l1, value.l2);
+        memory::clear(value.l3);
         const usize_t code_l2 = static_cast<usize_t>((user_code >> 21U) & 0x1ffU);
         value.l2.entry[code_l2] = memory::table_descriptor(value.l3);
 
         const image_view image = image_for_role(role);
-        const u64 image_phys = reinterpret_cast<u64>(image.start) & ~0xfffULL;
         const usize_t image_size = static_cast<usize_t>(image.end - image.start);
-        const usize_t image_pages = (image_size + memory::page_size - 1U) / memory::page_size;
-        const usize_t first_index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
-        for (usize_t page = 0U; page < image_pages; ++page) {
-            const usize_t index = first_index + page;
-            if (index >= 512U)
-                break;
-            value.l3.entry[index] = (image_phys + page * memory::page_size) |
-                                    memory::descriptor_page | memory::access_flag |
-                                    memory::inner_shareable | memory::attr_normal |
-                                    memory::ap_el0_ro;
+        const elf64::result loaded =
+            elf64::load(reinterpret_cast<const u8*>(image.start), image_size, user_code,
+                        value.image_storage, value.image_permissions);
+        value.image_status = loaded.status;
+        value.image_entry = loaded.entry;
+        if (loaded.status == error_t::success) {
+            synchronize_instruction_cache(value.image_storage, elf64::bootstrap_size);
+            const usize_t first_index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
+            for (usize_t page = 0U; page < elf64::bootstrap_pages; ++page) {
+                const auto permission = value.image_permissions[page];
+                if (!permission.present)
+                    continue;
+                u64 descriptor =
+                    (reinterpret_cast<u64>(&value.image_storage[page * memory::page_size]) &
+                     ~0xfffULL) |
+                    memory::descriptor_page | memory::access_flag | memory::inner_shareable |
+                    memory::attr_normal;
+                descriptor |= permission.writable ? memory::ap_el0_rw : memory::ap_el0_ro;
+                if (!permission.executable)
+                    descriptor |= memory::pxn | memory::uxn;
+                value.l3.entry[first_index + page] = descriptor;
+            }
         }
 
         const u64 stack_phys = reinterpret_cast<u64>(value.stack) & ~0xfffULL;
@@ -142,8 +175,8 @@ namespace sys::arch::space
         return error_t::success;
     }
 
-    [[nodiscard]] inline constexpr vaddr_t entry() noexcept {
-        return user_code;
+    [[nodiscard]] inline vaddr_t entry(const address_space& value) noexcept {
+        return value.image_entry;
     }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + memory::page_size;

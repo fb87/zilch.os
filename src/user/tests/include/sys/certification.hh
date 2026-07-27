@@ -1,0 +1,16 @@
+#pragma once
+
+#include <sys/syscall.hh>
+#include <sys/test_abi/v1/certification.hh>
+#include <sys/types.hh>
+
+namespace sys::certification
+{
+    [[nodiscard]] inline word_t control(test_abi::v1::control_operation operation,
+                                        word_t argument1 = 0U, word_t argument2 = 0U,
+                                        word_t argument3 = 0U, word_t argument4 = 0U,
+                                        word_t argument5 = 0U) noexcept {
+        return invoke(abi::v1::syscall::control, static_cast<word_t>(operation), argument1,
+                      argument2, argument3, argument4, argument5);
+    }
+} // namespace sys::certification

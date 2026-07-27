@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 USER_OBJDIR := $(OBJTREE)/user
 USER_LDSCRIPT := $(SRCTREE)/src/user/runtime/linker/user-$(ARCH).ld
-USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) \
+USER_TEST_INCLUDES := $(if $(filter 1,$(CONFIG_SELFTEST)),-I$(SRCTREE)/tests/include -I$(SRCTREE)/src/user/tests/include,)
+USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(USER_TEST_INCLUDES) \
     -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
     -DCONFIG_SELFTEST=$(CONFIG_SELFTEST) \
     -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \
@@ -38,7 +39,7 @@ $$(USER_OBJDIR)/$(1).elf: $$(USER_CRT) $$(USER_COMMON_OBJECTS) $$(USER_$(1)_OBJE
 	@mkdir -p $$(dir $$@)
 	@printf '  ULD     %s\n' '$$@'
 	@$$(LD) $$(LD_EMULATION) -T $$(USER_LDSCRIPT) --gc-sections --build-id=none \
-		-Map=$$(USER_OBJDIR)/$(1).map -o $$@ $$(USER_CRT) $$(USER_COMMON_OBJECTS) $$(USER_$(1)_OBJECT)
+		-z max-page-size=0x1000 -Map=$$(USER_OBJDIR)/$(1).map -o $$@ $$(USER_CRT) $$(USER_COMMON_OBJECTS) $$(USER_$(1)_OBJECT)
 endef
 $(foreach program,$(USER_PROGRAMS),$(eval $(call build_user_program,$(program))))
 
