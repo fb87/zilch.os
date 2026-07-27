@@ -37,11 +37,18 @@ namespace sys::arch
         inline table_t kernel_l1{};
         inline table_t kernel_l2{};
         inline table_t kernel_identity_l2{};
+        inline table_t kernel_image_l3[2]{};
         inline table_t kernel_stack_l3{};
         inline u32 kernel_identity_ready{};
 
         extern "C" char __cpu_stacks_start[];
         extern "C" char __hypervisor_stacks_end[];
+        extern "C" char __kernel_text_start[];
+        extern "C" char __kernel_text_end[];
+        extern "C" char __kernel_rodata_start[];
+        extern "C" char __kernel_rodata_end[];
+        extern "C" char __kernel_data_start[];
+        extern "C" char __kernel_data_end[];
 
         inline void clear(table_t& table) noexcept {
             for (usize_t i = 0U; i < entries; ++i)
@@ -56,11 +63,35 @@ namespace sys::arch
             if (__atomic_load_n(&kernel_identity_ready, __ATOMIC_ACQUIRE) != 0U)
                 return;
             clear(kernel_identity_l2);
+            clear(kernel_image_l3[0]);
+            clear(kernel_image_l3[1]);
             clear(kernel_stack_l3);
             for (usize_t index = 0U; index < entries; ++index) {
                 const paddr_t physical = 0x40000000ULL + index * 0x200000ULL;
                 kernel_identity_l2.entry[index] = physical | descriptor_valid | access_flag |
                                                   inner_shareable | attr_normal | ap_el1_rw | uxn;
+            }
+
+            constexpr uintptr_t identity_base = 0x40000000ULL;
+            constexpr usize_t image_windows = 2U;
+            for (usize_t window = 0U; window < image_windows; ++window) {
+                for (usize_t index = 0U; index < entries; ++index) {
+                    const uintptr_t address =
+                        identity_base + window * 0x200000ULL + index * page_size;
+                    u64 attributes = access_flag | inner_shareable | attr_normal | uxn | pxn;
+                    if (address >= reinterpret_cast<uintptr_t>(__kernel_text_start) &&
+                        address < reinterpret_cast<uintptr_t>(__kernel_text_end)) {
+                        attributes = access_flag | inner_shareable | attr_normal | ap_el1_ro | uxn;
+                    } else if (address >= reinterpret_cast<uintptr_t>(__kernel_rodata_start) &&
+                               address < reinterpret_cast<uintptr_t>(__kernel_rodata_end)) {
+                        attributes =
+                            access_flag | inner_shareable | attr_normal | ap_el1_ro | pxn | uxn;
+                    } else {
+                        attributes |= ap_el1_rw;
+                    }
+                    kernel_image_l3[window].entry[index] = address | descriptor_page | attributes;
+                }
+                kernel_identity_l2.entry[window] = table_descriptor(kernel_image_l3[window]);
             }
 
             const uintptr_t stack_window =
@@ -136,6 +167,33 @@ namespace sys::arch
                     kernel_stack_l3.entry[el1_index + 1U] == 0U ||
                     kernel_stack_l3.entry[el2_index + 1U] == 0U)
                     return false;
+            }
+            return true;
+        }
+
+        [[nodiscard]] inline bool kernel_permissions_valid() noexcept {
+            constexpr uintptr_t identity_base = 0x40000000ULL;
+            for (usize_t window = 0U; window < 2U; ++window) {
+                if (kernel_identity_l2.entry[window] != table_descriptor(kernel_image_l3[window]))
+                    return false;
+                for (usize_t index = 0U; index < entries; ++index) {
+                    const uintptr_t address =
+                        identity_base + window * 0x200000ULL + index * page_size;
+                    const u64 descriptor = kernel_image_l3[window].entry[index];
+                    const bool read_only = (descriptor & (3ULL << 6U)) == ap_el1_ro;
+                    const bool executable = (descriptor & pxn) == 0U;
+                    const bool text = address >= reinterpret_cast<uintptr_t>(__kernel_text_start) &&
+                                      address < reinterpret_cast<uintptr_t>(__kernel_text_end);
+                    const bool rodata =
+                        address >= reinterpret_cast<uintptr_t>(__kernel_rodata_start) &&
+                        address < reinterpret_cast<uintptr_t>(__kernel_rodata_end);
+                    const bool data = address >= reinterpret_cast<uintptr_t>(__kernel_data_start) &&
+                                      address < reinterpret_cast<uintptr_t>(__kernel_data_end);
+                    if ((text && (!read_only || !executable)) ||
+                        (rodata && (!read_only || executable)) ||
+                        (data && (read_only || executable)) || (!read_only && executable))
+                        return false;
+                }
             }
             return true;
         }

@@ -480,9 +480,9 @@ Every completed requirement must link to:
 
 ## 10.1 Memory protection
 
-- [-] **SEC-001** Kernel and guest W^X checks exist in bring-up paths.
-- [ ] **SEC-002** W^X enforced in every production address space.
-- [ ] **SEC-003** Kernel read-only data protected after initialization.
+- [x] **SEC-001** Kernel, user, and guest mappings enforce W^X, with bootstrap page-table certification and negative mapping tests.
+- [x] **SEC-002** Every production TTBR0 root shares page-granular kernel RX/RO-NX/RW-NX mappings; user and guest mapping APIs reject writable-executable permissions.
+- [x] **SEC-003** Embedded images and kernel rodata are mapped EL1 read-only and non-executable after MMU initialization; bootstrap validates every image-window PTE.
 - [x] **SEC-004** Every EL1 and EL2 per-CPU stack has an unmapped guard page below its 32 KiB usable region, plus exception-time bounds/canary checks and retained high-water marks. Bootstrap certification verifies all guard and adjacent usable PTEs.
 - [ ] **SEC-005** User copy routines validate full ranges and overflow.
 - [x] **SEC-006** Reusable physical pages are scrubbed on release and allocation; user-thread and vCPU architectural, IPC, timer, interrupt, exit, and diagnostic state is cleared before slot reuse. Certification poisons and verifies both page and vCPU reuse boundaries.

@@ -4,11 +4,34 @@ ENTRY(_start)
 SECTIONS
 {
   . = 0x40080000;
-  .text : ALIGN(4096) { KEEP(*(.text.boot)) KEEP(*(.text.vectors)) *(.text .text.*) }
-  .user_text : ALIGN(4096) { KEEP(*(.user_text)) }
-  .rodata : ALIGN(4096) { *(.rodata .rodata.*) }
-  .data : ALIGN(4096) { *(.data .data.*) }
-  .bss (NOLOAD) : ALIGN(4096) { __bss_start = .; *(.bss .bss.* COMMON) __bss_end = .; }
+  .text : ALIGN(4096) {
+    __kernel_text_start = .;
+    KEEP(*(.text.boot))
+    KEEP(*(.text.vectors))
+    *(.text .text.*)
+    . = ALIGN(4096);
+    __kernel_text_end = .;
+  }
+  .user_text : ALIGN(4096) {
+    __kernel_rodata_start = .;
+    KEEP(*(.user_text))
+  }
+  .rodata : ALIGN(4096) {
+    *(.rodata .rodata.*)
+    . = ALIGN(4096);
+    __kernel_rodata_end = .;
+  }
+  .data : ALIGN(4096) {
+    __kernel_data_start = .;
+    *(.data .data.*)
+  }
+  .bss (NOLOAD) : ALIGN(4096) {
+    __bss_start = .;
+    *(.bss .bss.* COMMON)
+    . = ALIGN(4096);
+    __bss_end = .;
+    __kernel_data_end = .;
+  }
   .stacks (NOLOAD) : ALIGN(2097152) {
     __cpu_stacks_start = .;
     . += 4 * 0x10000;

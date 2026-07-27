@@ -1,3 +1,11 @@
+## 0132 - Enforce kernel page-granular W^X
+
+- Export page-aligned kernel text, rodata, data, and BSS linker boundaries.
+- Replace both coarse kernel-image identity blocks with shared L3 page tables.
+- Map kernel text RX, embedded user images and rodata RO-NX, and mutable state RW-NX.
+- Validate every kernel image PTE at certification bootstrap and reject any writable-executable page.
+- Share the protected kernel mapping across the permanent kernel and all user TTBR0 roots.
+
 ## 0131 - Contain user and guest faults
 
 - Reconstruct guest fault IPA from HPFAR_EL2 and FAR_EL2 in abort exit records.
