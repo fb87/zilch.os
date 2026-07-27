@@ -167,8 +167,8 @@ Every completed requirement must link to:
 - [-] **IPC-018** ARM64 undefined-instruction exceptions are classified as instruction faults and enter the same fault-IPC path; a real PL3 undefined-instruction integration test remains open.
 - [-] **IPC-019** Fault address, access syndrome, and PC are delivered; cross-architecture metadata contract is not frozen.
 - [-] **IPC-020** Resume path passes and terminate mechanism exists; negative-policy coverage remains open.
-- [ ] **IPC-021** Pager death handling implemented.
-- [ ] **IPC-022** Nested fault handling is bounded and deterministic.
+- [x] **IPC-021** Pager exit with live reply authority immediately terminates its faulting caller; queued or accepted orphaned faults retain a kernel safety deadline and terminate deterministically on expiry.
+- [x] **IPC-022** A thread may own only one pending fault record; attempted nested delivery is rejected and the faulting thread is contained instead of overwriting pager authority.
 
 ### IPC completion gate
 
@@ -213,8 +213,8 @@ Every completed requirement must link to:
 - [-] **MEM-022** Pager endpoint is configured for test address spaces; general per-region policy remains open.
 - [x] **MEM-023** Fault IPC carries fault address, access syndrome/type data, and PC.
 - [-] **MEM-024** Map/resume and terminate mechanisms exist; denial/invalid-reply policy tests remain open.
-- [ ] **MEM-025** Concurrent faults to the same page are serialized correctly.
-- [ ] **MEM-026** Pager timeout/death policy implemented outside the kernel.
+- [-] **MEM-025** Fault map/reply is serialized by the IPC lifecycle and mapping locks, and an already-installed identical mapping completes idempotently with one mapping record; a forced simultaneous multi-CPU interleaving remains open.
+- [-] **MEM-026** The kernel enforces a bounded orphaned-fault safety deadline and pager exit consumes live fault reply authority; userspace supervisor restart/reassignment policy remains open.
 
 ### Memory completion gate
 

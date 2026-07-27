@@ -1,3 +1,11 @@
+## 0143 - Bound pager failure and duplicate fault resolution
+
+- Serialize fault map/reply state with the IPC lifecycle and mapping locks.
+- Treat an already-installed identical page mapping as an idempotent concurrent completion.
+- Retain fault deadlines after pager rendezvous and terminate orphaned callers on expiry.
+- Consume pending fault authority when a pager exits and reject nested pending-fault overwrite.
+- Add duplicate-page, nested-fault, and pager-timeout certification evidence.
+
 ## 0142 - Scale and guard capability spaces
 
 - Replace the single 64-slot CSpace array with a two-level 4×64 radix.

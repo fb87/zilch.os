@@ -1225,6 +1225,26 @@ namespace sys::kernel::memory
         return error_t::success;
     }
 
+    [[nodiscard]] inline bool mapping_present(const space::address_space& target, vaddr_t address,
+                                              permission permissions) noexcept {
+        const object::reference_t space_reference = object::reference(target.object);
+        bool present = false;
+        lock_mappings();
+        for (const frame& candidate : frames) {
+            for (const auto& mapping : candidate.mappings) {
+                if (mapping.valid && same_reference(mapping.address_space, space_reference) &&
+                    mapping.address == address && mapping.permissions == permissions) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present)
+                break;
+        }
+        unlock_mappings();
+        return present;
+    }
+
     [[nodiscard]] inline error_t unmap(space::address_space& target, frame& source,
                                        vaddr_t address = 0U) noexcept {
         const object::reference_t space_reference = object::reference(target.object);

@@ -488,6 +488,9 @@ namespace sys::kernel::syscall
                             (void)thread::wake(caller);
                             ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
                         } else if (caller_state == thread::state::blocked_fault) {
+                            caller.ipc_timeout_active = false;
+                            caller.waiting_endpoint = 0U;
+                            caller.fault_disposition = fault::disposition::terminate;
                             thread::store_state(caller, thread::state::terminated);
                         }
                     }

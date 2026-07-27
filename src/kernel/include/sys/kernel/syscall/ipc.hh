@@ -287,7 +287,10 @@ namespace sys::kernel::syscall
         if (caller_state == thread::state::blocked_fault) {
             const auto disposition = static_cast<fault::disposition>(server.message[0]);
             caller.fault_disposition = disposition;
+            caller.ipc_timeout_active = false;
+            caller.waiting_endpoint = 0U;
             if (disposition == fault::disposition::resume) {
+                caller.last_fault = {};
                 (void)thread::wake(caller);
                 ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
             } else {
@@ -342,9 +345,10 @@ namespace sys::kernel::syscall
             for (usize_t i = 0U; i < 4U; ++i)
                 frame.x[i + 2U] = sender.message[i];
             install_reply(current, sender);
-            sender.ipc_timeout_active = false;
-            if (sender_state != thread::state::blocked_fault)
+            if (sender_state != thread::state::blocked_fault) {
+                sender.ipc_timeout_active = false;
                 thread::store_state(sender, thread::state::blocked_reply);
+            }
             thread::unlock_ipc_lifecycle();
             __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
             const bool valid = ipc::validate(*endpoint);

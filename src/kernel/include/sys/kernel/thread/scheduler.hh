@@ -28,6 +28,12 @@ namespace sys::kernel::thread
 {
     inline constexpr u32 user_thread_count = 10U;
     inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
+    inline constexpr u64 fault_timeout_ticks = 500U;
+
+    inline void expire_ipc_timeouts(cpu_id_t cpu, u64 now) noexcept;
+    [[nodiscard]] inline bool deliver_fault_ipc(thread& value, arch::thread::context& frame,
+                                                u64 syndrome, vaddr_t fault_address,
+                                                fault::kind fault_kind) noexcept;
 
     [[nodiscard]] inline constexpr fault::kind classify_user_fault(u64 exception_class) noexcept {
         if (exception_class == 0x00U || exception_class == 0x20U || exception_class == 0x21U)
@@ -256,22 +262,35 @@ namespace sys::kernel::thread
     [[nodiscard]] inline error_t resolve_fault_with_frame(thread& pager, thread& target,
                                                           memory::frame& source, vaddr_t address,
                                                           memory::permission permissions) noexcept {
+        lock_ipc_lifecycle();
         if (load_state(target) != state::blocked_fault ||
-            target.fault_disposition != fault::disposition::pending)
+            target.fault_disposition != fault::disposition::pending) {
+            unlock_ipc_lifecycle();
             return error_t::invalid_argument;
-        if (target.owner == nullptr || pager.owner == nullptr)
+        }
+        if (target.owner == nullptr || pager.owner == nullptr) {
+            unlock_ipc_lifecycle();
             return error_t::denied;
+        }
         const vaddr_t page_address = address & ~(memory::page_size - 1U);
-        const error_t result =
+        error_t result =
             memory::map(target.address_space, source, page_address, permissions, 0U, 0U);
-        if (result != error_t::success)
+        if (result == error_t::busy &&
+            memory::mapping_present(target.address_space, page_address, permissions))
+            result = error_t::success;
+        if (result != error_t::success) {
+            unlock_ipc_lifecycle();
             return result;
+        }
         target.fault_disposition = fault::disposition::resume;
         target.last_fault = {};
         target.waiting_endpoint = 0U;
         target.ipc_timeout_active = false;
-        if (!compare_state(target, state::blocked_fault, state::ready))
+        if (!compare_state(target, state::blocked_fault, state::ready)) {
+            unlock_ipc_lifecycle();
             return error_t::busy;
+        }
+        unlock_ipc_lifecycle();
         ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
         return error_t::success;
     }
@@ -805,6 +824,52 @@ namespace sys::kernel::thread
             pager_target.fault_disposition != fault::disposition::resume ||
             pager_frame.mapping_count != 1U)
             return error_t::invalid_argument;
+        pager_target.last_fault = {fault::kind::data_abort,
+                                   pager_target.id,
+                                   pager_target.object.generation,
+                                   0x96000004U,
+                                   (arch::space::user_code + 0x4000ULL),
+                                   pager_target.context.instruction_pointer};
+        pager_target.fault_disposition = fault::disposition::pending;
+        pager_target.waiting_endpoint = 10U;
+        store_state(pager_target, state::blocked_fault);
+        result = resolve_fault_with_frame(
+            user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x4000ULL,
+            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
+                                            static_cast<u8>(memory::permission::write)));
+        if (result != error_t::success || load_state(pager_target) != state::ready ||
+            pager_frame.mapping_count != 1U)
+            return error_t::invalid_argument;
+        pager_target.last_fault = {fault::kind::data_abort,
+                                   pager_target.id,
+                                   pager_target.object.generation,
+                                   0x96000004U,
+                                   (arch::space::user_code + 0x5000ULL),
+                                   pager_target.context.instruction_pointer};
+        pager_target.fault_disposition = fault::disposition::pending;
+        if (deliver_fault_ipc(pager_target, pager_target.context, 0x96000004U,
+                              arch::space::user_code + 0x5000ULL, fault::kind::data_abort) ||
+            load_state(pager_target) != state::ready)
+            return error_t::invalid_argument;
+        pager_target.last_fault = {fault::kind::data_abort,
+                                   pager_target.id,
+                                   pager_target.object.generation,
+                                   0x96000004U,
+                                   (arch::space::user_code + 0x6000ULL),
+                                   pager_target.context.instruction_pointer};
+        pager_target.fault_disposition = fault::disposition::pending;
+        pager_target.waiting_endpoint = 10U;
+        pager_target.ipc_timeout_active = true;
+        pager_target.ipc_deadline = 1U;
+        store_state(pager_target, state::blocked_fault);
+        expire_ipc_timeouts(pager_target.pinned_cpu, 2U);
+        if (load_state(pager_target) != state::terminated ||
+            pager_target.fault_disposition != fault::disposition::terminate ||
+            pager_target.ipc_timeout_active)
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=same_page_fault_serialization result=PASS mappings=1\n");
+        pr_info("[TEST] name=nested_fault_bound result=PASS depth=1\n");
+        pr_info("[TEST] name=pager_timeout_death result=PASS disposition=terminate\n");
         result = memory::unmap(pager_target.address_space, pager_frame,
                                arch::space::user_code + 0x4000ULL);
         if (result != error_t::success)
@@ -940,7 +1005,7 @@ namespace sys::kernel::thread
                 continue;
             const state current_state = load_state(value);
             if (current_state != state::blocked_send && current_state != state::blocked_receive &&
-                current_state != state::blocked_reply) {
+                current_state != state::blocked_reply && current_state != state::blocked_fault) {
                 value.ipc_timeout_active = false;
                 continue;
             }
@@ -982,8 +1047,14 @@ namespace sys::kernel::thread
             value.ipc_timeout_active = false;
             value.transfer = {};
             value.pending_result = error_t::timed_out;
-            if (load_state(value) != state::faulted && load_state(value) != state::terminated)
+            if (current_state == state::blocked_fault) {
+                value.fault_disposition = fault::disposition::terminate;
+                value.waiting_endpoint = 0U;
+                store_state(value, state::terminated);
+            } else if (load_state(value) != state::faulted &&
+                       load_state(value) != state::terminated) {
                 store_state(value, state::ready);
+            }
             unlock_ipc_lifecycle();
         }
     }
@@ -1230,6 +1301,9 @@ namespace sys::kernel::thread
                                                 fault::kind fault_kind) noexcept {
         if (value.owner == nullptr || value.owner->fault_endpoint == 0U)
             return false;
+        if (value.last_fault.type != fault::kind::none &&
+            value.fault_disposition == fault::disposition::pending)
+            return false;
         object::header_t* endpoint_header = nullptr;
         const error_t lookup_result = capability::lookup(
             value.owner->cspace, value.owner->fault_endpoint, object::type_t::endpoint,
@@ -1249,6 +1323,8 @@ namespace sys::kernel::thread
         value.message[2] = static_cast<word_t>(fault_address);
         value.message[3] = static_cast<word_t>(frame.instruction_pointer);
         value.waiting_endpoint = value.owner->fault_endpoint;
+        value.ipc_timeout_active = true;
+        value.ipc_deadline = platform::timer::ticks(value.pinned_cpu) + fault_timeout_ticks;
         prepare_block(frame, state::blocked_fault);
 
         auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
