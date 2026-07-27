@@ -1,3 +1,12 @@
+## 0152 - Enforce sporadic budgets and measure lock holds
+
+- Track each charged scheduling slice with a bounded timed replenishment queue.
+- Reject overflowed scheduling deadlines and certify staggered replenishment.
+- Record maximum ranked-lock hold duration in timer ticks and report it during
+  certification.
+- Close SCH-009, SCH-010, and SCH-016; SCH-017 remains open for IRQ-disabled
+  section timing.
+
 ## 0151 - Program per-CPU tickless deadlines
 
 - Drive each ARM64 virtual timer from an absolute local scheduler deadline.

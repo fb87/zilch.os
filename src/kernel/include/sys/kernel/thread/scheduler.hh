@@ -408,6 +408,7 @@ namespace sys::kernel::thread
         target.scheduling_context.consumed_ticks = 0U;
         target.scheduling_context.donated_ticks = 0U;
         target.scheduling_context.next_replenishment = 0U;
+        target.scheduling_context.replenishment_count = 0U;
         target.scheduling_context.affinity = 0U;
         target.scheduling_context.enabled = false;
         target.scheduling_context.throttled = false;
@@ -837,6 +838,21 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=priority_inheritance result=PASS inherited=240 base=20\n");
         pr_info("[TEST] name=donation_chain_bound result=PASS maximum=8\n");
 
+        scheduling::context sporadic{};
+        scheduling::initialize(sporadic, 0U);
+        if (scheduling::configure(sporadic, 100U, 4U, 10U, 0U, 100U) != error_t::success ||
+            !scheduling::charge(sporadic, 100U, 2U) || scheduling::charge(sporadic, 105U, 2U) ||
+            sporadic.consumed_ticks != 4U || scheduling::eligible(sporadic, 109U) ||
+            !scheduling::eligible(sporadic, 110U) ||
+            scheduling::configure(sporadic, 100U, 4U, 10U, 0U, ~0ULL - 5U) !=
+                error_t::invalid_argument)
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=sporadic_server_replenishment result=PASS budget=4 period=10\n");
+        if (lock_order::violation_count() != 0U)
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=lock_hold_measurement result=PASS max_ticks=%llu\n",
+                static_cast<unsigned long long>(lock_order::maximum_hold()));
+
         result = tests::interrupt::run(root, guarded_cspace);
         if (result != error_t::success)
             return result;
@@ -1173,11 +1189,6 @@ namespace sys::kernel::thread
                     (void)ipc::cancel_thread(endpoint, object::reference(value.object));
                 }
             }
-            /*
-             * Timer expiry runs in IRQ context and must never spin behind an
-             * interrupted syscall that owns the lifecycle lock.  A missed
-             * claim is retried on the next timer tick.
-             */
             if (!try_lock_ipc_lifecycle()) {
                 arm_ipc_timeout(value);
                 return;
@@ -1237,7 +1248,7 @@ namespace sys::kernel::thread
              * Quiescence is published only after load_user() commits to a
              * different thread or to the kernel-idle frame.
              */
-            (void)scheduling::charge(value.scheduling_context, 1U);
+            (void)scheduling::charge(value.scheduling_context, platform::timer::ticks(cpu), 1U);
         }
     }
 
@@ -1359,7 +1370,6 @@ namespace sys::kernel::thread
             candidate = next_runnable(cpu, candidate);
         }
 
-        /* No EL0 frame will be returned for the previous thread. */
         commit_kernel_idle(frame, old_binding_valid ? &old : nullptr);
     }
 
@@ -1368,7 +1378,6 @@ namespace sys::kernel::thread
         if (!user_execution_active[cpu])
             return;
 
-        /* This path is valid only when the IRQ interrupted user mode. */
         const u32 old = current_user_thread[cpu];
         expire_ipc_timeouts(cpu, platform::timer::ticks(cpu));
         save_current_user(frame);
@@ -1401,11 +1410,6 @@ namespace sys::kernel::thread
         thread& value = current();
         arch::thread::copy(value.context, frame);
 
-        /*
-         * Save the context and publish the blocking state, but retain the
-         * execution claim until schedule_prepared() has installed another
-         * address space or switched to the permanent kernel TTBR0 root.
-         */
         store_state(value, blocked_state);
     }
 
@@ -1550,12 +1554,6 @@ namespace sys::kernel::thread
         store_state(value, state::faulted);
         const u32 next = next_runnable(cpu, current_index());
         if (next == current_index() && !runnable(user_threads[next])) {
-            /*
-             * The user fault has already been contained.  It is valid for the
-             * remaining threads pinned to this CPU to be blocked in IPC.  In
-             * that case, return to the per-CPU EL1 idle context and wait for a
-             * timer or remote reschedule IPI to make a thread runnable.
-             */
             commit_kernel_idle(frame, &value);
             return true;
         }

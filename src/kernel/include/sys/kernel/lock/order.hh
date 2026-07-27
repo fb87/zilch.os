@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/arch/cpu.hh>
+#include <sys/arch/timer.hh>
 #include <sys/types.hh>
 
 namespace sys::kernel::lock_order
@@ -26,11 +27,13 @@ namespace sys::kernel::lock_order
     struct held_lock {
         rank order{};
         const volatile void* identity{};
+        u64 acquired_at{};
     };
 
     inline held_lock held[maximum_cpus][maximum_depth]{};
     inline u32 depth[maximum_cpus]{};
     inline volatile u64 violations{};
+    inline volatile u64 maximum_hold_ticks{};
 
     [[nodiscard]] inline bool may_acquire(rank order, const volatile void* identity) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
@@ -56,7 +59,7 @@ namespace sys::kernel::lock_order
             __atomic_fetch_add(&violations, 1U, __ATOMIC_RELAXED);
             return;
         }
-        held[cpu][depth[cpu]++] = {order, identity};
+        held[cpu][depth[cpu]++] = {order, identity, arch::timer::counter()};
     }
 
     inline void released(rank order, const volatile void* identity) noexcept {
@@ -70,11 +73,20 @@ namespace sys::kernel::lock_order
             __atomic_fetch_add(&violations, 1U, __ATOMIC_RELAXED);
             return;
         }
+        const u64 held_ticks = arch::timer::counter() - current.acquired_at;
+        u64 observed = __atomic_load_n(&maximum_hold_ticks, __ATOMIC_RELAXED);
+        while (held_ticks > observed &&
+               !__atomic_compare_exchange_n(&maximum_hold_ticks, &observed, held_ticks, false,
+                                            __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        }
         held[cpu][--depth[cpu]] = {};
     }
 
     [[nodiscard]] inline u64 violation_count() noexcept {
         return __atomic_load_n(&violations, __ATOMIC_ACQUIRE);
+    }
+    [[nodiscard]] inline u64 maximum_hold() noexcept {
+        return __atomic_load_n(&maximum_hold_ticks, __ATOMIC_ACQUIRE);
     }
 #else
     [[nodiscard]] inline bool may_acquire(rank, const volatile void*) noexcept {
@@ -83,6 +95,9 @@ namespace sys::kernel::lock_order
     inline void acquired(rank, const volatile void*) noexcept {}
     inline void released(rank, const volatile void*) noexcept {}
     [[nodiscard]] inline u64 violation_count() noexcept {
+        return 0U;
+    }
+    [[nodiscard]] inline u64 maximum_hold() noexcept {
         return 0U;
     }
 #endif

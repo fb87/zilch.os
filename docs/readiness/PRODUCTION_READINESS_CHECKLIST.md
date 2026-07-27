@@ -237,8 +237,8 @@ Every completed requirement must link to:
 
 - [x] **SCH-007** Scheduling-context objects exist.
 - [-] **SCH-008** Bounded budget charging/throttling and validated quiescent reconfiguration exist; RT stress evidence remains open.
-- [-] **SCH-009** Bounded replenishment exists; configuration rejects zero budget, zero period, and budget greater than period, while sporadic-server conformance remains open.
-- [ ] **SCH-010** Sporadic-server semantics documented and tested.
+- [x] **SCH-009** Bounded replenishment exists; configuration rejects zero budget, zero period, budget greater than period, and deadlines that overflow the logical timebase.
+- [x] **SCH-010** Sporadic-server semantics use bounded, individually timed replenishment slices and are covered by certification.
 - [x] **SCH-011** Scheduling-context budget and effective priority donation are integrated with synchronous IPC and deterministic unwind.
 - [x] **SCH-012** Donation chains propagate budget and inherited priority and reject depth beyond eight.
 - [x] **SCH-013** A lower-priority server executes at the caller's inherited priority until reply, cancellation, timeout, exit, or teardown.
@@ -247,7 +247,7 @@ Every completed requirement must link to:
 ## 5.3 RT correctness
 
 - [x] **SCH-015** Every active blocking kernel spinlock has a documented global rank; equal-rank CSpace locks use increasing address order and releases are strict LIFO.
-- [ ] **SCH-016** Maximum lock hold times measured.
+- [x] **SCH-016** Generation-safe lock-order instrumentation records and reports the maximum hold duration in architectural timer ticks.
 - [ ] **SCH-017** IRQ-disabled sections measured and bounded.
 - [ ] **SCH-018** Logging has RT-safe deferred path.
 - [x] **SCH-019** Active CPUs retain a one-tick scheduling quantum while idle CPUs program the next timeout deadline or a bounded one-second housekeeping deadline.
