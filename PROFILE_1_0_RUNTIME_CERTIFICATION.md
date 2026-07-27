@@ -1,5 +1,7 @@
 # ARM64 Kernel Profile 1.0 runtime certification
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 The certification build retains the deterministic four-CPU workload and emits
 machine-readable records. Runtime certification passes only after:
 

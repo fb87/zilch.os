@@ -14,6 +14,7 @@ namespace sys::abi::v1
         receive = 1U,
         reply_receive = 2U,
         cancel = 3U,
+        reply = 4U,
     };
 
     inline constexpr word_t capability_transfer_valid = 1ULL << 63U;

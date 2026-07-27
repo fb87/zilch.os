@@ -24,6 +24,26 @@ namespace sys::arch::space
 
     extern "C" char sys_arm64_user_image_start[];
     extern "C" char sys_arm64_user_image_end[];
+    extern "C" char sys_arm64_memory_server_image_start[];
+    extern "C" char sys_arm64_memory_server_image_end[];
+    extern "C" char sys_arm64_pager_client_image_start[];
+    extern "C" char sys_arm64_pager_client_image_end[];
+
+    inline constexpr word_t memory_server_image_role = 0x100U;
+    inline constexpr word_t pager_client_image_role_base = 0x101U;
+
+    struct image_view {
+        char* start;
+        char* end;
+    };
+
+    [[nodiscard]] inline image_view image_for_role(word_t role) noexcept {
+        if (role == memory_server_image_role)
+            return {sys_arm64_memory_server_image_start, sys_arm64_memory_server_image_end};
+        if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U)
+            return {sys_arm64_pager_client_image_start, sys_arm64_pager_client_image_end};
+        return {sys_arm64_user_image_start, sys_arm64_user_image_end};
+    }
 
     [[nodiscard]] inline usize_t user_image_size() noexcept {
         return static_cast<usize_t>(sys_arm64_user_image_end - sys_arm64_user_image_start);
@@ -47,15 +67,17 @@ namespace sys::arch::space
         volatile u32 active_cpu_mask{};
     };
 
-    inline void initialize(address_space& value, u16 asid) noexcept {
+    inline void initialize(address_space& value, u16 asid, word_t role) noexcept {
         value.asid = asid;
         value.active_cpu_mask = 0U;
         memory::build_kernel_table(value.l0, value.l1, value.l2);
         const usize_t code_l2 = static_cast<usize_t>((user_code >> 21U) & 0x1ffU);
         value.l2.entry[code_l2] = memory::table_descriptor(value.l3);
 
-        const u64 image_phys = reinterpret_cast<u64>(sys_arm64_user_image_start) & ~0xfffULL;
-        const usize_t image_pages = user_image_pages();
+        const image_view image = image_for_role(role);
+        const u64 image_phys = reinterpret_cast<u64>(image.start) & ~0xfffULL;
+        const usize_t image_size = static_cast<usize_t>(image.end - image.start);
+        const usize_t image_pages = (image_size + memory::page_size - 1U) / memory::page_size;
         const usize_t first_index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
         for (usize_t page = 0U; page < image_pages; ++page) {
             const usize_t index = first_index + page;

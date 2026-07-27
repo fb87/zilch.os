@@ -2,6 +2,8 @@
 
 A restricted-C++20, header-oriented L4 microkernel skeleton for ARM64/QEMU virt and AMD64/QEMU q35.
 
+The authoritative production requirement tracker is [`PRODUCTION_READINESS_CHECKLIST.md`](PRODUCTION_READINESS_CHECKLIST.md). [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md) is the concise execution index, and [`ARCHITECTURE_ALIGNMENT_REVIEW.md`](ARCHITECTURE_ALIGNMENT_REVIEW.md) records the alignment review. Historical batch-status documents describe individual increments and are not the current source of truth.
+
 ## Repository convention
 
 - `include/abi/`: stable C-compatible kernel/userspace ABI (`.h`)

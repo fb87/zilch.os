@@ -12,6 +12,12 @@ namespace sys
                                     0U, 0U, 0U, 0U, 0U, timeout);
     }
 
+    [[nodiscard]] inline word_t ipc_reply(word_t message0, word_t message1, word_t message2,
+                                          word_t message3) noexcept {
+        return sys_ipc_invoke_raw(0U, static_cast<word_t>(abi::v1::ipc_operation::reply), message0,
+                                  message1, message2, message3, 0U, 0U);
+    }
+
     [[nodiscard]] inline abi::v1::ipc_result ipc_reply_receive(capability_id_t endpoint,
                                                                word_t message0, word_t message1,
                                                                word_t message2, word_t message3,

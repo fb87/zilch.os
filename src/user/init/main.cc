@@ -37,65 +37,7 @@ namespace
 
     inline constexpr sys::word_t memory_server_role = 0x100U;
     inline constexpr sys::word_t fault_client_role = 0x101U;
-    inline constexpr sys::word_t service_fault_address = 0x20004000U;
-    inline constexpr sys::word_t service_done_badge = 1U;
-
-    [[noreturn]] void memory_server() noexcept {
-        const sys::word_t created =
-            sys::control(sys::abi::v1::control_operation::frame_create, 0U, 12U);
-        if (created != static_cast<sys::word_t>(sys::error_t::success)) {
-            for (;;)
-                asm volatile("wfe");
-        }
-
-        const auto fault = sys::ipc_receive(10U);
-        if (fault.status != static_cast<sys::word_t>(sys::error_t::success)) {
-            for (;;)
-                asm volatile("wfe");
-        }
-        const sys::word_t resolved = sys::control(
-            sys::abi::v1::control_operation::fault_reply_sender, 12U, fault.message2, 2U);
-        if (resolved != static_cast<sys::word_t>(sys::error_t::success)) {
-            for (;;)
-                asm volatile("wfe");
-        }
-
-        const auto completion = sys::ipc_receive(10U);
-        if (completion.status != static_cast<sys::word_t>(sys::error_t::success) ||
-            completion.message0 != 0x50414745U) {
-            for (;;)
-                asm volatile("wfe");
-        }
-        const sys::word_t reclaimed = sys::control(
-            sys::abi::v1::control_operation::pager_reclaim_sender, 12U, service_fault_address);
-        if (reclaimed != static_cast<sys::word_t>(sys::error_t::success)) {
-            for (;;)
-                asm volatile("wfe");
-        }
-        (void)sys::control(sys::abi::v1::control_operation::notification_signal, 14U,
-                           service_done_badge);
-        (void)sys::ipc_reply_receive(10U, 0U, 0U, 0U, 0U);
-        for (;;)
-            asm volatile("wfe");
-    }
-
-    [[noreturn]] void fault_client() noexcept {
-        volatile sys::word_t* page = reinterpret_cast<volatile sys::word_t*>(service_fault_address);
-        *page = 0x5a494c4348504147ULL;
-        if (*page != 0x5a494c4348504147ULL) {
-            for (;;)
-                asm volatile("wfe");
-        }
-        const sys::word_t call =
-            sys_ipc_invoke_raw(10U, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::call),
-                               0x50414745U, 0U, 0U, 0U, 0U, 0U);
-        if (call != static_cast<sys::word_t>(sys::error_t::success)) {
-            for (;;)
-                asm volatile("wfe");
-        }
-        for (;;)
-            asm volatile("wfe");
-    }
+    inline constexpr sys::word_t second_fault_client_role = 0x102U;
 
     [[nodiscard]] bool create_service_process(sys::word_t cpu, sys::word_t role,
                                               sys::word_t thread_selector,
@@ -128,6 +70,21 @@ namespace
         return false;
     }
 
+    [[nodiscard]] bool wait_for_badge(sys::word_t expected) noexcept {
+        for (sys::word_t spin = 0U; spin < 10000000U; ++spin) {
+            sys::word_t badges = 0U;
+            const sys::word_t status = sys::control_result1(
+                badges, sys::abi::v1::control_operation::notification_poll, 14U);
+            if (status == static_cast<sys::word_t>(sys::error_t::success)) {
+                if ((badges & 0xffff0000U) != 0U)
+                    return false;
+                if ((badges & expected) != 0U)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] bool run_userspace_pager_service() noexcept {
         constexpr sys::word_t server_thread = 17U;
         constexpr sys::word_t server_task = 20U;
@@ -137,32 +94,27 @@ namespace
         constexpr sys::word_t client_space = 24U;
 
         if (!create_service_process(1U, memory_server_role, server_thread, server_task,
-                                    server_space)) {
+                                    server_space))
             return false;
-        }
-        if (!create_service_process(2U, fault_client_role, client_thread, client_task,
-                                    client_space)) {
-            (void)destroy_service_process(server_thread, server_task, server_space);
-            return false;
-        }
 
-        bool completed = false;
-        for (sys::word_t spin = 0U; spin < 10000000U; ++spin) {
-            sys::word_t badges = 0U;
-            const sys::word_t status = sys::control_result1(
-                badges, sys::abi::v1::control_operation::notification_poll, 14U);
-            if (status == static_cast<sys::word_t>(sys::error_t::success) &&
-                (badges & service_done_badge) != 0U) {
-                completed = true;
-                break;
-            }
-        }
+        bool pass =
+            create_service_process(2U, fault_client_role, client_thread, client_task, client_space);
+        if (pass)
+            pass = wait_for_badge(1U);
+        if (pass)
+            pass = destroy_service_process(client_thread, client_task, client_space);
 
-        const bool client_destroyed =
-            destroy_service_process(client_thread, client_task, client_space);
+        if (pass)
+            pass = create_service_process(3U, second_fault_client_role, client_thread, client_task,
+                                          client_space);
+        if (pass)
+            pass = wait_for_badge(2U);
+        if (pass)
+            pass = destroy_service_process(client_thread, client_task, client_space);
+
         const bool server_destroyed =
             destroy_service_process(server_thread, server_task, server_space);
-        return completed && client_destroyed && server_destroyed;
+        return pass && server_destroyed;
     }
 
     [[nodiscard]] bool test_dynamic_ipc_objects() noexcept {
@@ -297,10 +249,6 @@ namespace
 } // namespace
 
 extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
-    if (argument0 == memory_server_role)
-        memory_server();
-    if (argument0 == fault_client_role)
-        fault_client();
     if (argument0 != 0U)
         worker(argument0, argument1);
 

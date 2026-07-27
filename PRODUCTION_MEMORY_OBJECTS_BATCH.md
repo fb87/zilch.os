@@ -1,5 +1,7 @@
 # Production Memory Objects and Pager Batch
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 ## Implemented
 
 - Generation-safe dynamic kernel object IDs from a 512-slot object table.

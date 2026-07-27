@@ -104,7 +104,7 @@ namespace sys::kernel::thread
         value.faults = 0U;
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
-        value.address_space.initialize(static_cast<u16>(id + 1U));
+        value.address_space.initialize(static_cast<u16>(id + 1U), argument0);
         arch::thread::initialize_user(value.context, arch::space::entry(), arch::space::stack_top(),
                                       argument0, argument1);
     }

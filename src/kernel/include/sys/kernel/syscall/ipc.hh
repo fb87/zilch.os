@@ -468,6 +468,11 @@ namespace sys::kernel::syscall
                 return receive(current, frame, endpoint);
             case abi::v1::ipc_operation::cancel:
                 return cancel(current, frame);
+            case abi::v1::ipc_operation::reply:
+                copy_message_from_frame(current, frame);
+                reply_to_caller(current);
+                set_error(frame, error_t::success);
+                return true;
         }
         set_error(frame, error_t::denied);
         return true;

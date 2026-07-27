@@ -9,7 +9,8 @@ workload.
 
 - `call`: send four message registers and block for a reply;
 - `receive`: block until a caller rendezvous occurs;
-- `reply_receive`: reply to the previous caller and atomically wait again.
+- `reply_receive`: reply to the previous caller and atomically wait again;
+- `reply`: reply to the previous caller without entering receive state.
 
 The implementation uses two fixed endpoint capabilities and register-only
 messages. Servers are pinned to CPUs 0 and 1 while clients execute on all CPUs.

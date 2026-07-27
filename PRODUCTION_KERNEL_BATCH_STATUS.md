@@ -1,5 +1,7 @@
 # Zilch production-kernel cumulative batch status
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 This tree continues the production-alignment work from batch 0062. It is not a production-complete kernel and must not be labeled as such.
 
 ## Implemented in this increment

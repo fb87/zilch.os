@@ -1,5 +1,7 @@
 # Production memory batch status
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 ## Implemented
 
 - QEMU RAM size is a single top-level Make contract (`MEMORY_MB`) used by both

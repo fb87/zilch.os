@@ -11,9 +11,9 @@ namespace sys::kernel::space
         space_id_t id{};
         arch::space::address_space native{};
 
-        inline void initialize(u16 asid) noexcept {
+        inline void initialize(u16 asid, word_t image_role = 0U) noexcept {
             id = static_cast<space_id_t>(asid);
-            arch::space::initialize(native, asid);
+            arch::space::initialize(native, asid, image_role);
         }
 
         inline void activate() noexcept {

@@ -1,5 +1,7 @@
 # ARM64 Root-only boot certification
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 `BOOT_PROFILE=root` is the default. The kernel maps the flat payload generated
 from `init.elf` as the sole initial EL0 task at `0x20000000`. The root task uses
 only the capability-authorized control ABI and emits machine-readable records.

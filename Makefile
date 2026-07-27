@@ -87,7 +87,9 @@ KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(INCLUDES) -DCONFIG_ROOT_ONLY_
     -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \
     -DCONFIG_VERBOSE_DIAGNOSTICS=$(CONFIG_VERBOSE_DIAGNOSTICS) \
     -DCONFIG_QEMU_RAM_MB=$(MEMORY_MB) -DCONFIG_QEMU_CPUS=$(CPUS) \
-    -DUSER_BIN_PATH=\"$(OBJTREE)/user/init.bin\"
+    -DUSER_BIN_PATH=\"$(OBJTREE)/user/init.bin\" \
+    -DMEMORY_SERVER_BIN_PATH=\"$(OBJTREE)/user/memory-server.bin\" \
+    -DPAGER_CLIENT_BIN_PATH=\"$(OBJTREE)/user/pager-client.bin\"
 KBUILD_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections $(WARNINGS)
 KBUILD_AFLAGS := -ffreestanding
 export SRCTREE OBJTREE ARCH PLATFORM BUILD_VARIANT CONFIG_SELFTEST CONFIG_HYPERVISOR_SELFTEST CONFIG_VERBOSE_DIAGNOSTICS CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION KBUILD_CPPFLAGS KBUILD_CXXFLAGS KBUILD_AFLAGS
@@ -124,7 +126,7 @@ $(OBJTREE)/%/built-in.o: FORCE
 	@mkdir -p $(dir $@)
 	@$(MAKE) -s --no-print-directory -f $(SRCTREE)/tools/build/Makefile.build obj=$* __build
 ifeq ($(ARCH),arm64)
-$(OBJTREE)/src/arch/arm64/built-in.o: $(USER_BIN)
+$(OBJTREE)/src/arch/arm64/built-in.o: $(USER_BIN) $(MEMORY_SERVER_BIN) $(PAGER_CLIENT_BIN)
 endif
 $(KERNEL_ELF): $(USER_BIN) $(core-builtins) $(LDSCRIPT)
 	@mkdir -p $(dir $@)

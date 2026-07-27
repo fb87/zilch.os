@@ -1,5 +1,7 @@
 # Production dynamic IPC objects batch
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 ## Implemented
 
 - ABI operations for endpoint and notification creation and destruction.

@@ -7,79 +7,80 @@ sys_arm64_user_image_start:
 .balign 4096
 .global sys_arm64_user_image_end
 sys_arm64_user_image_end:
+
+.global sys_arm64_memory_server_image_start
+sys_arm64_memory_server_image_start:
+.incbin MEMORY_SERVER_BIN_PATH
+.balign 4096
+.global sys_arm64_memory_server_image_end
+sys_arm64_memory_server_image_end:
+
+.global sys_arm64_pager_client_image_start
+sys_arm64_pager_client_image_start:
+.incbin PAGER_CLIENT_BIN_PATH
+.balign 4096
+.global sys_arm64_pager_client_image_end
+sys_arm64_pager_client_image_end:
 #else
 .section .user_text,"ax"
 .balign 4096
 .global sys_arm64_user_image_start
 sys_arm64_user_image_start:
-  mov x19, x0                 // thread id / role
-  mov x20, x1                 // deterministic seed
-  mov x21, #0                 // iteration
-
-  // Threads 0 and 1 are IPC servers on different CPUs.
+  mov x19, x0
+  mov x20, x1
+  mov x21, #0
   cmp x19, #0
   b.eq .Lserver_a
   cmp x19, #1
   b.eq .Lserver_b
   b .Lclient_loop
-
 .Lserver_a:
   mov x22, #10
   b .Lserver_receive
 .Lserver_b:
   mov x22, #11
-
 .Lserver_receive:
   mov x0, x22
-  mov x1, #1                  // receive
-  mov x7, xzr                 // no timeout
-  mov x8, #0                  // sys_ipc
+  mov x1, #1
+  mov x7, xzr
+  mov x8, #0
   svc #0
 .Lserver_loop:
-  // Echo the four message registers and atomically reply+receive.
   mov x0, x22
-  mov x1, #2                  // reply_receive
+  mov x1, #2
   mov x7, xzr
   mov x8, #0
   svc #0
   b .Lserver_loop
-
 .Lclient_loop:
   eor x20, x20, x20, lsl #13
   eor x20, x20, x20, lsr #7
   eor x20, x20, x20, lsl #17
   add x21, x21, #1
-
-  // One deterministic contained user fault.
   cmp x19, #4
   b.ne .Lclient_call
   cmp x21, #64
   b.ne .Lclient_call
   mov x9, xzr
   ldr x10, [x9]
-
 .Lclient_call:
-  // Even clients call server A, odd clients call server B.
   tst x19, #1
   mov x0, #10
   mov x9, #11
   csel x0, x0, x9, eq
-  mov x1, #0                  // call
-  mov x2, x19                 // message word 0
-  mov x3, x21                 // message word 1
-  mov x4, x20                 // message word 2
-  mov x5, xzr                 // message word 3
-  mov x6, xzr                 // clear fuzz discriminator for normal IPC
+  mov x1, #0
+  mov x2, x19
+  mov x3, x21
+  mov x4, x20
+  mov x5, xzr
+  mov x6, xzr
   mov x7, xzr
   mov x8, #0
-  svc #0                      // blocks until server replies
-
-  // Deterministic malformed-input fuzz call, immediate kernel validation.
+  svc #0
   mov x0, #2
   mov x1, #0
   mov x2, #0
   mov x3, x19
-
   cmp x19, #2
   b.ne .Lfuzz3
   mov x0, #127
@@ -119,7 +120,6 @@ sys_arm64_user_image_start:
   b .Lfuzz_invoke
 2:
   add x3, x19, #1
-
 .Lfuzz_invoke:
   mov x4, x21
   mov x5, x20
@@ -130,9 +130,7 @@ sys_arm64_user_image_start:
   mov x8, #0
   svc #0
   b .Lclient_loop
-
 .balign 4096
 .global sys_arm64_user_image_end
 sys_arm64_user_image_end:
-
 #endif

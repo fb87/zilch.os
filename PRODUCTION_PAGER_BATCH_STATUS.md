@@ -1,5 +1,7 @@
 # Production Pager and Process Batch Status
 
+> **Historical status notice:** This file records the state of its named batch. The current program status, completed follow-on work, remaining requirements, and delivery order are maintained in [`PROGRAM_CHECKLIST.md`](PROGRAM_CHECKLIST.md).
+
 ## Implemented
 
 - Product ABI operations `process_create` and `process_destroy`, retaining the prior child operation values as compatibility aliases.
