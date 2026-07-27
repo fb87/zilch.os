@@ -189,16 +189,23 @@ namespace sys::kernel::capability
         result = nullptr;
         if (selector >= cspace_slot_count)
             return error_t::not_found;
-        const slot_t& slot = cspace.slots[selector];
+        cspace_t& mutable_cspace = const_cast<cspace_t&>(cspace);
+        lock(mutable_cspace);
+        const slot_t slot = cspace.slots[selector];
+        error_t lookup_result = error_t::success;
         if (slot.object.type != expected_type)
-            return error_t::denied;
-        if (!derivation_valid(slot.derivation, slot.object))
-            return error_t::not_found;
-        const error_t rights_result = validate(slot, required);
-        if (rights_result != error_t::success)
-            return rights_result;
-        result = object::resolve(slot.object);
-        return result != nullptr ? error_t::success : error_t::not_found;
+            lookup_result = error_t::denied;
+        else if (!derivation_valid(slot.derivation, slot.object))
+            lookup_result = error_t::not_found;
+        else
+            lookup_result = validate(slot, required);
+        if (lookup_result == error_t::success) {
+            result = object::resolve(slot.object);
+            if (result == nullptr)
+                lookup_result = error_t::not_found;
+        }
+        unlock(mutable_cspace);
+        return lookup_result;
     }
 
     [[nodiscard]] inline error_t lookup_slot(const cspace_t& cspace, capability_id_t selector,
@@ -210,18 +217,19 @@ namespace sys::kernel::capability
         cspace_t& mutable_cspace = const_cast<cspace_t&>(cspace);
         lock(mutable_cspace);
         const slot_t slot = cspace.slots[selector];
-        unlock(mutable_cspace);
+        error_t lookup_result = error_t::success;
         if (slot.object.type != expected_type)
-            return error_t::denied;
-        if (!derivation_valid(slot.derivation, slot.object))
-            return error_t::not_found;
-        const error_t rights_result = validate(slot, required);
-        if (rights_result != error_t::success)
-            return rights_result;
-        if (object::resolve(slot.object) == nullptr)
-            return error_t::not_found;
-        result = slot;
-        return error_t::success;
+            lookup_result = error_t::denied;
+        else if (!derivation_valid(slot.derivation, slot.object))
+            lookup_result = error_t::not_found;
+        else
+            lookup_result = validate(slot, required);
+        if (lookup_result == error_t::success && object::resolve(slot.object) == nullptr)
+            lookup_result = error_t::not_found;
+        if (lookup_result == error_t::success)
+            result = slot;
+        unlock(mutable_cspace);
+        return lookup_result;
     }
     [[nodiscard]] inline error_t derive(cspace_t& destination, capability_id_t destination_selector,
                                         const cspace_t& source, capability_id_t source_selector,

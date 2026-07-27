@@ -117,7 +117,7 @@ Every completed requirement must link to:
 - [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
 - [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation is rejected; guarded CSpace and complete badge-delivery semantics remain open.
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
-- [-] **CAP-012** Single-capability delete exists. Concurrent lookup and teardown-race evidence remains open.
+- [-] **CAP-012** Single-capability delete and atomic locked lookup snapshots exist; controlled lookup/delete interleaving and complete object-use quiescence evidence remain open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
 - [-] **CAP-014** Capability mutation, IPC transfer, object-reference/descendant revoke, and map/unmap authority use share one authority transaction; scalable locking and complete concurrent mutation stress remain open.
 - [-] **CAP-015** Frame destruction waits for mapping quiescence and capability revoke removes descendant-authorized mappings; generalized object-reference quiescence remains open.

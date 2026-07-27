@@ -1,3 +1,9 @@
+## 0124 - Atomic capability lookup snapshots
+
+- Lock CSpaces while reading capability slots.
+- Validate type, derivation activity, rights, and object generation against one slot snapshot.
+- Prevent concurrent delete/revoke from exposing mixed capability fields to lookup callers.
+
 ## 0123 - Capability transfer/revoke serialization
 
 - Serialize IPC capability minting with control-path copy, mint, delete, revoke, and mapping authority.
