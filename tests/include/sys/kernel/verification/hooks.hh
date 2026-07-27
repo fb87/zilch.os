@@ -14,6 +14,23 @@ namespace sys::kernel::verification
     inline volatile bool fault_ipc_observed{};
     inline volatile bool final_reported{};
 
+    inline volatile u32 extent_node_failure_countdown{};
+
+    inline void configure_extent_node_failure(u32 countdown) noexcept {
+        __atomic_store_n(&extent_node_failure_countdown, countdown, __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline bool fail_extent_node_allocation() noexcept {
+        u32 value = __atomic_load_n(&extent_node_failure_countdown, __ATOMIC_ACQUIRE);
+        for (;;) {
+            if (value == 0U)
+                return false;
+            if (__atomic_compare_exchange_n(&extent_node_failure_countdown, &value, value - 1U,
+                                            false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                return value == 1U;
+        }
+    }
+
     inline void report(const char* name, bool passed) noexcept {
         pr_info("[TEST] name=%s result=%s\n", name, passed ? "PASS" : "FAIL");
     }

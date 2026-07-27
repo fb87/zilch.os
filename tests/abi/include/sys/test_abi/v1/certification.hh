@@ -9,6 +9,8 @@ namespace sys::test_abi::v1
         acceptance_finalize = 0x80000001U,
         acceptance_worker_tick = 0x80000002U,
         acceptance_query = 0x80000003U,
+        memory_inject_extent_failure = 0x80000004U,
+        memory_invariant_snapshot = 0x80000005U,
         hypervisor_self_test = 0x80000100U,
     };
 

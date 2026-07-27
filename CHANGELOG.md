@@ -236,3 +236,12 @@
 - Add PL3 certification that creates twenty one-page child resources, returns
   them in alternating order, redelegates the fully merged range, and verifies
   frame allocation and complete cleanup.
+
+
+## 0113 - Memory pressure and rollback injection
+
+- Add certification-only extent-node allocation fault injection through the verification boundary.
+- Add memory invariant snapshots covering free pages, extent nodes, resources, frames, page tables, and resource accounting.
+- Verify failed extent splitting rolls back child creation, parent delegation, metadata, and capability state.
+- Add 32 quota-exhaustion/reclaim cycles covering 512 resource-backed frame lifecycles.
+- Require the complete invariant signature to match before and after the pressure workload.

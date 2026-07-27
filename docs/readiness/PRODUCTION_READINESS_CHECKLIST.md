@@ -563,8 +563,8 @@ Every completed requirement must link to:
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
-- [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, twenty-way fragmentation/coalescing, metadata reuse, quota exhaustion, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion and sustained pressure remain open.
-- [-] **TST-024** Attribute and mapping rejection paths verify cleanup/accounting rollback; systematic per-stage allocation fault injection remains open.
+- [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, twenty-way fragmentation/coalescing, metadata reuse, 32 repeated quota-exhaustion/reclaim cycles covering 512 frame lifecycles, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion and multi-CPU pressure remain open.
+- [-] **TST-024** Attribute/mapping rejection and injected extent-split metadata failure verify transactional rollback with before/after invariant signatures; systematic injection at object registration, capability installation, frame/page-table allocation, and teardown remains open.
 
 ## 12.4 Long-duration certification
 

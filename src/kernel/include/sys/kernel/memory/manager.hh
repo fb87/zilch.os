@@ -8,6 +8,7 @@
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/space/address_space.hh>
 #include <sys/kernel/task/task.hh>
+#include <sys/kernel/verification/hooks.hh>
 #include <sys/platform/memory.hh>
 #include <sys/types.hh>
 
@@ -276,6 +277,8 @@ namespace sys::kernel::memory
     }
 
     [[nodiscard]] inline u32 allocate_extent_node() noexcept {
+        if (verification::fail_extent_node_allocation())
+            return invalid_extent_index;
         for (u32 index = 0U; index < extent_node_count; ++index) {
             if (!extent_nodes[index].in_use) {
                 extent_nodes[index] = {};
@@ -714,6 +717,61 @@ namespace sys::kernel::memory
             return result;
         clear_resource(target);
         return error_t::success;
+    }
+
+    struct invariant_snapshot {
+        u32 free_physical_pages{};
+        u32 extent_nodes_in_use{};
+        u32 resources_in_use{};
+        u32 frames_in_use{};
+        u32 page_tables_in_use{};
+        u64 resource_owned_pages{};
+        u64 resource_used_pages{};
+        u64 resource_delegated_pages{};
+    };
+
+    [[nodiscard]] inline invariant_snapshot snapshot_invariants() noexcept {
+        invariant_snapshot result{};
+        lock_allocator();
+        result.free_physical_pages = __atomic_load_n(&free_pages, __ATOMIC_ACQUIRE);
+        for (const auto& node : extent_nodes)
+            if (node.in_use)
+                ++result.extent_nodes_in_use;
+        for (const auto& value : resources) {
+            if (!__atomic_load_n(&value.in_use, __ATOMIC_ACQUIRE))
+                continue;
+            ++result.resources_in_use;
+            result.resource_owned_pages += value.quota_pages;
+            result.resource_used_pages += __atomic_load_n(&value.used_pages, __ATOMIC_ACQUIRE);
+            result.resource_delegated_pages +=
+                __atomic_load_n(&value.delegated_pages, __ATOMIC_ACQUIRE);
+        }
+        for (const auto& value : frames)
+            if (__atomic_load_n(&value.in_use, __ATOMIC_ACQUIRE))
+                ++result.frames_in_use;
+        for (const auto& value : page_tables)
+            if (__atomic_load_n(&value.in_use, __ATOMIC_ACQUIRE))
+                ++result.page_tables_in_use;
+        unlock_allocator();
+        return result;
+    }
+
+    [[nodiscard]] inline bool invariants_valid() noexcept {
+        const auto snapshot = snapshot_invariants();
+        if (snapshot.free_physical_pages > managed_pages ||
+            snapshot.extent_nodes_in_use > extent_node_count ||
+            snapshot.resources_in_use > resource_count || snapshot.frames_in_use > frame_count ||
+            snapshot.page_tables_in_use > page_table_count)
+            return false;
+        for (const auto& value : resources) {
+            if (!__atomic_load_n(&value.in_use, __ATOMIC_ACQUIRE))
+                continue;
+            const u32 used = __atomic_load_n(&value.used_pages, __ATOMIC_ACQUIRE);
+            const u32 delegated = __atomic_load_n(&value.delegated_pages, __ATOMIC_ACQUIRE);
+            if (used + delegated > value.quota_pages)
+                return false;
+        }
+        return true;
     }
 
     inline error_t initialize_objects() noexcept {

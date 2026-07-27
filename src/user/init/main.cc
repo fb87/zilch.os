@@ -34,6 +34,7 @@ namespace
         memory_resource_delegation = 17U,
         memory_extent_retype = 18U,
         memory_extent_metadata = 19U,
+        memory_pressure_rollback = 20U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -313,6 +314,73 @@ namespace
                               parent_resource) == success &&
                  passed;
         return passed;
+    }
+
+    [[nodiscard]] bool test_memory_pressure_rollback() noexcept {
+        constexpr sys::word_t root_task_selector = 1U;
+        constexpr sys::word_t root_resource_selector = 32U;
+        constexpr sys::word_t parent_resource = 33U;
+        constexpr sys::word_t child_resource = 34U;
+        constexpr sys::word_t first_frame = 35U;
+        constexpr sys::word_t frame_count = 16U;
+        constexpr sys::word_t overflow_frame = first_frame + frame_count;
+        constexpr sys::word_t cycles = 32U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t no_memory = static_cast<sys::word_t>(sys::error_t::no_memory);
+
+        sys::word_t before = 0U;
+        if (sys::certification::control_result1(
+                before, sys::test_abi::v1::control_operation::memory_invariant_snapshot) != success)
+            return false;
+
+        /* Force the split-node allocation to fail and prove full rollback. */
+        bool passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                                   root_task_selector, root_resource_selector, parent_resource,
+                                   8U) == success;
+        passed = sys::certification::control(
+                     sys::test_abi::v1::control_operation::memory_inject_extent_failure, 1U) ==
+                     success &&
+                 passed;
+        passed =
+            sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                         root_task_selector, parent_resource, child_resource, 1U) == no_memory &&
+            passed;
+        passed = sys::certification::control(
+                     sys::test_abi::v1::control_operation::memory_inject_extent_failure, 0U) ==
+                     success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                              parent_resource) == success &&
+                 passed;
+
+        /* Repeatedly drive one resource to its quota and reclaim every page. */
+        for (sys::word_t cycle = 0U; cycle < cycles && passed; ++cycle) {
+            passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                                  root_task_selector, root_resource_selector, parent_resource,
+                                  frame_count) == success;
+            for (sys::word_t index = 0U; index < frame_count && passed; ++index) {
+                passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                                      parent_resource, first_frame + index) == success;
+            }
+            passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                                  parent_resource, overflow_frame) == no_memory &&
+                     passed;
+            for (sys::word_t index = 0U; index < frame_count; ++index) {
+                passed = sys::control(sys::abi::v1::control_operation::frame_destroy,
+                                      first_frame + index) == success &&
+                         passed;
+            }
+            passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                                  parent_resource) == success &&
+                     passed;
+        }
+
+        sys::word_t after = 0U;
+        passed = sys::certification::control_result1(
+                     after, sys::test_abi::v1::control_operation::memory_invariant_snapshot) ==
+                     success &&
+                 passed;
+        return passed && before == after;
     }
 
     [[nodiscard]] bool test_memory_resource_lifecycle() noexcept {
@@ -674,6 +742,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::memory_extent_retype, extent_retype_pass);
     const bool extent_metadata_pass = test_memory_extent_metadata();
     record(ledger, test_id::memory_extent_metadata, extent_metadata_pass);
+    const bool pressure_rollback_pass = test_memory_pressure_rollback();
+    record(ledger, test_id::memory_pressure_rollback, pressure_rollback_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

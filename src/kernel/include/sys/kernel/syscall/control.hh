@@ -274,6 +274,9 @@ namespace sys::kernel::syscall
                     case 19U:
                         name = "memory_extent_metadata";
                         break;
+                    case 20U:
+                        name = "memory_pressure_rollback";
+                        break;
                     default:
                         break;
                 }
@@ -322,6 +325,34 @@ namespace sys::kernel::syscall
                                 &thread::certification_failures[cpu], __ATOMIC_ACQUIRE)));
                 }
                 set_control_result(frame, error_t::success);
+                return true;
+            }
+            case test_abi::v1::control_operation::memory_inject_extent_failure: {
+                if (current.owner == nullptr || !current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                verification::configure_extent_node_failure(
+                    static_cast<u32>(arch::syscall::argument(frame, 1U)));
+                set_control_result(frame, error_t::success);
+                return true;
+            }
+            case test_abi::v1::control_operation::memory_invariant_snapshot: {
+                if (current.owner == nullptr || !current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                const auto snapshot = memory::snapshot_invariants();
+                const u64 signature = static_cast<u64>(snapshot.free_physical_pages) ^
+                                      (static_cast<u64>(snapshot.extent_nodes_in_use) << 32U) ^
+                                      (static_cast<u64>(snapshot.resources_in_use) << 40U) ^
+                                      (static_cast<u64>(snapshot.frames_in_use) << 48U) ^
+                                      (static_cast<u64>(snapshot.page_tables_in_use) << 56U) ^
+                                      (snapshot.resource_used_pages * 0x9e3779b97f4a7c15ULL) ^
+                                      (snapshot.resource_delegated_pages * 0xbf58476d1ce4e5b9ULL);
+                frame.x[1] = signature;
+                set_control_result(frame, memory::invariants_valid() ? error_t::success
+                                                                     : error_t::invalid_argument);
                 return true;
             }
             case test_abi::v1::control_operation::acceptance_query: {
