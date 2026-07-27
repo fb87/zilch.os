@@ -160,6 +160,30 @@ namespace sys::arch
             __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
             sctlr |= 1ULL | (1ULL << 2U) | (1ULL << 12U);
             __asm__ volatile("msr sctlr_el1, %0\n\tisb" : : "r"(sctlr) : "memory");
+            /*
+             * The kernel has no implicit privileged access to EL0 mappings.
+             * User-memory access must eventually pass through explicit copy
+             * primitives which temporarily relax PAN; UAO stays disabled.
+             */
+            u64 features{};
+            __asm__ volatile("mrs %0, id_aa64mmfr1_el1" : "=r"(features));
+            if (((features >> 20U) & 0xfU) != 0U)
+                __asm__ volatile(".inst 0xd500419f\n\tisb" ::: "memory"); // MSR PAN, #1
+            if (((features >> 4U) & 0xfU) != 0U)
+                __asm__ volatile(".inst 0xd500407f\n\tisb" ::: "memory"); // MSR UAO, #0
+        }
+
+        [[nodiscard]] inline bool privilege_protection_enabled() noexcept {
+            u64 features{};
+            u64 pan{};
+            u64 uao{};
+            __asm__ volatile("mrs %0, id_aa64mmfr1_el1" : "=r"(features));
+            if (((features >> 20U) & 0xfU) != 0U)
+                __asm__ volatile("mrs %0, S3_0_C4_C2_3" : "=r"(pan));
+            if (((features >> 4U) & 0xfU) != 0U)
+                __asm__ volatile("mrs %0, S3_0_C4_C2_4" : "=r"(uao));
+            return (((features >> 20U) & 0xfU) == 0U || (pan & 1U) != 0U) &&
+                   (((features >> 4U) & 0xfU) == 0U || (uao & 1U) == 0U);
         }
 
         inline void initialize() noexcept {

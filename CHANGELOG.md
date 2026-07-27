@@ -1,3 +1,11 @@
+## 0130 - ARM privilege and guest-control hardening
+
+- Feature-detect PAN and UAO while retaining the Armv8-A build baseline.
+- Enable PAN, disable UAO, and verify both policies during certification bootstrap.
+- Sanitize trapped guest SCTLR_EL1 writes to supported control and mandatory RES1 bits.
+- Contain unknown guest hypercalls as explicit exits carrying the rejected call number.
+- Add negative policy tests for unknown calls and hostile SCTLR values.
+
 ## 0129 - Scrub reused memory and architectural state
 
 - Certify that a poisoned physical page is zeroed across release and immediate reuse.

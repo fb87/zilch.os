@@ -737,6 +737,19 @@ namespace sys::kernel::hypervisor::test
                 diagnose(vm, checkpoint, error_t::invalid_argument);
             }
         };
+        check(arch::hypervisor::known_guest_hypercall(
+                  static_cast<u64>(abi::v1::guest_hypercall::console_write)) &&
+                  arch::hypervisor::known_guest_hypercall(
+                      static_cast<u64>(abi::v1::guest_hypercall::shutdown)) &&
+                  !arch::hypervisor::known_guest_hypercall(0xffffffffffffffffULL),
+              8U);
+        constexpr u64 hostile_sctlr = 0xffffffffffffffffULL;
+        check(arch::hypervisor::sanitize_guest_sctlr_el1(hostile_sctlr) ==
+                      (arch::hypervisor::sctlr_el1_guest_control |
+                       arch::hypervisor::sctlr_el1_res1) &&
+                  (arch::hypervisor::sanitize_guest_sctlr_el1(0U) &
+                   arch::hypervisor::sctlr_el1_res1) == arch::hypervisor::sctlr_el1_res1,
+              9U);
         check(reset(vm) == error_t::success, 10U);
         check(stage2_map(vm, 0U, 0x48000000U, page_size,
                          static_cast<u32>(stage2_permission::read) |

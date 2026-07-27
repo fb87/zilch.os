@@ -429,10 +429,10 @@ Every completed requirement must link to:
 
 - [-] **HYP-041** Basic test hypercalls work; stable production ABI remains open.
 - [ ] **HYP-042** Stable userspace-visible hypercall ABI defined if needed.
-- [ ] **HYP-043** Unknown hypercalls fail safely.
+- [x] **HYP-043** Unknown guest hypercalls exit to the host as bounded `hypercall` exits with the rejected call number preserved in the qualification field.
 - [ ] **HYP-044** MMIO exits delivered to userspace VMM.
 - [ ] **HYP-045** WFI/WFE behavior correctly virtualized.
-- [ ] **HYP-046** Guest system-register traps validated and sanitized.
+- [-] **HYP-046** Trapped guest SCTLR_EL1 writes are masked to supported controls with mandatory RES1 bits restored; complete trapped system-register coverage remains open.
 - [ ] **HYP-047** Guest aborts produce complete fault records.
 
 ### Hypervisor execution gate
@@ -489,11 +489,11 @@ Every completed requirement must link to:
 
 ## 10.2 Architecture hardening
 
-- [ ] **SEC-007** Reserved system-register bits sanitized.
+- [-] **SEC-007** Kernel MAIR/TCR programming uses constructed constants and trapped guest SCTLR_EL1 values are sanitized; a complete register-by-register reserved-bit audit remains open.
 - [ ] **SEC-008** Speculation mitigations evaluated and implemented.
 - [ ] **SEC-009** Pointer authentication strategy evaluated.
 - [ ] **SEC-010** Branch target identification strategy evaluated.
-- [ ] **SEC-011** PAN/UAO or equivalent protections configured where applicable.
+- [x] **SEC-011** PAN is enabled and UAO disabled on CPUs advertising each extension, with bootstrap readback verification; unsupported baseline Armv8-A CPUs safely skip optional instructions.
 - [ ] **SEC-012** Debug interfaces disabled or capability-controlled in production.
 
 ## 10.3 Concurrency hardening

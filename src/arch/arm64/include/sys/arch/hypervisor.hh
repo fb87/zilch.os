@@ -8,6 +8,28 @@
 
 namespace sys::arch::hypervisor
 {
+    inline constexpr u64 sctlr_el1_res1 = 0x30d00800ULL;
+    inline constexpr u64 sctlr_el1_guest_control =
+        (1ULL << 0U) | (1ULL << 1U) | (1ULL << 2U) | (1ULL << 3U) | (1ULL << 4U) | (1ULL << 5U) |
+        (1ULL << 12U) | (1ULL << 14U) | (1ULL << 15U) | (1ULL << 19U) | (1ULL << 21U) |
+        (1ULL << 24U) | (1ULL << 25U) | (1ULL << 26U) | (1ULL << 30U) | (1ULL << 31U);
+
+    [[nodiscard]] inline constexpr u64 sanitize_guest_sctlr_el1(u64 requested) noexcept {
+        return (requested & sctlr_el1_guest_control) | sctlr_el1_res1;
+    }
+
+    [[nodiscard]] inline constexpr bool known_guest_hypercall(u64 value) noexcept {
+        switch (static_cast<abi::v1::guest_hypercall>(value)) {
+            case abi::v1::guest_hypercall::console_write:
+            case abi::v1::guest_hypercall::time_query:
+            case abi::v1::guest_hypercall::irq_acknowledge:
+            case abi::v1::guest_hypercall::shutdown:
+            case abi::v1::guest_hypercall::report:
+            case abi::v1::guest_hypercall::diagnostic:
+                return true;
+        }
+        return false;
+    }
     inline constexpr bool available = true;
     inline constexpr bool active = true;
     inline constexpr u64 abi_signature = 0x5a494c4300000000ULL;
@@ -349,6 +371,7 @@ namespace sys::arch::hypervisor
 
         if (guest_active[id]) {
             if (exception_class == hvc64_exception_class) {
+                const u64 hypercall_number = frame.x[0];
                 const auto hypercall = static_cast<abi::v1::guest_hypercall>(frame.x[0]);
                 switch (hypercall) {
                     case abi::v1::guest_hypercall::console_write:
@@ -399,7 +422,10 @@ namespace sys::arch::hypervisor
                         return true;
                     }
                 }
+                auto* exit = active_exit[id];
                 complete_guest_exit(frame, syndrome, abi::v1::vm_exit_reason::hypercall);
+                if (exit != nullptr)
+                    exit->qualification = hypercall_number;
                 return true;
             }
             if (exception_class == 0x18U && guest_mmu_enable_armed[id]) {
@@ -422,7 +448,7 @@ namespace sys::arch::hypervisor
                  * The guest has already constructed split RX and RW/XN stage-1
                  * mappings and intentionally enables both M and WXN here.
                  */
-                const u64 applied_sctlr = trapped_operand;
+                const u64 applied_sctlr = sanitize_guest_sctlr_el1(trapped_operand);
                 console_puts("\n[HV-MMU] phase=el2-enable");
                 console_field("ec", exception_class);
                 console_field("esr", syndrome);
