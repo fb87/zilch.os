@@ -154,9 +154,9 @@ Every completed requirement must link to:
 
 ## 3.2 Scheduling integration
 
-- [ ] **IPC-011** Scheduling-context donation implemented.
-- [-] **IPC-012** Bounded priority donation/inheritance exists; chain and RT evidence remain open.
-- [-] **IPC-013** Bounded donation cleanup paths exist with timeout/cancel foundations; chain and race verification remain open.
+- [x] **IPC-011** Synchronous IPC donates the caller's remaining scheduling-context budget and inherited priority to the server, including nested calls.
+- [-] **IPC-012** Priority donation/inheritance propagates through a certified two-hop chain and is bounded at depth eight; measured RT inversion evidence remains open.
+- [-] **IPC-013** Reply, timeout, cancellation, server exit, and teardown return unused donated budget and restore base priority; long-duration race verification remains open.
 - [-] **IPC-014** IPC wakeup targets the receiver CPU where available; teardown still uses broader reschedule signaling and full targeted-IPI evidence remains open.
 - [ ] **IPC-015** IPC fast-path instruction count measured.
 - [ ] **IPC-016** IPC latency limits defined and met.
@@ -239,10 +239,10 @@ Every completed requirement must link to:
 - [-] **SCH-008** Bounded budget charging/throttling exists; RT stress evidence remains open.
 - [-] **SCH-009** Bounded replenishment exists; sporadic-server conformance remains open.
 - [ ] **SCH-010** Sporadic-server semantics documented and tested.
-- [-] **SCH-011** Priority donation is integrated; full scheduling-context budget donation remains open.
-- [ ] **SCH-012** Donation chains are bounded.
-- [ ] **SCH-013** Priority inheritance prevents inversion.
-- [ ] **SCH-014** Timeout queue implemented.
+- [x] **SCH-011** Scheduling-context budget and effective priority donation are integrated with synchronous IPC and deterministic unwind.
+- [x] **SCH-012** Donation chains propagate budget and inherited priority and reject depth beyond eight.
+- [x] **SCH-013** A lower-priority server executes at the caller's inherited priority until reply, cancellation, timeout, exit, or teardown.
+- [x] **SCH-014** Per-CPU absolute-deadline timeout queues replace whole-thread scans; entries are generation checked and timer expiry never spins on the IPC lifecycle lock.
 
 ## 5.3 RT correctness
 

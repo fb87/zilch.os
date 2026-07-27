@@ -189,6 +189,8 @@ namespace sys::kernel::syscall
         const u64 timeout = descriptor & ~abi::v1::ipc_timeout_valid;
         value.ipc_deadline =
             value.ipc_timeout_active ? platform::timer::ticks(value.pinned_cpu) + timeout : 0U;
+        if (value.ipc_timeout_active)
+            thread::arm_ipc_timeout(value);
     }
 
     [[nodiscard]] inline error_t transfer_capability(thread::thread& sender,
@@ -224,7 +226,7 @@ namespace sys::kernel::syscall
             server.reply.nonce = __atomic_fetch_add(&next_reply_nonce, 1U, __ATOMIC_ACQ_REL);
         }
         server.reply.donation_active =
-            scheduling::donate_priority(server.scheduling_context, caller.scheduling_context) ==
+            scheduling::donate(server.scheduling_context, caller.scheduling_context) ==
             error_t::success;
         server.reply.valid = true;
     }
@@ -283,7 +285,7 @@ namespace sys::kernel::syscall
 
         server.reply = {};
         if (reply.donation_active)
-            scheduling::revoke_donation(server.scheduling_context);
+            scheduling::revoke_donation(server.scheduling_context, caller.scheduling_context);
         if (caller_state == thread::state::blocked_fault) {
             const auto disposition = static_cast<fault::disposition>(server.message[0]);
             caller.fault_disposition = disposition;
@@ -494,7 +496,8 @@ namespace sys::kernel::syscall
             if (server.reply.valid && server.reply.caller == target.id &&
                 server.reply.generation == target.object.generation) {
                 if (server.reply.donation_active)
-                    scheduling::revoke_donation(server.scheduling_context);
+                    scheduling::revoke_donation(server.scheduling_context,
+                                                target.scheduling_context);
                 server.reply = {};
             }
         }

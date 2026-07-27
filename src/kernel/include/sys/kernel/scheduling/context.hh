@@ -18,6 +18,7 @@ namespace sys::kernel::scheduling
         u64 budget_ticks{1U};
         u64 period_ticks{1U};
         u64 consumed_ticks{};
+        u64 donated_ticks{};
         u64 next_replenishment{};
         cpu_id_t affinity{};
         bool enabled{true};
@@ -32,6 +33,7 @@ namespace sys::kernel::scheduling
         value.budget_ticks = 1U;
         value.period_ticks = 1U;
         value.consumed_ticks = 0U;
+        value.donated_ticks = 0U;
         value.next_replenishment = 1U;
         value.affinity = affinity;
         value.enabled = true;
@@ -48,6 +50,7 @@ namespace sys::kernel::scheduling
         value.budget_ticks = budget;
         value.period_ticks = period;
         value.consumed_ticks = 0U;
+        value.donated_ticks = 0U;
         value.next_replenishment = now + period;
         value.affinity = affinity;
         value.enabled = true;
@@ -69,11 +72,21 @@ namespace sys::kernel::scheduling
 
     [[nodiscard]] inline bool eligible(context& value, u64 now) noexcept {
         replenish_if_due(value, now);
-        return value.enabled && !value.throttled && value.consumed_ticks < value.budget_ticks;
+        return value.enabled && (value.donated_ticks != 0U ||
+                                 (!value.throttled && value.consumed_ticks < value.budget_ticks));
     }
 
     [[nodiscard]] inline bool charge(context& value, u64 ticks = 1U) noexcept {
-        if (!value.enabled || value.budget_ticks == 0U || value.throttled)
+        if (!value.enabled)
+            return false;
+        if (value.donated_ticks != 0U) {
+            const u64 charged = ticks < value.donated_ticks ? ticks : value.donated_ticks;
+            value.donated_ticks -= charged;
+            ticks -= charged;
+            if (ticks == 0U)
+                return true;
+        }
+        if (value.budget_ticks == 0U || value.throttled)
             return false;
         if (ticks > value.budget_ticks - value.consumed_ticks) {
             value.consumed_ticks = value.budget_ticks;
@@ -91,17 +104,32 @@ namespace sys::kernel::scheduling
         value.throttled = false;
     }
 
-    [[nodiscard]] inline error_t donate_priority(context& receiver, const context& donor) noexcept {
-        if (receiver.donation_depth >= maximum_donation_depth)
+    [[nodiscard]] inline error_t donate(context& receiver, context& donor) noexcept {
+        if (donor.donation_depth >= maximum_donation_depth || receiver.donation_depth != 0U ||
+            receiver.donated_ticks != 0U)
             return error_t::busy;
         if (donor.effective_priority > receiver.effective_priority)
             receiver.effective_priority = donor.effective_priority;
-        ++receiver.donation_depth;
+        receiver.donation_depth = donor.donation_depth + 1U;
+        const u64 own_remaining = donor.consumed_ticks < donor.budget_ticks
+                                      ? donor.budget_ticks - donor.consumed_ticks
+                                      : 0U;
+        if (donor.donated_ticks > ~0ULL - own_remaining) {
+            receiver.effective_priority = receiver.priority;
+            receiver.donation_depth = 0U;
+            return error_t::invalid_argument;
+        }
+        receiver.donated_ticks = donor.donated_ticks + own_remaining;
+        donor.donated_ticks = 0U;
+        donor.consumed_ticks = donor.budget_ticks;
+        donor.throttled = true;
         return error_t::success;
     }
 
-    inline void revoke_donation(context& value) noexcept {
-        value.effective_priority = value.priority;
-        value.donation_depth = 0U;
+    inline void revoke_donation(context& receiver, context& donor) noexcept {
+        donor.donated_ticks += receiver.donated_ticks;
+        receiver.donated_ticks = 0U;
+        receiver.effective_priority = receiver.priority;
+        receiver.donation_depth = 0U;
     }
 } // namespace sys::kernel::scheduling

@@ -8,6 +8,7 @@ namespace sys::kernel::lock_order
     enum class rank : u16 {
         endpoint = 10U,
         ipc_lifecycle = 20U,
+        scheduler_timeout = 25U,
         capability_authority = 30U,
         capability_registry = 40U,
         memory_mapping = 40U,

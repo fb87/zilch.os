@@ -1,3 +1,11 @@
+## 0144 - Donate scheduling contexts through IPC
+
+- Propagate remaining budget and inherited priority through synchronous IPC calls.
+- Bound nested donation chains at depth eight and return unused budget on unwind.
+- Restore server priority and budget ownership on reply, timeout, cancellation, exit, and teardown.
+- Replace whole-thread timeout scans with generation-checked per-CPU deadline queues.
+- Certify two-hop donation, priority inheritance, chain rejection, budget return, and deadline expiry.
+
 ## 0143 - Bound pager failure and duplicate fault resolution
 
 - Serialize fault map/reply state with the IPC lifecycle and mapping locks.

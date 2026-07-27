@@ -495,7 +495,8 @@ namespace sys::kernel::syscall
                         }
                     }
                     if (current.reply.donation_active)
-                        scheduling::revoke_donation(current.scheduling_context);
+                        scheduling::revoke_donation(current.scheduling_context,
+                                                    caller.scheduling_context);
                     current.reply = {};
                 }
                 thread::prepare_block(frame, thread::state::terminated);

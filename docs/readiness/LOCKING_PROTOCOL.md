@@ -4,19 +4,22 @@ All blocking kernel spinlocks follow one global outer-to-inner rank order:
 
 1. endpoint;
 2. IPC lifecycle;
-3. capability authority;
-4. capability registry or memory mapping;
-5. CSpace, ordered by increasing lock address when two are held;
-6. capability derivation;
-7. physical-memory allocator;
-8. ASID/VMID translation-identifier allocator;
-9. object table.
+3. scheduler timeout queue;
+4. capability authority;
+5. capability registry or memory mapping;
+6. CSpace, ordered by increasing lock address when two are held;
+7. capability derivation;
+8. physical-memory allocator;
+9. ASID/VMID translation-identifier allocator;
+10. object table.
 
 Locks must be released in exact reverse order. Equal-rank locks may only nest in
 increasing address order, which makes two-CSpace and registry-wide scans
 deterministic. Recursive acquisition is forbidden.
 
 The endpoint-before-IPC-lifecycle rule protects queue and blocked-thread state.
+Per-CPU timeout queues disable local IRQs while holding their short bounded lock;
+they never acquire IPC lifecycle while held.
 Capability mutations start at the authority lock; registry-wide operations then
 lock registered CSpaces in increasing order. Mapping teardown may run under
 capability authority. The allocator and object table are terminal lifecycle

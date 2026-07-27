@@ -27,8 +27,61 @@
 namespace sys::kernel::thread
 {
     inline constexpr u32 user_thread_count = 10U;
+    inline constexpr u32 maximum_cpu_count = 4U;
     inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
     inline constexpr u64 fault_timeout_ticks = 500U;
+
+    struct timeout_entry {
+        thread_id_t thread{};
+        u32 generation{};
+        u64 deadline{};
+    };
+
+    inline timeout_entry timeout_queues[maximum_cpu_count][user_thread_count]{};
+    inline u32 timeout_queue_counts[maximum_cpu_count]{};
+    inline volatile u32 timeout_queue_locks[maximum_cpu_count]{};
+
+    [[nodiscard]] inline arch::irq::irq_state_t lock_timeout_queue(cpu_id_t cpu) noexcept {
+        const arch::irq::irq_state_t state = arch::irq::save_and_disable();
+        while (__atomic_exchange_n(&timeout_queue_locks[cpu], 1U, __ATOMIC_ACQUIRE) != 0U)
+            arch::cpu::relax();
+        lock_order::acquired(lock_order::rank::scheduler_timeout, &timeout_queue_locks[cpu]);
+        return state;
+    }
+
+    inline void unlock_timeout_queue(cpu_id_t cpu, arch::irq::irq_state_t state) noexcept {
+        lock_order::released(lock_order::rank::scheduler_timeout, &timeout_queue_locks[cpu]);
+        __atomic_store_n(&timeout_queue_locks[cpu], 0U, __ATOMIC_RELEASE);
+        arch::irq::restore(state);
+    }
+
+    inline void arm_ipc_timeout(thread& value) noexcept {
+        if (!value.ipc_timeout_active || value.pinned_cpu >= maximum_cpu_count)
+            return;
+        const cpu_id_t cpu = value.pinned_cpu;
+        const arch::irq::irq_state_t irq_state = lock_timeout_queue(cpu);
+        u32& count = timeout_queue_counts[cpu];
+        for (u32 index = 0U; index < count;) {
+            if (timeout_queues[cpu][index].thread == value.id) {
+                for (u32 move = index + 1U; move < count; ++move)
+                    timeout_queues[cpu][move - 1U] = timeout_queues[cpu][move];
+                --count;
+            } else {
+                ++index;
+            }
+        }
+        if (count < user_thread_count) {
+            u32 position = count;
+            while (position > 0U &&
+                   timeout_queues[cpu][position - 1U].deadline > value.ipc_deadline) {
+                timeout_queues[cpu][position] = timeout_queues[cpu][position - 1U];
+                --position;
+            }
+            timeout_queues[cpu][position] = {value.id, value.object.generation, value.ipc_deadline};
+            ++count;
+        }
+        unlock_timeout_queue(cpu, irq_state);
+    }
 
     inline void expire_ipc_timeouts(cpu_id_t cpu, u64 now) noexcept;
     [[nodiscard]] inline bool deliver_fault_ipc(thread& value, arch::thread::context& frame,
@@ -44,7 +97,6 @@ namespace sys::kernel::thread
             return fault::kind::data_abort;
         return fault::kind::none;
     }
-    inline constexpr u32 maximum_cpu_count = 4U;
     inline constexpr word_t memory_server_role = 0x100U;
     inline constexpr word_t fault_client_role = 0x101U;
     inline constexpr word_t ipc_lifecycle_server_role = 0x113U;
@@ -255,6 +307,8 @@ namespace sys::kernel::thread
             user_execution_active[cpu] = false;
             user_cpu_idle[cpu] = false;
             per_cpu_switches[cpu] = 0U;
+            timeout_queue_counts[cpu] = 0U;
+            timeout_queue_locks[cpu] = 0U;
         }
         return error_t::success;
     }
@@ -333,6 +387,7 @@ namespace sys::kernel::thread
         target.scheduling_context.budget_ticks = 0U;
         target.scheduling_context.period_ticks = 0U;
         target.scheduling_context.consumed_ticks = 0U;
+        target.scheduling_context.donated_ticks = 0U;
         target.scheduling_context.next_replenishment = 0U;
         target.scheduling_context.affinity = 0U;
         target.scheduling_context.enabled = false;
@@ -504,7 +559,8 @@ namespace sys::kernel::thread
             if (server.reply.valid && server.reply.caller == target.id &&
                 server.reply.generation == target.object.generation) {
                 if (server.reply.donation_active)
-                    scheduling::revoke_donation(server.scheduling_context);
+                    scheduling::revoke_donation(server.scheduling_context,
+                                                target.scheduling_context);
                 server.reply = {};
             }
         }
@@ -731,6 +787,36 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=guarded_cspace_scale result=PASS slots=193 leaves=4 guard=5a\n");
         pr_info("[TEST] name=cross_cspace_transfer_fuzz result=PASS operations=4096\n");
 
+        scheduling::context donation_caller{};
+        scheduling::context donation_middle{};
+        scheduling::context donation_server{};
+        scheduling::initialize(donation_caller, 0U);
+        scheduling::initialize(donation_middle, 0U);
+        scheduling::initialize(donation_server, 0U);
+        result = scheduling::configure(donation_caller, 240U, 10U, 20U, 0U, 0U);
+        if (result == error_t::success)
+            result = scheduling::configure(donation_middle, 80U, 5U, 20U, 0U, 0U);
+        if (result == error_t::success)
+            result = scheduling::configure(donation_server, 20U, 4U, 20U, 0U, 0U);
+        if (result != error_t::success || !scheduling::charge(donation_caller, 2U) ||
+            scheduling::donate(donation_middle, donation_caller) != error_t::success ||
+            donation_middle.effective_priority != 240U || donation_middle.donated_ticks != 8U ||
+            !scheduling::charge(donation_middle, 3U) ||
+            scheduling::donate(donation_server, donation_middle) != error_t::success ||
+            donation_server.donation_depth != 2U || donation_server.effective_priority != 240U ||
+            donation_server.donated_ticks != 10U || !scheduling::charge(donation_server, 4U))
+            return error_t::invalid_argument;
+        scheduling::revoke_donation(donation_server, donation_middle);
+        scheduling::revoke_donation(donation_middle, donation_caller);
+        donation_middle.donation_depth = scheduling::maximum_donation_depth;
+        if (donation_caller.donated_ticks != 6U ||
+            scheduling::donate(donation_server, donation_middle) != error_t::busy ||
+            !scheduling::eligible(donation_caller, 0U) || !scheduling::charge(donation_caller, 6U))
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=scheduling_context_donation result=PASS depth=2 returned=6\n");
+        pr_info("[TEST] name=priority_inheritance result=PASS inherited=240 base=20\n");
+        pr_info("[TEST] name=donation_chain_bound result=PASS maximum=8\n");
+
         result =
             memory::map(user_threads[0].address_space, memory::frames[0], scratch_mapping_address,
                         static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
@@ -862,6 +948,10 @@ namespace sys::kernel::thread
         pager_target.ipc_timeout_active = true;
         pager_target.ipc_deadline = 1U;
         store_state(pager_target, state::blocked_fault);
+        arm_ipc_timeout(pager_target);
+        if (timeout_queue_counts[pager_target.pinned_cpu] != 1U ||
+            timeout_queues[pager_target.pinned_cpu][0].deadline != 1U)
+            return error_t::invalid_argument;
         expire_ipc_timeouts(pager_target.pinned_cpu, 2U);
         if (load_state(pager_target) != state::terminated ||
             pager_target.fault_disposition != fault::disposition::terminate ||
@@ -870,6 +960,7 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=same_page_fault_serialization result=PASS mappings=1\n");
         pr_info("[TEST] name=nested_fault_bound result=PASS depth=1\n");
         pr_info("[TEST] name=pager_timeout_death result=PASS disposition=terminate\n");
+        pr_info("[TEST] name=timeout_queue_order result=PASS expired=1 remaining=0\n");
         result = memory::unmap(pager_target.address_space, pager_frame,
                                arch::space::user_code + 0x4000ULL);
         if (result != error_t::success)
@@ -999,9 +1090,24 @@ namespace sys::kernel::thread
     }
 
     inline void expire_ipc_timeouts(cpu_id_t cpu, u64 now) noexcept {
-        for (u32 index = 0U; index < active_user_thread_count; ++index) {
-            thread& value = user_threads[index];
-            if (value.pinned_cpu != cpu || !value.ipc_timeout_active || now < value.ipc_deadline)
+        for (;;) {
+            const arch::irq::irq_state_t irq_state = lock_timeout_queue(cpu);
+            u32& count = timeout_queue_counts[cpu];
+            if (count == 0U || timeout_queues[cpu][0].deadline > now) {
+                unlock_timeout_queue(cpu, irq_state);
+                return;
+            }
+            const timeout_entry entry = timeout_queues[cpu][0];
+            for (u32 index = 1U; index < count; ++index)
+                timeout_queues[cpu][index - 1U] = timeout_queues[cpu][index];
+            --count;
+            unlock_timeout_queue(cpu, irq_state);
+            if (entry.thread >= active_user_thread_count)
+                continue;
+            thread& value = user_threads[entry.thread];
+            if (value.object.generation != entry.generation || value.pinned_cpu != cpu ||
+                !value.ipc_timeout_active || value.ipc_deadline != entry.deadline ||
+                now < value.ipc_deadline)
                 continue;
             const state current_state = load_state(value);
             if (current_state != state::blocked_send && current_state != state::blocked_receive &&
@@ -1028,8 +1134,10 @@ namespace sys::kernel::thread
              * interrupted syscall that owns the lifecycle lock.  A missed
              * claim is retried on the next timer tick.
              */
-            if (!try_lock_ipc_lifecycle())
-                continue;
+            if (!try_lock_ipc_lifecycle()) {
+                arm_ipc_timeout(value);
+                return;
+            }
             if (load_state(value) != current_state || !value.ipc_timeout_active ||
                 now < value.ipc_deadline) {
                 unlock_ipc_lifecycle();
@@ -1040,7 +1148,8 @@ namespace sys::kernel::thread
                 if (server.reply.valid && server.reply.caller == value.id &&
                     server.reply.generation == value.object.generation) {
                     if (server.reply.donation_active)
-                        scheduling::revoke_donation(server.scheduling_context);
+                        scheduling::revoke_donation(server.scheduling_context,
+                                                    value.scheduling_context);
                     server.reply = {};
                 }
             }
@@ -1325,6 +1434,7 @@ namespace sys::kernel::thread
         value.waiting_endpoint = value.owner->fault_endpoint;
         value.ipc_timeout_active = true;
         value.ipc_deadline = platform::timer::ticks(value.pinned_cpu) + fault_timeout_ticks;
+        arm_ipc_timeout(value);
         prepare_block(frame, state::blocked_fault);
 
         auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
