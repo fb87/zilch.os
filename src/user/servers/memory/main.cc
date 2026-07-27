@@ -1,5 +1,6 @@
 #include <sys/control.hh>
 #include <sys/ipc.hh>
+#include <sys/thread.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
@@ -17,6 +18,7 @@ namespace
     inline constexpr sys::word_t pressure_client_count = 3U;
     inline constexpr sys::word_t completion_magic = 0x50414745U;
     inline constexpr sys::word_t failure_badge_base = 1U << 16U;
+    inline constexpr sys::word_t server_completion_badge = 1U << 5U;
 
     struct handle_state final {
         bool allocated{};
@@ -160,5 +162,5 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
             status == static_cast<sys::word_t>(sys::error_t::success))
             ++completed_clients;
     }
-    return 0;
+    sys::thread_exit(0U, notification, server_completion_badge);
 }

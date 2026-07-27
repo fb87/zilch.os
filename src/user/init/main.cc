@@ -62,10 +62,13 @@ namespace
 
     [[nodiscard]] bool destroy_service_process(sys::word_t thread_selector,
                                                sys::word_t task_selector,
-                                               sys::word_t space_selector) noexcept {
+                                               sys::word_t space_selector,
+                                               sys::word_t* failure = nullptr) noexcept {
         const sys::word_t suspend =
             sys::control(sys::abi::v1::control_operation::thread_suspend, thread_selector);
         if (suspend != static_cast<sys::word_t>(sys::error_t::success)) {
+            if (failure != nullptr)
+                *failure = suspend;
             return false;
         }
         for (sys::word_t attempt = 0U; attempt < 100000U; ++attempt) {
@@ -76,26 +79,36 @@ namespace
                 return true;
             }
             if (result != static_cast<sys::word_t>(sys::error_t::busy)) {
+                if (failure != nullptr)
+                    *failure = result;
                 return false;
             }
         }
+        if (failure != nullptr)
+            *failure = static_cast<sys::word_t>(sys::error_t::busy);
         return false;
     }
 
-    [[nodiscard]] bool wait_for_badges(sys::word_t expected) noexcept {
+    [[nodiscard]] bool wait_for_badges(sys::word_t expected,
+                                       sys::word_t* failure_detail = nullptr) noexcept {
         sys::word_t observed = 0U;
-        for (sys::word_t spin = 0U; spin < 10000000U; ++spin) {
+        for (sys::word_t spin = 0U; spin < 100000000U; ++spin) {
             sys::word_t badges = 0U;
             const sys::word_t status = sys::control_result1(
                 badges, sys::abi::v1::control_operation::notification_poll, 14U);
             if (status == static_cast<sys::word_t>(sys::error_t::success)) {
-                if ((badges & 0xffff0000U) != 0U)
+                if ((badges & 0xffff0000U) != 0U) {
+                    if (failure_detail != nullptr)
+                        *failure_detail = badges;
                     return false;
+                }
                 observed |= badges;
                 if ((observed & expected) == expected)
                     return true;
             }
         }
+        if (failure_detail != nullptr)
+            *failure_detail = 0x10000000U | observed;
         return false;
     }
 
@@ -105,12 +118,23 @@ namespace
     };
 
     [[nodiscard]] service_results run_userspace_services() noexcept {
-        constexpr sys::word_t server_thread = 17U;
-        constexpr sys::word_t server_task = 20U;
-        constexpr sys::word_t server_space = 23U;
-        constexpr sys::word_t client_thread = 18U;
-        constexpr sys::word_t client_task = 21U;
-        constexpr sys::word_t client_space = 24U;
+        /*
+         * Reserve a disjoint root-CSpace range for the memory service graph.
+         * The earlier layout overlapped client 2 with the server task/space
+         * selectors, making teardown operate on the wrong bundle.
+         */
+        constexpr sys::word_t server_thread = 40U;
+        constexpr sys::word_t server_task = 41U;
+        constexpr sys::word_t server_space = 42U;
+        constexpr sys::word_t client_thread = 43U;
+        constexpr sys::word_t client_task = 46U;
+        constexpr sys::word_t client_space = 49U;
+        constexpr sys::word_t service_selector_end = client_space + 2U;
+        static_assert(server_thread < server_task && server_task < server_space);
+        static_assert(server_space < client_thread);
+        static_assert(client_thread + 2U < client_task);
+        static_assert(client_task + 2U < client_space);
+        static_assert(service_selector_end < 54U);
 
         service_results result{};
         if (!create_service_process(1U, memory_server_role, server_thread, server_task,
@@ -140,18 +164,42 @@ namespace
                                               client_space + index);
         }
         if (pressure) {
-            constexpr sys::word_t all_client_badges = (1U << 2U) | (1U << 3U) | (1U << 4U);
-            pressure = wait_for_badges(all_client_badges);
+            /*
+             * The server badge proves it has observed every shutdown and
+             * reached its terminal state before any service bundle is
+             * reclaimed.
+             */
+            constexpr sys::word_t all_service_badges =
+                (1U << 2U) | (1U << 3U) | (1U << 4U) | (1U << 5U);
+            sys::word_t failure_detail = 0U;
+            pressure = wait_for_badges(all_service_badges, &failure_detail);
+            if (!pressure && failure_detail != 0U) {
+                (void)sys::certification::control(
+                    sys::test_abi::v1::control_operation::memory_server_protocol_detail,
+                    failure_detail);
+            }
         }
         for (sys::word_t index = 0U; index < 3U; ++index) {
-            pressure = destroy_service_process(client_thread + index, client_task + index,
-                                               client_space + index) &&
-                       pressure;
+            sys::word_t teardown_error = 0U;
+            const bool destroyed = destroy_service_process(
+                client_thread + index, client_task + index, client_space + index, &teardown_error);
+            if (!destroyed) {
+                const sys::word_t detail = (1ULL << 30U) | ((index & 0x1fU) << 24U) | (9U << 16U) |
+                                           (teardown_error & 0xffffU);
+                (void)sys::certification::control(
+                    sys::test_abi::v1::control_operation::memory_server_protocol_detail, detail);
+            }
+            pressure = destroyed && pressure;
         }
         result.memory_protocol = pressure;
 
         const bool server_destroyed =
             destroy_service_process(server_thread, server_task, server_space);
+        if (!server_destroyed) {
+            constexpr sys::word_t detail = (1ULL << 29U) | 0x42U;
+            (void)sys::certification::control(
+                sys::test_abi::v1::control_operation::memory_server_protocol_detail, detail);
+        }
         result.pager = result.pager && server_destroyed;
         result.memory_protocol = result.memory_protocol && server_destroyed;
         return result;

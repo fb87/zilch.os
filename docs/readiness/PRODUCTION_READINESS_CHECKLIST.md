@@ -744,3 +744,7 @@ Until the release gates above pass, the correct status is:
 - **TST-012 remains `[-] IN PROGRESS`:** the two-client pager integration now
   additionally exercises independent ELF loading and BSS zero-fill, but full
   production pager policy and stress gates remain open.
+
+<!-- 0121 evidence: `thread_exit` can atomically publish a supervisor badge and
+terminate/deschedule the caller. This advances IPC-006 and USR-017 but does not
+complete process wait/status or supervision semantics. -->

@@ -1,12 +1,8 @@
+#include <sys/thread.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/control.hh>
+
 extern "C" [[noreturn]] void sys_user_exit(sys::s32 status) noexcept {
-    (void)status;
-    for (;;) {
-#if defined(__aarch64__)
-        asm volatile("wfe");
-#elif defined(__x86_64__)
-        asm volatile("pause");
-#endif
-    }
+    sys::thread_exit(static_cast<sys::word_t>(static_cast<sys::s64>(status)));
 }

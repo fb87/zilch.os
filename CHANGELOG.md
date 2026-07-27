@@ -1,3 +1,17 @@
+## 0120 - Disjoint memory-service selectors
+
+- Reserve root CSpace selectors 40-51 for the memory server and three clients.
+- Remove aliasing between client 2 and the server task/address-space selectors.
+- Add compile-time ordering and range checks for the service graph.
+- Preserve the production ABI and memory-server protocol.
+
+## 0119 - Userspace thread exit lifecycle
+
+- Add a production `thread_exit` control operation.
+- Make the userspace runtime terminate and deschedule the current thread when `main()` returns.
+- Prevent completion-notification versus PL3-exit races during process teardown.
+- Correct certification client-ID decoding so origin bits are not reported as client bits.
+
 ## 0111 — Physical extent ownership and bounded retyping
 
 - Add explicit physical extents to memory-resource objects.
@@ -282,3 +296,22 @@
 - Prevent received frame slots from being misinterpreted as task selectors,
   which caused `denied` results and aborted all memory clients before release
   and shutdown.
+
+## 0117 - Memory server protocol diagnostics
+
+- Add certification-only stage-coded failure badges for memory clients.
+- Preserve and report the exact server/client protocol failure origin.
+- Accumulate completion badges without losing concurrent client signals.
+- Keep the production ABI and successful protocol behavior unchanged.
+
+## 0118 - Memory protocol lifecycle diagnostics
+
+- Increase the bounded protocol wait budget for capability-transfer pressure.
+- Report timeout badge state, per-client teardown failures, and server teardown failures.
+- Keep production ABI and runtime semantics unchanged.
+
+## 0121 - Atomic exit notification
+
+- Extended `thread_exit` with optional notification selector and badge arguments.
+- Memory pressure clients now publish completion and terminate in one kernel transition.
+- Retained teardown diagnostics now include the exact returned error code.

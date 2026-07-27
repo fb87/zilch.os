@@ -151,3 +151,5 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | USR-011 / TST-023 | IN PROGRESS | `src/user/tests/memory_client/main.cc` | Three PL3 clients, 768 allocation/release calls | Full-RAM and long-duration pressure open |
 
 | CAP-018 | IN PROGRESS | receiver-selected destination in memory-server reply protocol | occupied-slot negative test and successful frame-cap delivery | general receive windows remain open |
+
+| IPC-006 / USR-017 | IN PROGRESS | `src/kernel/include/sys/kernel/syscall/control.hh`, `src/user/include/sys/thread.hh` | `memory_server_protocol` | Atomic exit notification removes the completion/teardown gap; general process wait/status and controlled race fuzz remain open |

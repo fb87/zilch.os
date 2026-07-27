@@ -1,10 +1,21 @@
 #pragma once
 
+#include <sys/control.hh>
 #include <sys/syscall.hh>
 
 #include <abi/sys/v1/thread.hh>
 
 namespace sys
 {
-    // High-level userspace thread wrappers will be implemented against ABI v1.
+    [[noreturn]] inline void thread_exit(word_t status = 0U, capability_id_t notification = 0U,
+                                         word_t badge = 0U) noexcept {
+        (void)control(abi::v1::control_operation::thread_exit, status, notification, badge);
+        for (;;) {
+#if defined(__aarch64__)
+            asm volatile("wfe");
+#elif defined(__x86_64__)
+            asm volatile("pause");
+#endif
+        }
+    }
 } // namespace sys

@@ -46,5 +46,6 @@ namespace sys::abi::v1
         resource_page_table_create = 39U,
         memory_resource_query = 40U,
         memory_resource_destroy = 41U,
+        thread_exit = 42U,
     };
 } // namespace sys::abi::v1

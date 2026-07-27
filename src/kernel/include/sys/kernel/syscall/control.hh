@@ -306,6 +306,33 @@ namespace sys::kernel::syscall
                                    passed != 0U ? error_t::success : error_t::invalid_argument);
                 return true;
             }
+            case test_abi::v1::control_operation::memory_server_protocol_detail: {
+                if (current.owner == nullptr || !current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                const word_t detail = arch::syscall::argument(frame, 1U);
+                const bool client_origin = (detail & (1ULL << 31U)) != 0U;
+                const bool teardown_origin = (detail & (1ULL << 30U)) != 0U;
+                const bool server_teardown = (detail & (1ULL << 29U)) != 0U;
+                const bool timeout_origin = (detail & (1ULL << 28U)) != 0U;
+                const char* origin = client_origin     ? "client"
+                                     : teardown_origin ? "client-teardown"
+                                     : server_teardown ? "server-teardown"
+                                     : timeout_origin  ? "timeout"
+                                                       : "server";
+                pr_err("[TEST-DETAIL] name=memory_server_protocol code=%llx origin=%s client=%llu "
+                       "stage=%llu error=%llu\n",
+                       static_cast<unsigned long long>(detail), origin,
+                       static_cast<unsigned long long>(
+                           (client_origin || teardown_origin) ? ((detail >> 24U) & 0x1fU) : 0U),
+                       static_cast<unsigned long long>((client_origin || teardown_origin)
+                                                           ? ((detail >> 16U) & 0xffU)
+                                                           : (detail & 0xffU)),
+                       static_cast<unsigned long long>(detail & 0xffffU));
+                set_control_result(frame, error_t::success);
+                return true;
+            }
             case test_abi::v1::control_operation::acceptance_worker_tick: {
                 const cpu_id_t cpu = arch::cpu::current_id();
                 if (cpu >= thread::maximum_cpu_count || current.owner == nullptr ||
@@ -412,6 +439,37 @@ namespace sys::kernel::syscall
                     result = error_t::success;
                 }
                 break;
+            }
+            case abi::v1::control_operation::thread_exit: {
+                /*
+                 * Returning from a userspace program is a one-way transition.
+                 * Optional a2/a3 arguments provide an atomic exit notification:
+                 * publish the terminal state first, signal the supervisor, then
+                 * commit another user context or the permanent kernel-idle root.
+                 * A completion badge can therefore never race a later exit
+                 * syscall or userspace instruction stream.
+                 */
+                thread::prepare_block(frame, thread::state::terminated);
+                if (a2 != 0U) {
+                    if (current.owner == nullptr) {
+                        thread::store_state(current, thread::state::running);
+                        result = error_t::denied;
+                        break;
+                    }
+                    object::header_t* notification_header = nullptr;
+                    result =
+                        capability::lookup(current.owner->cspace, a2, object::type_t::notification,
+                                           capability::right_t::write, notification_header);
+                    if (result != error_t::success) {
+                        thread::store_state(current, thread::state::running);
+                        break;
+                    }
+                    auto& target =
+                        *reinterpret_cast<notification::notification*>(notification_header);
+                    notification::signal(target, a3);
+                }
+                thread::schedule_prepared(frame);
+                return true;
             }
             case abi::v1::control_operation::thread_suspend: {
                 thread::thread* target = nullptr;

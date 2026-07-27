@@ -758,19 +758,26 @@ namespace sys::kernel::memory
 
     [[nodiscard]] inline bool invariants_valid() noexcept {
         const auto snapshot = snapshot_invariants();
-        if (snapshot.free_physical_pages > managed_pages ||
+        u32 discovered_pages = 0U;
+        for (u32 index = 0U; index < physical_region_count; ++index)
+            discovered_pages += physical_regions[index].pages;
+        if (snapshot.free_physical_pages > discovered_pages ||
             snapshot.extent_nodes_in_use > extent_node_count ||
             snapshot.resources_in_use > resource_count || snapshot.frames_in_use > frame_count ||
             snapshot.page_tables_in_use > page_table_count)
             return false;
+        lock_allocator();
         for (const auto& value : resources) {
             if (!__atomic_load_n(&value.in_use, __ATOMIC_ACQUIRE))
                 continue;
             const u32 used = __atomic_load_n(&value.used_pages, __ATOMIC_ACQUIRE);
             const u32 delegated = __atomic_load_n(&value.delegated_pages, __ATOMIC_ACQUIRE);
-            if (used + delegated > value.quota_pages)
+            if (used + delegated > value.quota_pages) {
+                unlock_allocator();
                 return false;
+            }
         }
+        unlock_allocator();
         return true;
     }
 

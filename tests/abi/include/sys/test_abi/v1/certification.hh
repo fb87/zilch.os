@@ -11,6 +11,7 @@ namespace sys::test_abi::v1
         acceptance_query = 0x80000003U,
         memory_inject_extent_failure = 0x80000004U,
         memory_invariant_snapshot = 0x80000005U,
+        memory_server_protocol_detail = 0x80000006U,
         hypervisor_self_test = 0x80000100U,
     };
 

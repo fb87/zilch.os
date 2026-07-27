@@ -172,8 +172,9 @@ namespace sys::kernel::thread
                 value.reply.valid = true;
             }
         } else {
+            value.context.x[1] = static_cast<word_t>(value.pending_sender);
             for (usize_t index = 0U; index < 4U; ++index) {
-                value.context.x[index + 1U] = value.pending_message[index];
+                value.context.x[index + 2U] = value.pending_message[index];
             }
         }
         value.pending_sender = static_cast<thread_id_t>(-1);
