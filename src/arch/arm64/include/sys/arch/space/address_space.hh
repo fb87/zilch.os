@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/arch/memory.hh>
+#include <sys/arch/space/asid.hh>
 #include <sys/arch/space/elf64.hh>
 #include <sys/types.hh>
 
@@ -104,11 +105,17 @@ namespace sys::arch::space
         vaddr_t image_entry{user_code};
         error_t image_status{error_t::invalid_argument};
         u16 asid{};
+        u32 asid_generation{};
         volatile u32 active_cpu_mask{};
     };
 
-    inline void initialize(address_space& value, u16 asid, word_t role) noexcept {
-        value.asid = asid;
+    [[nodiscard]] inline error_t initialize(address_space& value, word_t role) noexcept {
+        asid::handle identifier{};
+        const error_t asid_result = asid::allocate(identifier);
+        if (asid_result != error_t::success)
+            return asid_result;
+        value.asid = identifier.value;
+        value.asid_generation = identifier.generation;
         value.active_cpu_mask = 0U;
         memory::build_kernel_table(value.l0, value.l1, value.l2);
         memory::clear(value.l3);
@@ -145,9 +152,15 @@ namespace sys::arch::space
         value.l3.entry[(user_stack_base >> 12U) & 0x1ffU] =
             stack_phys | memory::descriptor_page | memory::access_flag | memory::inner_shareable |
             memory::attr_normal | memory::ap_el0_rw | memory::pxn | memory::uxn;
+        return value.image_status;
     }
 
     inline void activate(address_space& value) noexcept {
+        asid::handle identifier{value.asid, value.asid_generation};
+        if (asid::refresh(identifier) != error_t::success)
+            return;
+        value.asid = identifier.value;
+        value.asid_generation = identifier.generation;
         const u64 root = reinterpret_cast<u64>(&value.l0) & 0x0000ffffffffffffULL;
         const u64 ttbr = root | (static_cast<u64>(value.asid) << 48U);
         __atomic_fetch_or(&value.active_cpu_mask, 1U << arch::cpu::current_id(), __ATOMIC_RELEASE);
@@ -194,6 +207,13 @@ namespace sys::arch::space
          * kernel instruction stream itself.
          */
         memory::activate(reinterpret_cast<paddr_t>(&memory::kernel_l0));
+    }
+
+    inline void release(address_space& value) noexcept {
+        asid::handle identifier{value.asid, value.asid_generation};
+        asid::release(identifier);
+        value.asid = 0U;
+        value.asid_generation = 0U;
     }
 
     inline void invalidate_asid(u16 asid) noexcept {

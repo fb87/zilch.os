@@ -77,11 +77,13 @@ namespace sys::kernel::thread
             if (result != error_t::success)
                 return result;
 
-            initialize_user(user_threads[id], static_cast<thread_id_t>(id),
-                            static_cast<cpu_id_t>(id % maximum_cpu_count),
-                            CONFIG_ROOT_ONLY_BOOT ? 0U : static_cast<word_t>(id),
-                            CONFIG_ROOT_ONLY_BOOT ? 0U
-                                                  : static_cast<word_t>(initial_fuzz_seed(id)));
+            result = initialize_user(
+                user_threads[id], static_cast<thread_id_t>(id),
+                static_cast<cpu_id_t>(id % maximum_cpu_count),
+                CONFIG_ROOT_ONLY_BOOT ? 0U : static_cast<word_t>(id),
+                CONFIG_ROOT_ONLY_BOOT ? 0U : static_cast<word_t>(initial_fuzz_seed(id)));
+            if (result != error_t::success)
+                return result;
             user_threads[id].owner = &user_tasks[id];
             user_tasks[id].fault_endpoint = 10U;
             result = object::register_object(
@@ -288,6 +290,7 @@ namespace sys::kernel::thread
     }
 
     inline void clear_user_bundle(thread& target, task::task& owner) noexcept {
+        target.address_space.release();
         arch::thread::clear(target.context);
         for (usize_t index = 0U; index < 4U; ++index) {
             target.message[index] = 0U;
@@ -357,11 +360,14 @@ namespace sys::kernel::thread
         task::task& owner = user_tasks[id];
         thread& target = user_threads[id];
         task::initialize(owner, static_cast<space_id_t>(id));
-        initialize_user(target, static_cast<thread_id_t>(id), cpu, role, initial_fuzz_seed(id));
+        error_t result =
+            initialize_user(target, static_cast<thread_id_t>(id), cpu, role, initial_fuzz_seed(id));
+        if (result != error_t::success)
+            return result;
         target.owner = &owner;
         owner.fault_endpoint = 10U;
 
-        error_t result = object::register_dynamic_object(owner.object, object::type_t::task);
+        result = object::register_dynamic_object(owner.object, object::type_t::task);
         if (result == error_t::success)
             result = object::register_dynamic_object(target.object, object::type_t::thread);
         if (result == error_t::success)
@@ -567,6 +573,25 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
         if (!memory::verify_page_reuse_scrubbing())
             return error_t::invalid_argument;
+        const u64 asid_rollovers_before = arch::space::asid::rollovers;
+        const u32 asid_generation_before = arch::space::asid::generation;
+        for (u32 iteration = 0U; iteration < arch::space::asid::capacity + 4U; ++iteration) {
+            arch::space::asid::handle probe{};
+            if (arch::space::asid::allocate(probe) != error_t::success)
+                return error_t::invalid_argument;
+            arch::space::asid::release(probe);
+        }
+        arch::space::asid::handle root_asid{user_threads[0].address_space.native.asid,
+                                            user_threads[0].address_space.native.asid_generation};
+        if (arch::space::asid::refresh(root_asid) != error_t::success ||
+            arch::space::asid::rollovers <= asid_rollovers_before ||
+            arch::space::asid::generation == asid_generation_before)
+            return error_t::invalid_argument;
+        user_threads[0].address_space.native.asid = root_asid.value;
+        user_threads[0].address_space.native.asid_generation = root_asid.generation;
+        pr_info("[TEST] name=asid_rollover_reuse result=PASS generation=%u rollovers=%llu\n",
+                static_cast<unsigned int>(root_asid.generation),
+                static_cast<unsigned long long>(arch::space::asid::rollovers));
         if (memory::physical_region_count == 0U ||
             memory::physical_region_count > memory::maximum_physical_regions ||
             memory::managed_pages == 0U || memory::free_pages >= memory::managed_pages)

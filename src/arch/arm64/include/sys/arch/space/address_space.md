@@ -8,7 +8,9 @@ Builds private user address spaces and activates them through `TTBR0_EL1`.
 
 - every user thread owns a private root and stack page;
 - the user code page is shared read-only;
-- each address space receives a unique nonzero ASID;
+- each address space receives a generation-tagged nonzero ASID;
 - activation records an active-CPU mask and writes the ASID-tagged TTBR0;
 - the architecture backend provides ASID invalidation and global TLB fallback;
+- namespace rollover globally invalidates stage-1 translations and stale live
+  address spaces lazily acquire an identifier from the new generation;
 - threads are pinned, so address-space migration is not yet required.

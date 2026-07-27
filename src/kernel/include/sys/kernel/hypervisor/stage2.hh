@@ -6,6 +6,9 @@
 namespace sys::kernel::hypervisor
 {
     [[nodiscard]] inline error_t reset(virtual_machine_t& vm) noexcept {
+        const error_t vmid_result = ensure_vmid(vm);
+        if (vmid_result != error_t::success)
+            return vmid_result;
         if (vm.active_vcpus != 0U)
             return error_t::busy;
         for (auto& mapping : vm.mappings)
@@ -22,6 +25,9 @@ namespace sys::kernel::hypervisor
     stage2_map(virtual_machine_t& vm, u64 ipa, paddr_t host_address, u64 size, u32 permissions,
                diagnostic_kind diagnostic = diagnostic_kind::unexpected,
                error_t expected = error_t::success, const char* operation = "stage2_map") noexcept {
+        const error_t vmid_result = ensure_vmid(vm);
+        if (vmid_result != error_t::success)
+            return vmid_result;
         if (!aligned(ipa) || !aligned(host_address) || size == 0U || !aligned(size) ||
             ipa + size < ipa || ipa + size > guest_ipa_limit) {
             diagnose(vm, 2U, error_t::invalid_argument, ipa, size, diagnostic, expected, operation);
@@ -69,6 +75,9 @@ namespace sys::kernel::hypervisor
     [[nodiscard]] inline error_t stage2_unmap(
         virtual_machine_t& vm, u64 ipa, diagnostic_kind diagnostic = diagnostic_kind::unexpected,
         error_t expected = error_t::success, const char* operation = "stage2_unmap") noexcept {
+        const error_t vmid_result = ensure_vmid(vm);
+        if (vmid_result != error_t::success)
+            return vmid_result;
         for (auto& mapping : vm.mappings) {
             if (!mapping.valid || mapping.ipa != ipa)
                 continue;

@@ -112,8 +112,8 @@ namespace sys::kernel::thread
         return 0x9e3779b97f4a7c15ULL ^ (static_cast<u64>(id) * 0xbf58476d1ce4e5b9ULL);
     }
 
-    inline void initialize_user(thread& value, thread_id_t id, cpu_id_t cpu, word_t argument0,
-                                word_t argument1) noexcept {
+    [[nodiscard]] inline error_t initialize_user(thread& value, thread_id_t id, cpu_id_t cpu,
+                                                 word_t argument0, word_t argument1) noexcept {
         value.id = id;
         value.pinned_cpu = cpu;
         value.current_state = state::inactive;
@@ -138,9 +138,13 @@ namespace sys::kernel::thread
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
         __atomic_store_n(&value.executing, false, __ATOMIC_RELAXED);
-        value.address_space.initialize(static_cast<u16>(id + 1U), argument0);
+        const error_t space_result =
+            value.address_space.initialize(static_cast<space_id_t>(id), argument0);
+        if (space_result != error_t::success)
+            return space_result;
         arch::thread::initialize_user(value.context, arch::space::entry(value.address_space.native),
                                       arch::space::stack_top(), argument0, argument1);
+        return error_t::success;
     }
 
     [[nodiscard]] inline state load_state(const thread& value) noexcept {

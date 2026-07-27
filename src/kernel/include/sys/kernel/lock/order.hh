@@ -14,6 +14,7 @@ namespace sys::kernel::lock_order
         cspace = 50U,
         capability_derivation = 60U,
         memory_allocator = 70U,
+        translation_identifier = 75U,
         object_table = 80U,
     };
 

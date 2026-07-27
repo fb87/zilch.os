@@ -39,6 +39,9 @@ namespace sys::kernel::hypervisor
         if (vm_header == nullptr || vm_header->type != object::type_t::virtual_machine)
             return error_t::not_found;
         auto& vm = *reinterpret_cast<virtual_machine_t*>(vm_header);
+        const error_t vmid_result = ensure_vmid(vm);
+        if (vmid_result != error_t::success)
+            return vmid_result;
         if (vcpu.state != vm_state::runnable || vm.mapping_count == 0U)
             return error_t::invalid_argument;
         if (__atomic_exchange_n(&vcpu.running, true, __ATOMIC_ACQ_REL))

@@ -743,6 +743,20 @@ namespace sys::kernel::hypervisor::test
                       static_cast<u64>(abi::v1::guest_hypercall::shutdown)) &&
                   !arch::hypervisor::known_guest_hypercall(0xffffffffffffffffULL),
               8U);
+        const u64 vmid_rollovers_before = vmid_rollovers;
+        const u32 vmid_generation_before = vmid_generation;
+        for (u32 iteration = 0U; iteration < maximum_vmids + 4U; ++iteration) {
+            u16 probe{};
+            u32 probe_generation{};
+            check(allocate_vmid(probe, probe_generation) == error_t::success, 120U);
+            check(release_vmid(probe, probe_generation) == error_t::success, 121U);
+        }
+        check(vmid_rollovers > vmid_rollovers_before && vmid_generation != vmid_generation_before &&
+                  ensure_vmid(vm) == error_t::success && vm.vmid_generation == vmid_generation,
+              122U);
+        pr_info("[TEST] name=vmid_rollover_reuse result=PASS generation=%u rollovers=%llu\n",
+                static_cast<unsigned int>(vmid_generation),
+                static_cast<unsigned long long>(vmid_rollovers));
         volatile u32 lock_order_probe_low{};
         volatile u32 lock_order_probe_high{};
         lock_order::acquired(lock_order::rank::endpoint, &lock_order_probe_low);

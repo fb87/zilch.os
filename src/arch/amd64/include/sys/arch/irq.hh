@@ -20,6 +20,10 @@ namespace sys::arch::irq
         __asm__ volatile("cli" ::: "memory");
     }
 
+    inline void mask_all() noexcept {
+        disable();
+    }
+
     inline void enable() noexcept {
         __asm__ volatile("sti" ::: "memory");
     }

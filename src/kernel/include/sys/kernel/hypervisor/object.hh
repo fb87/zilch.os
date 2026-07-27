@@ -57,6 +57,7 @@ namespace sys::kernel::hypervisor
         volatile u32 lock{};
         vm_id_t id{};
         u16 vmid{};
+        u32 vmid_generation{};
         vm_state state{vm_state::inactive};
         u8 reserved{};
         paddr_t stage_2_root{};

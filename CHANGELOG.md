@@ -1,3 +1,11 @@
+## 0141 - Make ASID and VMID rollover generation-safe
+
+- Replace fixed ASIDs with a generation-tagged bounded allocator.
+- Add generation-tagged VMID rollover and stale-release protection.
+- Globally invalidate stage-1 or stage-2 translations before namespace reuse.
+- Lazily refresh stale live address spaces and VMs before execution.
+- Force both namespaces through rollover before real PL3 and guest acceptance.
+
 ## 0140 - Close remaining self-contained kernel hardening gaps
 
 - Add overflow-safe, page-complete EL0 range validation and unprivileged user-copy primitives.

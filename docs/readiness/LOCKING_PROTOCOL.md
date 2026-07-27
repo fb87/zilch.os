@@ -9,7 +9,8 @@ All blocking kernel spinlocks follow one global outer-to-inner rank order:
 5. CSpace, ordered by increasing lock address when two are held;
 6. capability derivation;
 7. physical-memory allocator;
-8. object table.
+8. ASID/VMID translation-identifier allocator;
+9. object table.
 
 Locks must be released in exact reverse order. Equal-rank locks may only nest in
 increasing address order, which makes two-CSpace and registry-wide scans

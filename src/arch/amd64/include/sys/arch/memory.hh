@@ -14,6 +14,7 @@ namespace sys::arch
         inline constexpr usize_t physical_address_bits = 52U;
         inline constexpr bool el0_available = false;
         inline constexpr usize_t entries = 512U;
+        inline constexpr u64 descriptor_valid = 0U;
         inline constexpr u64 descriptor_page = 0U;
         inline constexpr u64 access_flag = 0U;
         inline constexpr u64 inner_shareable = 0U;

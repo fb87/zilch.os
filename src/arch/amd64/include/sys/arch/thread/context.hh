@@ -7,6 +7,9 @@ namespace sys::arch::thread
     inline void copy(context& d, const context& s) noexcept {
         d = s;
     }
+    inline void clear(context& value) noexcept {
+        value = {};
+    }
     inline bool valid_user(const context&) noexcept {
         return true;
     }

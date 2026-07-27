@@ -32,7 +32,7 @@ namespace sys::kernel::hypervisor
         if constexpr (!arch::hypervisor::active)
             return error_t::unsupported;
         bootstrap_vm.id = 0U;
-        error_t vmid_result = allocate_vmid(bootstrap_vm.vmid);
+        error_t vmid_result = allocate_vmid(bootstrap_vm.vmid, bootstrap_vm.vmid_generation);
         if (vmid_result != error_t::success)
             return vmid_result;
         bootstrap_vm.state = vm_state::configured;
@@ -104,11 +104,13 @@ namespace sys::kernel::hypervisor
         vm.mapped_pages = 0U;
         vm.active_vcpus = 0U;
         const u16 old_vmid = vm.vmid;
+        const u32 old_vmid_generation = vm.vmid_generation;
         vm.vmid = 0U;
+        vm.vmid_generation = 0U;
         vm.stage_2_root = 0U;
         vm.state = vm_state::inactive;
         audit(vm, audit_action::teardown, count);
-        return release_vmid(old_vmid);
+        return release_vmid(old_vmid, old_vmid_generation);
     }
 
     [[nodiscard]] inline bool mappings_isolated(const virtual_machine_t& first,

@@ -206,7 +206,7 @@ Every completed requirement must link to:
 - [-] **MEM-018** Root-authorized allowlisted MMIO frames use device attributes and reject executable mappings; general device-resource delegation remains open.
 - [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root and removes all tracked frame mappings before clearing user page tables; stress and scalable mapping-database evidence remain open.
 - [x] **MEM-020** SMP TLB shootdown implemented and runtime verified on four CPUs.
-- [ ] **MEM-021** ASID allocation, rollover, and reuse implemented.
+- [x] **MEM-021** Generation-tagged ASID allocation performs global stage-1 invalidation on rollover, lazily refreshes stale live address spaces, and ignores stale-generation releases; certification rolls over before real PL3 execution.
 
 ## 4.4 User pager integration
 
@@ -387,7 +387,7 @@ Every completed requirement must link to:
 - [ ] **HYP-010** Complete memory attribute validation implemented.
 - [ ] **HYP-011** Dirty/access tracking strategy implemented if required.
 - [ ] **HYP-012** Stage-2 fault delivered to userspace VMM when policy is needed.
-- [ ] **HYP-013** VMID rollover and global invalidation implemented.
+- [x] **HYP-013** Generation-tagged VMID allocation performs global stage-2 invalidation on rollover, lazily refreshes stale live VMs before mapping/reset/run, and ignores stale-generation releases.
 - [ ] **HYP-014** Concurrent map/unmap versus vCPU execution tested.
 - [ ] **HYP-015** No guest mapping can target kernel, hypervisor, or another VM memory.
 
@@ -561,7 +561,7 @@ Every completed requirement must link to:
 - [-] **TST-018** `ipc_lifecycle_races` covers explicit cancel, timer expiry, blocked destroy, server exit with live reply authority, and endpoint reuse across CPUs; controlled instruction-level race fuzz and fault injection remain open.
 - [-] **TST-019** Deterministic capability-revoke-driven unmapping integration test exists; concurrent revoke/map/unmap and TLB-shootdown race fuzz remain open.
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
-- [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
+- [x] **TST-021** Deterministic VM lifecycle stress forces VMID rollover with a live bootstrap VM, refreshes it, then passes real guest execution, teardown, reuse, and concurrent lifecycle models.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
 - [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, twenty-way fragmentation/coalescing, metadata reuse, 32 repeated quota-exhaustion/reclaim cycles covering 512 frame lifecycles, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion and multi-CPU pressure remain open.
 - [-] **TST-024** Attribute/mapping rejection and injected extent-split metadata failure verify transactional rollback with before/after invariant signatures; systematic injection at object registration, capability installation, frame/page-table allocation, and teardown remains open.

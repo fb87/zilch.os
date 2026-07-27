@@ -11,13 +11,18 @@ namespace sys::kernel::space
         space_id_t id{};
         arch::space::address_space native{};
 
-        inline void initialize(u16 asid, word_t image_role = 0U) noexcept {
-            id = static_cast<space_id_t>(asid);
-            arch::space::initialize(native, asid, image_role);
+        [[nodiscard]] inline error_t initialize(space_id_t space_id,
+                                                word_t image_role = 0U) noexcept {
+            id = space_id;
+            return arch::space::initialize(native, image_role);
         }
 
         inline void activate() noexcept {
             arch::space::activate(native);
+        }
+
+        inline void release() noexcept {
+            arch::space::release(native);
         }
 
         [[nodiscard]] inline error_t map_page(vaddr_t address, void* page, bool writable,
