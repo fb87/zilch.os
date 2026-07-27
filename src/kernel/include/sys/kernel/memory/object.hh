@@ -10,9 +10,10 @@ namespace sys::kernel::memory
     inline constexpr u32 maximum_mappings_per_frame = 8U;
 
     struct mapping_record {
-        space_id_t space{};
+        object::reference_t address_space{};
         vaddr_t address{};
         permission permissions{permission::none};
+        u32 generation{};
         bool valid{};
     };
 
@@ -43,7 +44,12 @@ namespace sys::kernel::memory
     [[nodiscard]] inline constexpr bool executable(permission value) noexcept {
         return (static_cast<u8>(value) & static_cast<u8>(permission::execute)) != 0U;
     }
-    [[nodiscard]] inline constexpr bool valid_wx(permission value) noexcept {
-        return !(writable(value) && executable(value));
+    [[nodiscard]] inline constexpr bool readable(permission value) noexcept {
+        return (static_cast<u8>(value) & static_cast<u8>(permission::read)) != 0U;
+    }
+    [[nodiscard]] inline constexpr bool valid_permission(permission value) noexcept {
+        const u8 bits = static_cast<u8>(value);
+        return bits != 0U && (bits & ~static_cast<u8>(0x7U)) == 0U && readable(value) &&
+               !(writable(value) && executable(value));
     }
 } // namespace sys::kernel::memory

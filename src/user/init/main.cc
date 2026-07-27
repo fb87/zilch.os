@@ -28,6 +28,7 @@ namespace
         userspace_pager_service = 11U,
         dynamic_ipc_objects = 12U,
         memory_resource_lifecycle = 13U,
+        memory_mapping_database = 14U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -204,6 +205,50 @@ namespace
                owned_after == owned_before;
     }
 
+    [[nodiscard]] bool test_memory_mapping_database() noexcept {
+        constexpr sys::word_t frame_selector = 16U;
+        constexpr sys::word_t root_space_selector = 3U;
+        constexpr sys::word_t first_address = 0x20004000U;
+        constexpr sys::word_t second_address = 0x20005000U;
+        constexpr sys::word_t read_write = 3U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t busy = static_cast<sys::word_t>(sys::error_t::busy);
+
+        if (sys::control(sys::abi::v1::control_operation::frame_create, 0U, frame_selector) !=
+            success)
+            return false;
+
+        bool passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
+                                   frame_selector, first_address, read_write) == success;
+        passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
+                              frame_selector, second_address, read_write) == success &&
+                 passed;
+        passed =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) == busy &&
+            passed;
+        passed = sys::control(sys::abi::v1::control_operation::unmap_frame, root_space_selector,
+                              frame_selector, first_address) == success &&
+                 passed;
+        passed =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) == busy &&
+            passed;
+        passed = sys::control(sys::abi::v1::control_operation::unmap_frame, root_space_selector,
+                              frame_selector, second_address) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) ==
+                     success &&
+                 passed;
+
+        if (!passed) {
+            (void)sys::control(sys::abi::v1::control_operation::unmap_frame, root_space_selector,
+                               frame_selector, first_address);
+            (void)sys::control(sys::abi::v1::control_operation::unmap_frame, root_space_selector,
+                               frame_selector, second_address);
+            (void)sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector);
+        }
+        return passed;
+    }
+
     struct acceptance_ledger {
         sys::word_t failure_mask{};
         sys::word_t failure_count{};
@@ -373,6 +418,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
 
     const bool memory_lifecycle_pass = test_memory_resource_lifecycle();
     record(ledger, test_id::memory_resource_lifecycle, memory_lifecycle_pass);
+
+    const bool mapping_database_pass = test_memory_mapping_database();
+    record(ledger, test_id::memory_mapping_database, mapping_database_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

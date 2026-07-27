@@ -199,9 +199,9 @@ Every completed requirement must link to:
 ## 4.3 Mapping database
 
 - [x] **MEM-013** Basic map/unmap and W^X checks exist.
-- [-] **MEM-014** Bounded multiple reverse mappings exist; scalable representation remains open.
-- [-] **MEM-015** Bounded per-frame reverse mappings exist and address-space teardown scans them to remove residual mappings; scalable indexing remains open.
-- [-] **MEM-016** Unmap/reclaim paths exist; concurrent revoke race evidence remains open.
+- [-] **MEM-014** Up to eight mappings per frame are supported with serialized transactions; scalable representation remains open.
+- [-] **MEM-015** Per-frame reverse mappings use generation-checked address-space references, and address-space teardown removes records for the exact object generation; scalable indexing remains open.
+- [-] **MEM-016** Unmap by frame/address-space and frame-wide teardown exist with serialized record updates; capability-revoke integration and concurrent race evidence remain open.
 - [ ] **MEM-017** Cacheability/shareability attributes validated.
 - [ ] **MEM-018** Device-memory mappings use correct attributes.
 - [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root and removes all tracked frame mappings before clearing user page tables; stress and scalable mapping-database evidence remain open.
@@ -563,7 +563,7 @@ Every completed requirement must link to:
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
-- [-] **TST-023** Certification exercises bounded frame/page-table allocation, accounting, destruction, and reuse; full allocator exhaustion and sustained pressure remain open.
+- [-] **TST-023** Certification exercises bounded allocation/accounting plus multi-map, partial-unmap, destroy rejection, cleanup, and reuse; full allocator exhaustion and sustained pressure remain open.
 - [ ] **TST-024** Fault injection covers every allocation and teardown stage.
 
 ## 12.4 Long-duration certification

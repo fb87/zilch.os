@@ -3,6 +3,7 @@
 #include <sys/types.hh>
 
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/memory.hh>
 
 namespace
 {
@@ -32,8 +33,11 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         if (fault.status != static_cast<sys::word_t>(sys::error_t::success))
             fail(2U + index * 8U);
 
-        const sys::word_t resolved = sys::control(
-            sys::abi::v1::control_operation::fault_reply_sender, working_frame, fault.message2, 2U);
+        constexpr auto read_write =
+            sys::abi::v1::memory_permission::read | sys::abi::v1::memory_permission::write;
+        const sys::word_t resolved =
+            sys::control(sys::abi::v1::control_operation::fault_reply_sender, working_frame,
+                         fault.message2, sys::abi::v1::encode(read_write));
         if (resolved != static_cast<sys::word_t>(sys::error_t::success))
             fail(3U + index * 8U);
 

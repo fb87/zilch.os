@@ -99,3 +99,13 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | MEM-007, MEM-008, MEM-010 | Serialized physical allocator, owner-tagged frame/page-table objects, quota charging, and balanced destroy accounting. | `memory_resource_lifecycle` creates eight frames and four page tables, verifies peak ownership, destroys all objects, and verifies accounting returns to baseline. | In progress: untyped delegation, scalable pools, and pressure policy remain open. |
 | MEM-015, MEM-019 | Bounded reverse mapping records plus `unmap_all()` during process bundle teardown. | Existing pager/process teardown, object reuse, and four-CPU lifecycle certification. | In progress: scalable mapping index and revoke/map race testing remain open. |
 | TST-023 | Bounded create/destroy/accounting lifecycle test. | `[TEST] name=memory_resource_lifecycle`. | In progress: complete exhaustion and sustained pressure are not yet covered. |
+
+
+## Batch 0102 — generation-safe mapping database foundation
+
+| Requirement | Implementation | Verification | Status / limitation |
+|---|---|---|---|
+| MEM-014 | One frame supports up to eight serialized mappings. | `memory_mapping_database` maps one frame at two VAs and retains both records. | In progress: bounded fixed-size storage. |
+| MEM-015 | Reverse records store the address-space object ID, generation, type, VA, permissions, and mapping generation. | Partial unmap and second-map retention are verified from PL3. | In progress: no scalable global index. |
+| MEM-016 | Unmap by frame/address-space and frame-wide cleanup resolve generation-safe address-space references. | Frame destruction returns `busy` until both mappings are removed, then succeeds. | In progress: capability revoke does not yet own mapping authority and controlled races remain open. |
+| TST-023 | Bounded mapping lifecycle and rollback cleanup are part of root certification. | `[TEST] name=memory_mapping_database result=PASS`. | In progress: exhaustion, fragmentation, and sustained pressure remain open. |

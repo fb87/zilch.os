@@ -28,6 +28,8 @@ namespace sys::kernel::memory
     inline u32 managed_pages{};
     inline u32 free_pages{};
     inline volatile u32 allocator_lock{};
+    inline volatile u32 mapping_lock{};
+    inline u32 next_mapping_generation{1U};
 
     struct physical_region {
         paddr_t base{};
@@ -46,6 +48,26 @@ namespace sys::kernel::memory
 
     inline void unlock_allocator() noexcept {
         __atomic_store_n(&allocator_lock, 0U, __ATOMIC_RELEASE);
+    }
+
+    inline void lock_mappings() noexcept {
+        while (__atomic_exchange_n(&mapping_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
+            arch::cpu::relax();
+    }
+
+    inline void unlock_mappings() noexcept {
+        __atomic_store_n(&mapping_lock, 0U, __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline constexpr bool same_reference(const object::reference_t& left,
+                                                       const object::reference_t& right) noexcept {
+        return left.id == right.id && left.generation == right.generation &&
+               left.type == right.type;
+    }
+
+    [[nodiscard]] inline constexpr bool
+    valid_reference(const object::reference_t& reference) noexcept {
+        return reference.type != object::type_t::none && reference.generation != 0U;
     }
 
     extern "C" char __kernel_end[];
@@ -341,57 +363,120 @@ namespace sys::kernel::memory
 
     [[nodiscard]] inline error_t map(space::address_space& target, frame& source, vaddr_t address,
                                      permission permissions) noexcept {
-        if (!valid_wx(permissions) || !source.allocated)
+        if (!valid_permission(permissions) || !source.allocated)
             return error_t::denied;
-        for (const auto& mapping : source.mappings)
-            if (mapping.valid && mapping.space == target.id && mapping.address == address)
+        const object::reference_t space_reference = object::reference(target.object);
+        if (!valid_reference(space_reference))
+            return error_t::invalid_argument;
+
+        lock_mappings();
+        for (const auto& mapping : source.mappings) {
+            if (mapping.valid && same_reference(mapping.address_space, space_reference) &&
+                mapping.address == address) {
+                unlock_mappings();
                 return error_t::busy;
+            }
+        }
         mapping_record* free_record = nullptr;
-        for (auto& mapping : source.mappings)
+        for (auto& mapping : source.mappings) {
             if (!mapping.valid) {
                 free_record = &mapping;
                 break;
             }
-        if (free_record == nullptr)
+        }
+        if (free_record == nullptr) {
+            unlock_mappings();
             return error_t::no_memory;
+        }
+
         const error_t result = target.map_page(
             address, reinterpret_cast<void*>(static_cast<uintptr_t>(source.physical_address)),
             writable(permissions), executable(permissions));
-        if (result != error_t::success)
+        if (result != error_t::success) {
+            unlock_mappings();
             return result;
-        *free_record = {target.id, address, permissions, true};
+        }
+
+        u32 generation = next_mapping_generation++;
+        if (generation == 0U)
+            generation = next_mapping_generation++;
+        *free_record = {space_reference, address, permissions, generation, true};
         ++source.mapping_count;
+        unlock_mappings();
         return error_t::success;
     }
 
     [[nodiscard]] inline error_t unmap(space::address_space& target, frame& source,
                                        vaddr_t address = 0U) noexcept {
+        const object::reference_t space_reference = object::reference(target.object);
+        lock_mappings();
         for (auto& mapping : source.mappings) {
-            if (!mapping.valid || mapping.space != target.id ||
+            if (!mapping.valid || !same_reference(mapping.address_space, space_reference) ||
                 (address != 0U && mapping.address != address))
                 continue;
             const error_t result = target.unmap_page(mapping.address);
-            if (result != error_t::success)
+            if (result != error_t::success) {
+                unlock_mappings();
                 return result;
+            }
             mapping = {};
-            --source.mapping_count;
+            if (source.mapping_count != 0U)
+                --source.mapping_count;
+            unlock_mappings();
             return error_t::success;
         }
+        unlock_mappings();
         return error_t::not_found;
     }
-    inline void unmap_all(space::address_space& target) noexcept {
-        for (auto& source : frames) {
-            if (!source.allocated || source.mapping_count == 0U)
+
+    [[nodiscard]] inline error_t unmap_all(frame& source) noexcept {
+        if (!source.allocated)
+            return error_t::not_found;
+        error_t first_error = error_t::success;
+        lock_mappings();
+        for (auto& mapping : source.mappings) {
+            if (!mapping.valid)
                 continue;
-            for (auto& mapping : source.mappings) {
-                if (!mapping.valid || mapping.space != target.id)
-                    continue;
-                (void)target.unmap_page(mapping.address);
+            object::header_t* header = object::resolve(mapping.address_space);
+            if (header == nullptr || header->type != object::type_t::address_space) {
+                mapping = {};
+                if (source.mapping_count != 0U)
+                    --source.mapping_count;
+                continue;
+            }
+            auto& target = *reinterpret_cast<space::address_space*>(header);
+            const error_t result = target.unmap_page(mapping.address);
+            if (result != error_t::success && result != error_t::not_found &&
+                first_error == error_t::success)
+                first_error = result;
+            if (result == error_t::success || result == error_t::not_found) {
                 mapping = {};
                 if (source.mapping_count != 0U)
                     --source.mapping_count;
             }
         }
+        unlock_mappings();
+        return first_error;
+    }
+
+    inline void unmap_all(space::address_space& target) noexcept {
+        const object::reference_t space_reference = object::reference(target.object);
+        lock_mappings();
+        for (auto& source : frames) {
+            if (!source.allocated || source.mapping_count == 0U)
+                continue;
+            for (auto& mapping : source.mappings) {
+                if (!mapping.valid || !same_reference(mapping.address_space, space_reference))
+                    continue;
+                const error_t result = target.unmap_page(mapping.address);
+                if (result != error_t::success && result != error_t::not_found)
+                    continue;
+                mapping = {};
+                if (source.mapping_count != 0U)
+                    --source.mapping_count;
+            }
+        }
+        unlock_mappings();
     }
 
     [[nodiscard]] inline u32 allocated_page_count() noexcept {

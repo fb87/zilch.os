@@ -1,1 +1,3 @@
-static_assert(sys::kernel::memory::valid_wx(sys::kernel::memory::permission::read));
+static_assert(sys::kernel::memory::valid_permission(sys::kernel::memory::permission::read));
+
+static_assert(!sys::kernel::memory::valid_permission(sys::kernel::memory::permission::write));

@@ -225,6 +225,9 @@ namespace sys::kernel::syscall
                     case 13U:
                         name = "memory_resource_lifecycle";
                         break;
+                    case 14U:
+                        name = "memory_mapping_database";
+                        break;
                     default:
                         break;
                 }

@@ -141,3 +141,20 @@
 - Discover all derivation descendants before invalidating any parent record.
 - Prevent recursive revoke from losing grandchildren when an earlier slot is removed.
 - Preserve the selected ancestor capability while removing every marked descendant.
+
+## 0102 - Generation-safe mapping database foundation
+
+- Serialize frame map/unmap transactions across CPUs.
+- Replace numeric address-space IDs in reverse mappings with generation-checked object references.
+- Support up to eight mappings per frame with per-mapping generation records.
+- Reject invalid permission encodings and require readable, non-W+X mappings.
+- Preserve destroy rejection until every frame mapping is removed.
+- Resolve address spaces through the object table during frame-wide teardown.
+- Add PL3 certification for two mappings of one frame and balanced unmap/destroy.
+
+## 0103 - Pager permission ABI correction
+
+- Define public ABI memory permission flags instead of using numeric literals.
+- Make the userspace memory server request read/write mappings for resolved faults.
+- Preserve rejection of write-only and writable-executable stage-1 mappings.
+- Prevent pager failure from cascading into later memory and process lifecycle tests.
