@@ -6,6 +6,7 @@
 namespace sys::kernel::emergency
 {
     inline constexpr u64 crash_magic = 0x5a494c4348525348ULL; // ZILCHRSH
+    inline constexpr u16 record_format_version = 1U;
     inline constexpr u32 cpu_count = 4U;
     inline constexpr u32 records_per_cpu = 32U;
 
@@ -15,10 +16,17 @@ namespace sys::kernel::emergency
         fatal_exception = 3U,
         stack_corruption = 4U,
         certification = 5U,
+        irq = 6U,
+        scheduler_switch = 7U,
+        ipc = 8U,
+        vm_exit = 9U,
+        user_fault = 10U,
     };
 
     struct record {
         u64 sequence{};
+        u16 version{};
+        u16 reserved{};
         event kind{};
         cpu_id_t cpu{};
         u64 argument[5]{};
@@ -47,6 +55,8 @@ namespace sys::kernel::emergency
             return;
         const u64 sequence = __atomic_fetch_add(&next_sequence[cpu], 1U, __ATOMIC_RELAXED) + 1U;
         record& destination = buffers[cpu][sequence % records_per_cpu];
+        destination.version = record_format_version;
+        destination.reserved = 0U;
         destination.kind = kind;
         destination.cpu = cpu;
         destination.argument[0] = argument0;
@@ -55,6 +65,20 @@ namespace sys::kernel::emergency
         destination.argument[3] = argument3;
         destination.argument[4] = argument4;
         __atomic_store_n(&destination.sequence, sequence, __ATOMIC_RELEASE);
+    }
+
+    inline void trace(event kind, u64 argument0 = 0U, u64 argument1 = 0U, u64 argument2 = 0U,
+                      u64 argument3 = 0U, u64 argument4 = 0U) noexcept {
+#if CONFIG_TRACE
+        append(kind, argument0, argument1, argument2, argument3, argument4);
+#else
+        (void)kind;
+        (void)argument0;
+        (void)argument1;
+        (void)argument2;
+        (void)argument3;
+        (void)argument4;
+#endif
     }
 
     [[nodiscard]] inline u64 checksum(const crash_record& value) noexcept {
@@ -92,6 +116,6 @@ namespace sys::kernel::emergency
         const record& observed = buffers[cpu][sequence % records_per_cpu];
         return __atomic_load_n(&observed.sequence, __ATOMIC_ACQUIRE) == sequence &&
                observed.kind == event::certification && observed.cpu == cpu &&
-               observed.argument[0] == 0xfeedfaceULL;
+               observed.version == record_format_version && observed.argument[0] == 0xfeedfaceULL;
     }
 } // namespace sys::kernel::emergency

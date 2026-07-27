@@ -895,12 +895,18 @@ namespace sys::kernel::thread
 
         ++value.faults;
         store_state(value, state::faulted);
+#if CONFIG_VERBOSE_DIAGNOSTICS
         pr_err("user context rejected thread=%llu cpu=%u pc=%llx sp=%llx status=%llx\n",
                static_cast<unsigned long long>(value.id),
                static_cast<unsigned int>(value.pinned_cpu),
                static_cast<unsigned long long>(value.context.instruction_pointer),
                static_cast<unsigned long long>(value.context.stack_pointer),
                static_cast<unsigned long long>(value.context.status));
+#else
+        pr_err("user context rejected thread=%llu cpu=%u\n",
+               static_cast<unsigned long long>(value.id),
+               static_cast<unsigned int>(value.pinned_cpu));
+#endif
         return false;
     }
 
@@ -972,6 +978,8 @@ namespace sys::kernel::thread
                     __atomic_store_n(&old.executing, false, __ATOMIC_RELEASE);
                 }
                 __atomic_fetch_add(&per_cpu_switches[cpu], 1U, __ATOMIC_RELAXED);
+                emergency::trace(emergency::event::scheduler_switch, old_index, candidate,
+                                 old_generation, value.object.generation);
                 return;
             }
             candidate = next_runnable(cpu, candidate);
@@ -1146,6 +1154,9 @@ namespace sys::kernel::thread
         thread& value = current();
         ++value.faults;
         verification::mark_fault_ipc();
+        emergency::trace(emergency::event::user_fault, value.id, syndrome, fault_address,
+                         frame.instruction_pointer);
+#if CONFIG_VERBOSE_DIAGNOSTICS
         pr_warn("user fault delivered thread=%llu cpu=%u esr=%llx far=%llx pc=%llx pager=%llu\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(syndrome),
@@ -1153,6 +1164,12 @@ namespace sys::kernel::thread
                 static_cast<unsigned long long>(frame.instruction_pointer),
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U));
+#else
+        pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu\n",
+                static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
+                static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
+                                                                       : 0U));
+#endif
         if (deliver_fault_ipc(value, frame, syndrome, fault_address))
             return true;
         store_state(value, state::faulted);

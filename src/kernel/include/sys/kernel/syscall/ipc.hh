@@ -522,6 +522,7 @@ namespace sys::kernel::syscall
         const auto operation =
             static_cast<abi::v1::ipc_operation>(arch::syscall::argument(frame, 1U));
         const capability_id_t endpoint = arch::syscall::argument(frame, 0U);
+        emergency::trace(emergency::event::ipc, current.id, static_cast<u64>(operation), endpoint);
         switch (operation) {
             case abi::v1::ipc_operation::call:
                 return call(current, frame, endpoint);

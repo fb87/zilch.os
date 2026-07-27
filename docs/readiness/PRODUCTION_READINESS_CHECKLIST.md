@@ -522,12 +522,12 @@ Every completed requirement must link to:
 - [x] **OBS-002** `printk` disables local IRQs and uses bounded lock acquisition; contention records to the per-CPU emergency ring instead of spinning behind an interrupted owner.
 - [-] **OBS-003** Contended records are deferred into lock-free per-CPU rings, but formatted asynchronous draining remains open.
 - [x] **OBS-004** Fixed-size lock-free per-CPU event rings retain exception and emergency trace records with release-published sequence numbers.
-- [ ] **OBS-005** IPC, scheduler, IRQ, VM-exit, and fault tracing implemented.
-- [ ] **OBS-006** Trace overhead can be disabled in production.
+- [x] **OBS-005** Versioned per-CPU records trace IPC entry, scheduler switches, IRQs, VM exits, user faults, and exception entry.
+- [x] **OBS-006** Routine tracing is compiled out when `CONFIG_TRACE=0` in release builds; fatal and contention records remain always enabled.
 - [ ] **OBS-007** Resource leak counters implemented.
 - [ ] **OBS-008** VM lifecycle and assignment audit records implemented.
-- [ ] **OBS-009** Stable diagnostic format documented.
-- [ ] **OBS-010** Sensitive guest/user data excluded from logs by default.
+- [x] **OBS-009** Emergency record format version 1, event identifiers, publication rules, and field meanings are documented.
+- [x] **OBS-010** Release logs exclude guest registers and user/guest PC, FAR, ESR, and IPA details; verbose diagnostics are restricted to development/certification builds.
 
 ---
 

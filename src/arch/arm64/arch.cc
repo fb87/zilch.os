@@ -39,6 +39,7 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
 
     if (exception_class == 1U) {
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
+        sys::kernel::emergency::trace(sys::kernel::emergency::event::irq, irq, vector, level);
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
             const sys::u64 ticks = sys::platform::timer::handle_interrupt();
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {

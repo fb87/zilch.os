@@ -58,6 +58,8 @@ namespace sys::kernel::hypervisor
             vcpu.interrupt_state.reset();
         }
         vcpu.last_exit = exit;
+        emergency::trace(emergency::event::vm_exit, vcpu.id, static_cast<u64>(exit.reason),
+                         exit.syndrome, exit.qualification, exit.guest_pc);
         --vm.active_vcpus;
         __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
         const bool fatal_exit = result != error_t::success || fatal_guest_exit(exit.reason);
@@ -71,6 +73,7 @@ namespace sys::kernel::hypervisor
             vcpu.last_diagnostic.syndrome = exit.syndrome;
             vcpu.last_diagnostic.fault_address = exit.fault_address;
             vcpu.last_diagnostic.guest_pc = exit.guest_pc;
+#if CONFIG_VERBOSE_DIAGNOSTICS
             pr_err("hv guest-exit result=%d reason=%u esr=%llx far=%llx ipa=%llx pc=%llx "
                    "pstate=%llx vmid=%u run=%u\n",
                    static_cast<int>(result), static_cast<unsigned int>(exit.reason),
@@ -91,6 +94,10 @@ namespace sys::kernel::hypervisor
                    static_cast<unsigned long long>(vcpu.context.x[6]),
                    static_cast<unsigned long long>(vcpu.context.x[7]),
                    static_cast<unsigned long long>(vcpu.context.sp_el1));
+#else
+            pr_err("hv guest-exit result=%d reason=%u vmid=%u run=%u\n", static_cast<int>(result),
+                   static_cast<unsigned int>(exit.reason), vm.vmid, vcpu.run_generation);
+#endif
         }
         return result;
     }

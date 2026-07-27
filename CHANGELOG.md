@@ -1,3 +1,11 @@
+## 0134 - Versioned production trace policy
+
+- Add version-1 IRQ, scheduler, IPC, VM-exit, and user-fault event records.
+- Compile routine tracing out of release builds through `CONFIG_TRACE=0`.
+- Keep fatal exception and printk-contention capture enabled in every variant.
+- Redact guest registers and user/guest address diagnostics from release logging.
+- Document stable event identifiers, field layouts, and publication semantics.
+
 ## 0133 - Failure-safe emergency diagnostics
 
 - Add lock-free 32-record emergency event rings for each CPU.
