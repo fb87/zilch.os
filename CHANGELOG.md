@@ -1,3 +1,10 @@
+## 0149 - Freeze the fault IPC metadata contract
+
+- Define the four-word ABI v1 fault message as kind, syndrome, address, and PC.
+- Deliver architectural syndrome data that was previously retained only inside the kernel.
+- Validate complete metadata for real PL3 data and undefined-instruction faults.
+- Add structure layout and numeric-value ABI gates.
+
 ## 0148 - Make scheduling configuration lifecycle-safe
 
 - Replace unchecked scheduling-field writes with validated context configuration.

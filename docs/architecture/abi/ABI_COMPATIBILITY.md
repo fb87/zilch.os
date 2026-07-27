@@ -15,4 +15,9 @@ The current native ABI is **1.0.0** and is frozen at the register, numeric-value
 
 The native syscall convention uses 64-bit words: syscall number and arguments are passed through the architecture syscall frame, the primary result is returned in word 0, and operations with a secondary result use word 1. IPC uses eight input words and returns status, sender, and four message words. For an incoming call, the frozen `sender` result word contains the badge of the endpoint capability used for that call, not a kernel thread identifier. Reply authority retains caller identity internally.
 
+Fault IPC interprets the four message words as `fault_message`: fault kind,
+architecture syndrome, fault address, and faulting instruction pointer.
+Disposition is supplied only in the pager's reply and is not part of the fault
+request.
+
 `make abi-check` compiles every public structure on the host and verifies sizes, alignments, offsets, standard-layout/trivial-copy properties, enum widths, selected frozen numeric values, and the 64-bit syscall word contract. `make abi-headers-check` independently compiles every public header.

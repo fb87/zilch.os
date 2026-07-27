@@ -14,6 +14,7 @@ namespace
     inline constexpr sys::word_t notification = 14U;
     inline constexpr sys::word_t resource = 15U;
     inline constexpr sys::word_t pager_frame = 12U;
+    inline constexpr sys::word_t pager_fault_address = 0x20004000U;
     inline constexpr sys::word_t service_frame_base = 16U;
     inline constexpr sys::word_t pager_client_count = 2U;
     inline constexpr sys::word_t pressure_client_count = 3U;
@@ -101,12 +102,18 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         const auto fault = sys::ipc_receive(endpoint);
         if (fault.status != static_cast<sys::word_t>(sys::error_t::success))
             fail(2U + index * 8U);
+        const sys::abi::v1::fault_message fault_record{fault.message0, fault.message1,
+                                                       fault.message2, fault.message3};
+        if (fault_record.kind != static_cast<sys::word_t>(sys::abi::v1::fault_kind::data_abort) ||
+            fault_record.syndrome == 0U || fault_record.address != pager_fault_address ||
+            fault_record.instruction_pointer == 0U)
+            fail(2U + index * 8U);
 
         constexpr auto read_write =
             sys::abi::v1::memory_permission::read | sys::abi::v1::memory_permission::write;
         const sys::word_t resolved =
             sys::control(sys::abi::v1::control_operation::fault_reply_sender, pager_frame,
-                         fault.message2, sys::abi::v1::encode(read_write));
+                         fault_record.address, sys::abi::v1::encode(read_write));
         if (resolved != static_cast<sys::word_t>(sys::error_t::success))
             fail(3U + index * 8U);
 
@@ -133,10 +140,13 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
     }
 
     const auto instruction_fault = sys::ipc_receive(endpoint);
+    const sys::abi::v1::fault_message instruction_record{
+        instruction_fault.message0, instruction_fault.message1, instruction_fault.message2,
+        instruction_fault.message3};
     if (instruction_fault.status != static_cast<sys::word_t>(sys::error_t::success) ||
-        instruction_fault.message1 !=
+        instruction_record.kind !=
             static_cast<sys::word_t>(sys::abi::v1::fault_kind::instruction_abort) ||
-        instruction_fault.message3 == 0U)
+        instruction_record.syndrome == 0U || instruction_record.instruction_pointer == 0U)
         fail(0x30U);
     const sys::word_t terminated = sys::ipc_reply(
         static_cast<sys::word_t>(sys::abi::v1::fault_disposition::terminate), 0U, 0U, 0U);

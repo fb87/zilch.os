@@ -17,4 +17,11 @@ namespace sys::abi::v1
         resume,
         terminate,
     };
+
+    struct fault_message final {
+        word_t kind{};
+        word_t syndrome{};
+        word_t address{};
+        word_t instruction_pointer{};
+    };
 } // namespace sys::abi::v1

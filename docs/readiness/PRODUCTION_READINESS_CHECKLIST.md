@@ -165,7 +165,7 @@ Every completed requirement must link to:
 
 - [x] **IPC-017** User page faults delivered to configured pager. Two independent clients pass.
 - [x] **IPC-018** A real ARM64 PL3 `udf` exception is classified as an instruction fault, delivers syndrome and faulting PC through production fault IPC, and is contained by userspace pager policy.
-- [-] **IPC-019** Fault address, access syndrome, and PC are delivered; cross-architecture metadata contract is not frozen.
+- [x] **IPC-019** ABI v1 freezes a four-word fault message containing kind, architecture syndrome, fault address, and instruction pointer; layout and values are compile-time checked and validated by real PL3 data and instruction faults.
 - [x] **IPC-020** Pager resume maps and restarts recoverable data faults; terminate policy kills an undefined-instruction client without disrupting the pager or other service processes.
 - [x] **IPC-021** Pager exit with live reply authority immediately terminates its faulting caller; queued or accepted orphaned faults retain a kernel safety deadline and terminate deterministically on expiry.
 - [x] **IPC-022** A thread may own only one pending fault record; attempted nested delivery is rejected and the faulting thread is contained instead of overwriting pager authority.

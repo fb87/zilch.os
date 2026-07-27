@@ -316,8 +316,6 @@ namespace
                                               thread_selector, task_selector, space_selector);
         passed = created && passed;
         if (passed)
-            passed = wait_for_badges(1U << 9U);
-        if (passed)
             passed = sys::control(sys::abi::v1::control_operation::thread_suspend,
                                   thread_selector) == success;
         if (passed)

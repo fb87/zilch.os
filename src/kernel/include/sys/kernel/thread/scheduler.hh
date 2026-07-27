@@ -1451,8 +1451,8 @@ namespace sys::kernel::thread
         value.last_fault.address = fault_address;
         value.last_fault.instruction_pointer = frame.instruction_pointer;
         value.fault_disposition = fault::disposition::pending;
-        value.message[0] = static_cast<word_t>(fault::disposition::terminate);
-        value.message[1] = static_cast<word_t>(value.last_fault.type);
+        value.message[0] = static_cast<word_t>(value.last_fault.type);
+        value.message[1] = static_cast<word_t>(syndrome);
         value.message[2] = static_cast<word_t>(fault_address);
         value.message[3] = static_cast<word_t>(frame.instruction_pointer);
         value.waiting_endpoint = value.owner->fault_endpoint;
