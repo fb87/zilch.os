@@ -30,6 +30,10 @@ SECTIONS
     *(.bss .bss.* COMMON)
     . = ALIGN(4096);
     __bss_end = .;
+  }
+  .noinit (NOLOAD) : ALIGN(4096) {
+    *(.noinit .noinit.*)
+    . = ALIGN(4096);
     __kernel_data_end = .;
   }
   .stacks (NOLOAD) : ALIGN(2097152) {

@@ -1,3 +1,11 @@
+## 0133 - Failure-safe emergency diagnostics
+
+- Add lock-free 32-record emergency event rings for each CPU.
+- Bound printk lock acquisition and record contention instead of deadlocking in IRQ context.
+- Capture every exception entry before scheduler or syscall dispatch.
+- Preserve checksummed fatal exception and stack-corruption records in `.noinit`.
+- Certify release/acquire publication and readback of CPU-local emergency records.
+
 ## 0132 - Enforce kernel page-granular W^X
 
 - Export page-aligned kernel text, rodata, data, and BSS linker boundaries.

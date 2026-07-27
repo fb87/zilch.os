@@ -549,6 +549,8 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
         if (!arch::memory::kernel_permissions_valid())
             return error_t::invalid_argument;
+        if (!emergency::verify_ring())
+            return error_t::invalid_argument;
         if (!arch::memory::privilege_protection_enabled())
             return error_t::invalid_argument;
         if (!memory::verify_page_reuse_scrubbing())

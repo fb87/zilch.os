@@ -508,8 +508,8 @@ Every completed requirement must link to:
 ## 10.4 Failure handling
 
 - [ ] **SEC-019** Panic path works with corrupted scheduler state.
-- [ ] **SEC-020** Per-CPU emergency log buffer implemented.
-- [ ] **SEC-021** Crash record preserved for postmortem analysis.
+- [x] **SEC-020** Each CPU has a lock-free 32-record emergency ring for exception entry, fatal traps, stack corruption, and bounded-printk contention.
+- [x] **SEC-021** Fatal exceptions preserve a checksummed EL/vector/ESR/FAR/PC crash record in a linker-reserved `.noinit` page excluded from BSS clearing.
 - [ ] **SEC-022** Watchdog integration implemented.
 - [x] **SEC-023** Recoverable user instruction/data faults are delivered through fault IPC or isolate only the faulting thread; pager recovery and continued four-CPU acceptance prove the kernel remains live.
 - [x] **SEC-024** Guest traps always return through bounded VM exits; unexpected traps fault only the owning vCPU/VM, while stage-2 faults remain recoverable VMM exits.
@@ -519,9 +519,9 @@ Every completed requirement must link to:
 # 11. Observability and diagnostics
 
 - [x] **OBS-001** Structured kernel log levels exist.
-- [ ] **OBS-002** Logging is safe in IRQ and exception contexts.
-- [ ] **OBS-003** RT-safe deferred logging path implemented.
-- [ ] **OBS-004** Per-CPU trace buffers implemented.
+- [x] **OBS-002** `printk` disables local IRQs and uses bounded lock acquisition; contention records to the per-CPU emergency ring instead of spinning behind an interrupted owner.
+- [-] **OBS-003** Contended records are deferred into lock-free per-CPU rings, but formatted asynchronous draining remains open.
+- [x] **OBS-004** Fixed-size lock-free per-CPU event rings retain exception and emergency trace records with release-published sequence numbers.
 - [ ] **OBS-005** IPC, scheduler, IRQ, VM-exit, and fault tracing implemented.
 - [ ] **OBS-006** Trace overhead can be disabled in production.
 - [ ] **OBS-007** Resource leak counters implemented.

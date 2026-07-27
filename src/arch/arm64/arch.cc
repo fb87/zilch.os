@@ -1,5 +1,6 @@
 #include <sys/arch/arch.hh>
 #include <sys/arch/stack.hh>
+#include <sys/kernel/emergency.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
@@ -15,6 +16,9 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                                             sys::u64 level) noexcept {
     if (!sys::arch::stack::observe(level)) {
         sys::arch::irq::disable();
+        sys::kernel::emergency::append(sys::kernel::emergency::event::stack_corruption, level);
+        sys::kernel::emergency::preserve(static_cast<sys::u32>(level), frame->vector, 0U, 0U,
+                                         frame->instruction_pointer);
         pr_err("kernel stack overflow/corruption cpu=%u el=%llu\n",
                static_cast<unsigned int>(sys::arch::cpu::current_id()),
                static_cast<unsigned long long>(level));
@@ -23,6 +27,8 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
     const sys::kernel::object::read_guard object_read_guard{};
     const sys::u64 vector = frame->vector;
     const sys::u64 syndrome = sys::arch::exception::syndrome(static_cast<sys::u32>(level));
+    sys::kernel::emergency::append(sys::kernel::emergency::event::exception_entry, level, vector,
+                                   syndrome, frame->instruction_pointer);
 
     /*
      * ESR_ELx is meaningful only for synchronous exceptions.  Dispatch by
@@ -90,11 +96,16 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
     }
 
     sys::arch::irq::disable();
+    const sys::u64 fault_address =
+        sys::arch::exception::fault_address(static_cast<sys::u32>(level));
+    sys::kernel::emergency::append(sys::kernel::emergency::event::fatal_exception, level, vector,
+                                   syndrome, fault_address, frame->instruction_pointer);
+    sys::kernel::emergency::preserve(static_cast<sys::u32>(level), vector, syndrome, fault_address,
+                                     frame->instruction_pointer);
     pr_err("exception el=%llu vector=%llu esr=%llx far=%llx elr=%llx\n",
            static_cast<unsigned long long>(level), static_cast<unsigned long long>(vector),
            static_cast<unsigned long long>(syndrome),
-           static_cast<unsigned long long>(
-               sys::arch::exception::fault_address(static_cast<sys::u32>(level))),
+           static_cast<unsigned long long>(fault_address),
            static_cast<unsigned long long>(frame->instruction_pointer));
     sys::arch::cpu::halt();
 }

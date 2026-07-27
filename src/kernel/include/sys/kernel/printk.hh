@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/arch/irq.hh>
+#include <sys/kernel/emergency.hh>
 #include <sys/platform/platform.hh>
 #include <sys/types.hh>
 
@@ -11,12 +12,17 @@ namespace sys::printk
 {
     inline volatile u32 raw_lock{};
 
-    inline void lock() noexcept {
-        while (__atomic_exchange_n(&raw_lock, 1U, __ATOMIC_ACQUIRE) != 0U) {
-            while (__atomic_load_n(&raw_lock, __ATOMIC_RELAXED) != 0U) {
-                arch::cpu::relax();
-            }
+    [[nodiscard]] inline bool lock() noexcept {
+        constexpr u32 maximum_attempts = 4096U;
+        for (u32 attempt = 0U; attempt < maximum_attempts; ++attempt) {
+            u32 expected = 0U;
+            if (__atomic_compare_exchange_n(&raw_lock, &expected, 1U, false, __ATOMIC_ACQUIRE,
+                                            __ATOMIC_RELAXED))
+                return true;
+            arch::cpu::relax();
         }
+        kernel::emergency::append(kernel::emergency::event::printk_contention);
+        return false;
     }
 
     inline void unlock() noexcept {
@@ -195,7 +201,10 @@ namespace sys::printk
 
     inline int printk(const char* format, ...) noexcept {
         const arch::irq::irq_state_t irq_state = arch::irq::save_and_disable();
-        lock();
+        if (!lock()) {
+            arch::irq::restore(irq_state);
+            return -1;
+        }
 
         va_list arguments;
         va_start(arguments, format);
