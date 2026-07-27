@@ -63,8 +63,54 @@ namespace sys::kernel::hypervisor
         stage2_mapping mappings[maximum_stage2_mappings]{};
         u32 mapping_count{};
         u32 active_vcpus{};
+        u64 mapped_pages{};
+        u64 peak_mapped_pages{};
+        u64 map_operations{};
+        u64 unmap_operations{};
+        u64 run_entries{};
+        u64 run_exits{};
+        u64 accounting_faults{};
         diagnostic_record last_diagnostic{};
     };
+
+    enum class audit_action : u16 {
+        reset = 1U,
+        map = 2U,
+        unmap = 3U,
+        pause = 4U,
+        resume = 5U,
+        stop = 6U,
+        teardown = 7U,
+        run_enter = 8U,
+        run_exit = 9U,
+    };
+
+    struct audit_record {
+        u64 sequence{};
+        audit_action action{};
+        u16 vmid{};
+        vm_id_t vm{};
+        u64 value{};
+    };
+
+    inline constexpr u32 audit_record_count = 64U;
+    inline audit_record audit_records[audit_record_count]{};
+    inline volatile u64 audit_sequence{};
+
+    inline void audit(const virtual_machine_t& vm, audit_action action, u64 value = 0U) noexcept {
+        const u64 sequence = __atomic_fetch_add(&audit_sequence, 1U, __ATOMIC_RELAXED) + 1U;
+        audit_record& record = audit_records[sequence % audit_record_count];
+        record.action = action;
+        record.vmid = vm.vmid;
+        record.vm = vm.id;
+        record.value = value;
+        __atomic_store_n(&record.sequence, sequence, __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline bool accounting_valid(const virtual_machine_t& vm) noexcept {
+        return vm.accounting_faults == 0U && vm.mapped_pages <= vm.peak_mapped_pages &&
+               vm.run_exits <= vm.run_entries;
+    }
 
     struct virtual_cpu_context {
         u64 x[31]{};

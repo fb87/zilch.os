@@ -52,6 +52,42 @@ namespace sys::kernel::object
     inline table_slot_t object_table[table_capacity]{};
     inline volatile u32 table_lock{};
     inline u32 reader_depth[maximum_reader_cpus]{};
+    inline constexpr u32 object_type_count = static_cast<u32>(type_t::virtual_cpu) + 1U;
+
+    struct accounting_snapshot {
+        u64 live[object_type_count]{};
+        u64 peak[object_type_count]{};
+        u64 created[object_type_count]{};
+        u64 destroyed[object_type_count]{};
+        u64 counter_faults{};
+    };
+
+    inline accounting_snapshot accounting{};
+
+    inline void account_created(type_t type) noexcept {
+        const u32 index = static_cast<u32>(type);
+        if (index == 0U || index >= object_type_count ||
+            accounting.live[index] == ~static_cast<u64>(0U) ||
+            accounting.created[index] == ~static_cast<u64>(0U)) {
+            ++accounting.counter_faults;
+            return;
+        }
+        ++accounting.live[index];
+        ++accounting.created[index];
+        if (accounting.live[index] > accounting.peak[index])
+            accounting.peak[index] = accounting.live[index];
+    }
+
+    inline void account_destroyed(type_t type) noexcept {
+        const u32 index = static_cast<u32>(type);
+        if (index == 0U || index >= object_type_count || accounting.live[index] == 0U ||
+            accounting.destroyed[index] == ~static_cast<u64>(0U)) {
+            ++accounting.counter_faults;
+            return;
+        }
+        --accounting.live[index];
+        ++accounting.destroyed[index];
+    }
 
     inline void lock_table() noexcept {
         while (__atomic_exchange_n(&table_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
@@ -61,6 +97,33 @@ namespace sys::kernel::object
 
     inline void unlock_table() noexcept {
         __atomic_store_n(&table_lock, 0U, __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline u64 live_count(type_t type) noexcept {
+        const u32 index = static_cast<u32>(type);
+        if (index >= object_type_count)
+            return 0U;
+        lock_table();
+        const u64 result = accounting.live[index];
+        unlock_table();
+        return result;
+    }
+
+    [[nodiscard]] inline bool accounting_valid() noexcept {
+        lock_table();
+        if (accounting.counter_faults != 0U) {
+            unlock_table();
+            return false;
+        }
+        for (u32 index = 1U; index < object_type_count; ++index)
+            if (accounting.created[index] < accounting.destroyed[index] ||
+                accounting.live[index] != accounting.created[index] - accounting.destroyed[index] ||
+                accounting.peak[index] < accounting.live[index]) {
+                unlock_table();
+                return false;
+            }
+        unlock_table();
+        return true;
     }
 
     inline void enter_read_side() noexcept {
@@ -123,6 +186,7 @@ namespace sys::kernel::object
         object.flags = 0U;
         slot.generation = generation;
         __atomic_store_n(&slot.object, &object, __ATOMIC_RELEASE);
+        account_created(type);
         unlock_table();
         return error_t::success;
     }
@@ -144,6 +208,7 @@ namespace sys::kernel::object
             object.flags = 0U;
             slot.generation = generation;
             __atomic_store_n(&slot.object, &object, __ATOMIC_RELEASE);
+            account_created(type);
             unlock_table();
             return error_t::success;
         }
@@ -180,6 +245,9 @@ namespace sys::kernel::object
          * a read-side section and already owns all of its local references.
          */
         synchronize_readers();
+        lock_table();
+        account_destroyed(reference.type);
+        unlock_table();
         return error_t::success;
     }
 

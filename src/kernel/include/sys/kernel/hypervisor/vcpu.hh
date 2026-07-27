@@ -43,6 +43,13 @@ namespace sys::kernel::hypervisor
             return error_t::invalid_argument;
         if (__atomic_exchange_n(&vcpu.running, true, __ATOMIC_ACQ_REL))
             return error_t::busy;
+        if (vm.run_entries == ~static_cast<u64>(0U)) {
+            ++vm.accounting_faults;
+            __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
+            return error_t::invalid_argument;
+        }
+        ++vm.run_entries;
+        audit(vm, audit_action::run_enter, vcpu.id);
         ++vm.active_vcpus;
         ++vcpu.run_generation;
         vcpu.previous_host_cpu = vcpu.host_cpu;
@@ -61,6 +68,12 @@ namespace sys::kernel::hypervisor
         emergency::trace(emergency::event::vm_exit, vcpu.id, static_cast<u64>(exit.reason),
                          exit.syndrome, exit.qualification, exit.guest_pc);
         --vm.active_vcpus;
+        if (vm.run_exits == ~static_cast<u64>(0U)) {
+            ++vm.accounting_faults;
+        } else {
+            ++vm.run_exits;
+        }
+        audit(vm, audit_action::run_exit, vcpu.id);
         __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
         const bool fatal_exit = result != error_t::success || fatal_guest_exit(exit.reason);
         vcpu.lifecycle = fatal_exit ? vcpu_state::faulted : vcpu_state::runnable;

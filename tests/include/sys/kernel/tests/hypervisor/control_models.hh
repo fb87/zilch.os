@@ -762,6 +762,9 @@ namespace sys::kernel::hypervisor::test
                          static_cast<u32>(stage2_permission::read) |
                              static_cast<u32>(stage2_permission::execute)) == error_t::success,
               11U);
+        check(vm.mapping_count == 1U && vm.mapped_pages == 1U && vm.peak_mapped_pages >= 1U &&
+                  vm.map_operations != 0U && accounting_valid(vm),
+              110U);
         check(stage2_map(vm, 0U, 0x48001000U, page_size, static_cast<u32>(stage2_permission::read),
                          diagnostic_kind::expected_error, error_t::busy,
                          "stage2_overlap") == error_t::busy,
@@ -779,10 +782,31 @@ namespace sys::kernel::hypervisor::test
         check(configure_vcpu(vcpu, 0U, 0x5U, 0x8000U) == error_t::success, 15U);
         check(inject_irq(vcpu, 27U) == error_t::success, 16U);
         check(stage2_unmap(vm, 0U) == error_t::success, 17U);
+        check(vm.mapping_count == 0U && vm.mapped_pages == 0U && vm.unmap_operations != 0U &&
+                  accounting_valid(vm),
+              111U);
         check(stage2_unmap(vm, 0U, diagnostic_kind::expected_error, error_t::not_found,
                            "stage2_missing_unmap") == error_t::not_found,
               18U);
         check(run_bootstrap_guest() == error_t::success, 19U);
+        check(vm.run_entries == vm.run_exits && vm.run_entries != 0U && accounting_valid(vm), 112U);
+        const u64 observed_audit_sequence = __atomic_load_n(&audit_sequence, __ATOMIC_ACQUIRE);
+        check(observed_audit_sequence != 0U &&
+                  audit_records[observed_audit_sequence % audit_record_count].sequence ==
+                      observed_audit_sequence,
+              113U);
+
+        object::header_t accounting_probe{};
+        const u64 objects_before = object::live_count(object::type_t::notification);
+        check(object::register_dynamic_object(accounting_probe, object::type_t::notification) ==
+                  error_t::success,
+              114U);
+        check(object::live_count(object::type_t::notification) == objects_before + 1U, 115U);
+        check(object::unregister_object(object::reference(accounting_probe)) == error_t::success,
+              116U);
+        check(object::live_count(object::type_t::notification) == objects_before &&
+                  object::accounting_valid(),
+              117U);
 
         virtual_interrupt_state& vic = model_basic_vic;
         vic.reset();

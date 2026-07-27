@@ -11,7 +11,9 @@ namespace sys::kernel::hypervisor
         for (auto& mapping : vm.mappings)
             mapping = {};
         vm.mapping_count = 0U;
+        vm.mapped_pages = 0U;
         vm.state = vm_state::configured;
+        audit(vm, audit_action::reset);
         diagnose(vm, 1U, error_t::success);
         return error_t::success;
     }
@@ -42,8 +44,21 @@ namespace sys::kernel::hypervisor
                 continue;
             mapping = {ipa, host_address, size, permissions, true};
             ++vm.mapping_count;
+            const u64 pages = size / page_size;
+            if (vm.mapped_pages > ~static_cast<u64>(0U) - pages ||
+                vm.map_operations == ~static_cast<u64>(0U)) {
+                mapping = {};
+                --vm.mapping_count;
+                ++vm.accounting_faults;
+                return error_t::invalid_argument;
+            }
+            vm.mapped_pages += pages;
+            ++vm.map_operations;
+            if (vm.mapped_pages > vm.peak_mapped_pages)
+                vm.peak_mapped_pages = vm.mapped_pages;
             vm.state = vm_state::runnable;
             arch::hypervisor::invalidate_stage2(vm.vmid);
+            audit(vm, audit_action::map, pages);
             diagnose(vm, 2U, error_t::success, ipa, size, diagnostic, expected, operation);
             return error_t::success;
         }
@@ -57,9 +72,18 @@ namespace sys::kernel::hypervisor
         for (auto& mapping : vm.mappings) {
             if (!mapping.valid || mapping.ipa != ipa)
                 continue;
+            const u64 pages = mapping.size / page_size;
+            if (vm.mapping_count == 0U || vm.mapped_pages < pages ||
+                vm.unmap_operations == ~static_cast<u64>(0U)) {
+                ++vm.accounting_faults;
+                return error_t::invalid_argument;
+            }
             mapping = {};
             --vm.mapping_count;
+            vm.mapped_pages -= pages;
+            ++vm.unmap_operations;
             arch::hypervisor::invalidate_stage2(vm.vmid);
+            audit(vm, audit_action::unmap, pages);
             diagnose(vm, 3U, error_t::success, ipa, 0U, diagnostic, expected, operation);
             return error_t::success;
         }

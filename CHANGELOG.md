@@ -1,3 +1,11 @@
+## 0137 - Account kernel and VM resource lifecycles
+
+- Track per-object-type live, peak, created, and destroyed counts at the object table.
+- Track per-VM current/peak mapped pages, mapping operations, active vCPUs, and run balance.
+- Reject counter saturation and underflow instead of silently wrapping lifecycle state.
+- Add release-enabled, sequence-published VM lifecycle audit records.
+- Certify dynamic-object and guest map/run/teardown accounting balance.
+
 ## 0136 - Freeze native ABI v1
 
 - Freeze native ABI 1.0.0 register, numeric, size, alignment, and field-offset contracts.

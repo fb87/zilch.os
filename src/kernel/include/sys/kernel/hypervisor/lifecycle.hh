@@ -57,6 +57,8 @@ namespace sys::kernel::hypervisor
         if (vcpu.lifecycle != vcpu_state::runnable && vcpu.lifecycle != vcpu_state::blocked)
             return error_t::invalid_argument;
         vcpu.lifecycle = vcpu_state::paused;
+        if (auto* header = object::resolve(vcpu.virtual_machine); header != nullptr)
+            audit(*reinterpret_cast<virtual_machine_t*>(header), audit_action::pause, vcpu.id);
         return error_t::success;
     }
 
@@ -64,6 +66,8 @@ namespace sys::kernel::hypervisor
         if (vcpu.lifecycle != vcpu_state::paused)
             return error_t::invalid_argument;
         vcpu.lifecycle = vcpu_state::runnable;
+        if (auto* header = object::resolve(vcpu.virtual_machine); header != nullptr)
+            audit(*reinterpret_cast<virtual_machine_t*>(header), audit_action::resume, vcpu.id);
         return error_t::success;
     }
 
@@ -74,6 +78,8 @@ namespace sys::kernel::hypervisor
         vcpu.state = vm_state::stopped;
         vcpu.interrupt_state.reset();
         vcpu.virtual_irq_pending = false;
+        if (auto* header = object::resolve(vcpu.virtual_machine); header != nullptr)
+            audit(*reinterpret_cast<virtual_machine_t*>(header), audit_action::stop, vcpu.id);
         return error_t::success;
     }
 
@@ -95,11 +101,13 @@ namespace sys::kernel::hypervisor
         for (auto& mapping : vm.mappings)
             mapping = {};
         vm.mapping_count = 0U;
+        vm.mapped_pages = 0U;
         vm.active_vcpus = 0U;
         const u16 old_vmid = vm.vmid;
         vm.vmid = 0U;
         vm.stage_2_root = 0U;
         vm.state = vm_state::inactive;
+        audit(vm, audit_action::teardown, count);
         return release_vmid(old_vmid);
     }
 

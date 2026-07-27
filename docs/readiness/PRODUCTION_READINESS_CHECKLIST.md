@@ -375,7 +375,7 @@ Every completed requirement must link to:
 - [-] **HYP-001** Capability-authorized VM/vCPU objects exist; full lifecycle and userspace VMM integration remain open.
 - [-] **HYP-002** Basic VMID allocation and stage-2 roots exist.
 - [ ] **HYP-003** Full lifecycle: create/configure/load/start/pause/resume/reset/stop/destroy.
-- [ ] **HYP-004** Resource accounting per VM.
+- [x] **HYP-004** Per-VM accounting tracks current/peak mapped pages, map/unmap totals, active vCPUs, and run entry/exit balance with overflow/underflow fault detection.
 - [ ] **HYP-005** Complete vCPU architectural state definition.
 - [ ] **HYP-006** Reserved and unsupported guest state sanitized.
 - [ ] **HYP-007** VM teardown is race-safe under concurrent execution.
@@ -500,7 +500,7 @@ Every completed requirement must link to:
 
 - [ ] **SEC-013** Lock hierarchy documented.
 - [ ] **SEC-014** Debug lock-order checker implemented.
-- [ ] **SEC-015** Refcount overflow/underflow prevented.
+- [-] **SEC-015** Object and VM lifecycle counters reject overflow/underflow and expose accounting faults; remaining reference-bearing subsystems require the same checked-counter audit.
 - [-] **SEC-016** ABA hazards are bounded by generation-tagged references, per-CPU thread bindings, and object-table read-side grace periods before reuse; long-duration wraparound evidence remains open.
 - [-] **SEC-017** User-thread teardown has generation-tagged return-frame quiescence and switches CPUs to the permanent kernel TTBR0 root before reclaiming user page tables; IRQ, VM/vCPU, and remaining object teardown protocols are open.
 - [-] **SEC-018** Race tests cover capability revoke versus IPC transfer, object lookup/use versus destroy, IPC lifecycle versus destroy/timeout/cancel, and vCPU execution; controlled map/IRQ races and broader stress remain open.
@@ -524,8 +524,8 @@ Every completed requirement must link to:
 - [x] **OBS-004** Fixed-size lock-free per-CPU event rings retain exception and emergency trace records with release-published sequence numbers.
 - [x] **OBS-005** Versioned per-CPU records trace IPC entry, scheduler switches, IRQs, VM exits, user faults, and exception entry.
 - [x] **OBS-006** Routine tracing is compiled out when `CONFIG_TRACE=0` in release builds; fatal and contention records remain always enabled.
-- [ ] **OBS-007** Resource leak counters implemented.
-- [ ] **OBS-008** VM lifecycle and assignment audit records implemented.
+- [x] **OBS-007** Per-type object live/peak/create/destroy counters and per-VM mapping/run counters expose lifecycle imbalance without allocation.
+- [-] **OBS-008** A release-enabled, sequence-published bounded ring audits VM reset, mapping, run, pause/resume, stop, and teardown; device-assignment records remain open.
 - [x] **OBS-009** Emergency record format version 1, event identifiers, publication rules, and field meanings are documented.
 - [x] **OBS-010** Release logs exclude guest registers and user/guest PC, FAR, ESR, and IPA details; verbose diagnostics are restricted to development/certification builds.
 
@@ -572,7 +572,7 @@ Every completed requirement must link to:
 - [ ] **TST-026** 24-hour multi-VM soak passes.
 - [ ] **TST-027** 72-hour mixed workload soak passes.
 - [ ] **TST-028** Repeated reboot and lifecycle test passes.
-- [ ] **TST-029** No memory/resource growth across soak runs.
+- [-] **TST-029** Certification proves object create/destroy and VM map/unmap/run counters return to balance across bounded lifecycle suites; long-duration soak evidence remains open.
 - [ ] **TST-030** No missed deadlines under defined RT workload.
 
 ## 12.5 Static verification
