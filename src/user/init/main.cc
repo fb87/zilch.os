@@ -27,6 +27,7 @@ namespace
         hypervisor_control_model_0_4 = 10U,
         userspace_pager_service = 11U,
         dynamic_ipc_objects = 12U,
+        memory_resource_lifecycle = 13U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -155,6 +156,52 @@ namespace
                notification_signalled == success && notification_polled == success &&
                badges == 0x55U && notification_destroyed == success &&
                notification_recreated == success && notification_redestroyed == success;
+    }
+
+    [[nodiscard]] bool test_memory_resource_lifecycle() noexcept {
+        constexpr sys::word_t first_frame = 16U;
+        constexpr sys::word_t frame_total = 8U;
+        constexpr sys::word_t first_table = 24U;
+        constexpr sys::word_t table_total = 4U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+
+        sys::word_t owned_before = 0U;
+        if (sys::control_result1(owned_before, sys::abi::v1::control_operation::memory_query) !=
+            success)
+            return false;
+
+        for (sys::word_t index = 0U; index < frame_total; ++index) {
+            if (sys::control(sys::abi::v1::control_operation::frame_create, 0U,
+                             first_frame + index) != success)
+                return false;
+        }
+        for (sys::word_t index = 0U; index < table_total; ++index) {
+            if (sys::control(sys::abi::v1::control_operation::page_table_create, 0U,
+                             first_table + index, 3U) != success)
+                return false;
+        }
+
+        sys::word_t owned_peak = 0U;
+        if (sys::control_result1(owned_peak, sys::abi::v1::control_operation::memory_query) !=
+                success ||
+            owned_peak != owned_before + frame_total + table_total)
+            return false;
+
+        for (sys::word_t index = 0U; index < table_total; ++index) {
+            if (sys::control(sys::abi::v1::control_operation::page_table_destroy,
+                             first_table + index) != success)
+                return false;
+        }
+        for (sys::word_t index = 0U; index < frame_total; ++index) {
+            if (sys::control(sys::abi::v1::control_operation::frame_destroy, first_frame + index) !=
+                success)
+                return false;
+        }
+
+        sys::word_t owned_after = 0U;
+        return sys::control_result1(owned_after, sys::abi::v1::control_operation::memory_query) ==
+                   success &&
+               owned_after == owned_before;
     }
 
     struct acceptance_ledger {
@@ -323,6 +370,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
 
     const bool dynamic_ipc_pass = test_dynamic_ipc_objects();
     record(ledger, test_id::dynamic_ipc_objects, dynamic_ipc_pass);
+
+    const bool memory_lifecycle_pass = test_memory_resource_lifecycle();
+    record(ledger, test_id::memory_resource_lifecycle, memory_lifecycle_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

@@ -1,3 +1,19 @@
+## 0100 - Dynamic physical-memory lifecycle foundation
+
+
+## 0101 - Certification memory-test naming fix
+
+- map certification test ID 13 to `memory_resource_lifecycle`;
+- prevent successful memory lifecycle evidence from being reported as `unknown`;
+- no kernel mechanism, ABI, scheduler, or memory-allocation semantics changed.
+
+- Serialize physical-page allocation and release across CPUs.
+- Publish the allocatable QEMU RAM range as an explicit physical-region inventory.
+- Tag dynamic frame and page-table objects with owner identity.
+- Remove tracked frame mappings during address-space teardown.
+- Add PL3 certification for balanced frame/page-table allocation, accounting, destruction, and reuse.
+- Reconcile MEM and TST readiness evidence without claiming full untyped-memory delegation.
+
 
 ## 0095 - Generation-tagged CPU return-frame ownership
 

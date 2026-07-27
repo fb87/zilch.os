@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sys/arch/cpu.hh>
 #include <sys/arch/memory.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/memory/object.hh>
@@ -26,6 +27,26 @@ namespace sys::kernel::memory
     inline paddr_t managed_base{};
     inline u32 managed_pages{};
     inline u32 free_pages{};
+    inline volatile u32 allocator_lock{};
+
+    struct physical_region {
+        paddr_t base{};
+        u32 pages{};
+        bool allocatable{};
+    };
+
+    inline constexpr u32 maximum_physical_regions = 4U;
+    inline physical_region physical_regions[maximum_physical_regions]{};
+    inline u32 physical_region_count{};
+
+    inline void lock_allocator() noexcept {
+        while (__atomic_exchange_n(&allocator_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
+            arch::cpu::relax();
+    }
+
+    inline void unlock_allocator() noexcept {
+        __atomic_store_n(&allocator_lock, 0U, __ATOMIC_RELEASE);
+    }
 
     extern "C" char __kernel_end[];
 
@@ -59,21 +80,28 @@ namespace sys::kernel::memory
             return error_t::invalid_argument;
         for (u32 word = 0U; word < bitmap_words; ++word)
             allocation_bitmap[word] = 0U;
-        free_pages = managed_pages;
+        __atomic_store_n(&free_pages, managed_pages, __ATOMIC_RELEASE);
+        physical_region_count = 1U;
+        physical_regions[0] = {managed_base, managed_pages, true};
+        for (u32 index = 1U; index < maximum_physical_regions; ++index)
+            physical_regions[index] = {};
         return error_t::success;
     }
 
     [[nodiscard]] inline error_t allocate_physical_page(paddr_t& address) noexcept {
         address = 0U;
+        lock_allocator();
         for (u32 index = 0U; index < managed_pages; ++index) {
             if (page_used(index))
                 continue;
             mark_page(index, true);
-            --free_pages;
+            __atomic_fetch_sub(&free_pages, 1U, __ATOMIC_ACQ_REL);
             address = managed_base + static_cast<paddr_t>(index) * page_size;
+            unlock_allocator();
             zero_page(address);
             return error_t::success;
         }
+        unlock_allocator();
         return error_t::no_memory;
     }
 
@@ -81,15 +109,20 @@ namespace sys::kernel::memory
         if (address < managed_base || ((address - managed_base) % page_size) != 0U)
             return error_t::invalid_argument;
         const u32 index = static_cast<u32>((address - managed_base) / page_size);
-        if (index >= managed_pages || !page_used(index))
+        lock_allocator();
+        if (index >= managed_pages || !page_used(index)) {
+            unlock_allocator();
             return error_t::not_found;
+        }
         zero_page(address);
         mark_page(index, false);
-        ++free_pages;
+        __atomic_fetch_add(&free_pages, 1U, __ATOMIC_ACQ_REL);
+        unlock_allocator();
         return error_t::success;
     }
 
-    [[nodiscard]] inline error_t assign_frame(frame& target, space_id_t owner) noexcept {
+    [[nodiscard]] inline error_t assign_frame(frame& target, space_id_t owner,
+                                              object::reference_t owner_task = {}) noexcept {
         if (target.allocated)
             return error_t::busy;
         paddr_t page{};
@@ -98,6 +131,7 @@ namespace sys::kernel::memory
             return result;
         target.physical_address = page;
         target.owner = owner;
+        target.owner_task = owner_task;
         target.mapping_count = 0U;
         target.allocated = true;
         target.in_use = true;
@@ -116,6 +150,7 @@ namespace sys::kernel::memory
             return result;
         target.physical_address = 0U;
         target.owner = 0U;
+        target.owner_task = {};
         target.allocated = false;
         return error_t::success;
     }
@@ -184,7 +219,7 @@ namespace sys::kernel::memory
         }
         result = object::register_dynamic_object(target->object, object::type_t::frame);
         if (result == error_t::success)
-            result = assign_frame(*target, owner.address_space_id);
+            result = assign_frame(*target, owner.address_space_id, object::reference(owner.object));
         const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
                                           static_cast<u32>(capability::right_t::write) |
                                           static_cast<u32>(capability::right_t::grant) |
@@ -256,6 +291,7 @@ namespace sys::kernel::memory
             result = allocate_physical_page(target->physical_address);
         if (result == error_t::success) {
             target->owner = owner.address_space_id;
+            target->owner_task = object::reference(owner.object);
             target->level = level;
             target->allocated = true;
             const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
@@ -343,4 +379,23 @@ namespace sys::kernel::memory
         }
         return error_t::not_found;
     }
+    inline void unmap_all(space::address_space& target) noexcept {
+        for (auto& source : frames) {
+            if (!source.allocated || source.mapping_count == 0U)
+                continue;
+            for (auto& mapping : source.mappings) {
+                if (!mapping.valid || mapping.space != target.id)
+                    continue;
+                (void)target.unmap_page(mapping.address);
+                mapping = {};
+                if (source.mapping_count != 0U)
+                    --source.mapping_count;
+            }
+        }
+    }
+
+    [[nodiscard]] inline u32 allocated_page_count() noexcept {
+        return managed_pages - __atomic_load_n(&free_pages, __ATOMIC_ACQUIRE);
+    }
+
 } // namespace sys::kernel::memory

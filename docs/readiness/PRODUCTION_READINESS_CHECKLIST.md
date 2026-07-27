@@ -180,8 +180,8 @@ Every completed requirement must link to:
 
 ## 4.1 Boot-time memory discovery
 
-- [-] **MEM-001** QEMU RAM is discovered through the platform/build contract; general DT memory-node parsing remains open.
-- [-] **MEM-002** Kernel and bootstrap regions are reserved for QEMU; malformed/general firmware-region handling remains open.
+- [-] **MEM-001** QEMU RAM is represented as an explicit allocatable physical-region inventory; general DT/firmware memory-node parsing remains open.
+- [-] **MEM-002** The kernel image is page-aligned and excluded before the allocatable region is published; malformed/general firmware-region handling remains open.
 - [ ] **MEM-003** Detect overlapping and malformed regions.
 - [ ] **MEM-004** Support multiple discontiguous RAM regions.
 - [ ] **MEM-005** Export remaining memory to the root resource server.
@@ -189,10 +189,10 @@ Every completed requirement must link to:
 ## 4.2 Resource objects
 
 - [-] **MEM-006** Allocator-backed dynamic frame/page-table pools exist, but root delegation is bounded and not yet a complete untyped resource model.
-- [-] **MEM-007** Frame allocation and pager ownership exist; full root-resource delegation/accounting remains open.
-- [-] **MEM-008** Dynamic page-table objects exist; scalable hierarchy and delegation remain open.
+- [-] **MEM-007** Concurrent frame allocation, owner identity, zero-on-allocation/reuse, and accounting exist; full root-resource delegation remains open.
+- [-] **MEM-008** Concurrent allocator-backed page-table objects carry owner identity and accounting; scalable hierarchy and delegation remain open.
 - [ ] **MEM-009** Implement untyped/resource retyping or equivalent safe delegation.
-- [-] **MEM-010** Bounded per-task quotas/accounting exist; policy and pressure tests remain open.
+- [-] **MEM-010** Bounded per-task quotas/accounting are now exercised across frame and page-table create/destroy cycles; policy and pressure exhaustion remain open.
 - [x] **MEM-011** Zero memory before delegation and reuse.
 - [-] **MEM-012** Basic generation/ownership checks exist; exhaustive fault injection remains open.
 
@@ -200,11 +200,11 @@ Every completed requirement must link to:
 
 - [x] **MEM-013** Basic map/unmap and W^X checks exist.
 - [-] **MEM-014** Bounded multiple reverse mappings exist; scalable representation remains open.
-- [-] **MEM-015** Bounded reverse mapping database exists.
+- [-] **MEM-015** Bounded per-frame reverse mappings exist and address-space teardown scans them to remove residual mappings; scalable indexing remains open.
 - [-] **MEM-016** Unmap/reclaim paths exist; concurrent revoke race evidence remains open.
 - [ ] **MEM-017** Cacheability/shareability attributes validated.
 - [ ] **MEM-018** Device-memory mappings use correct attributes.
-- [-] **MEM-019** Transactional process teardown switches every CPU to a non-reclaimable kernel translation root before clearing user page tables; stress and generalized mapping-database evidence remain open.
+- [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root and removes all tracked frame mappings before clearing user page tables; stress and scalable mapping-database evidence remain open.
 - [x] **MEM-020** SMP TLB shootdown implemented and runtime verified on four CPUs.
 - [ ] **MEM-021** ASID allocation, rollover, and reuse implemented.
 
@@ -563,7 +563,7 @@ Every completed requirement must link to:
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
-- [ ] **TST-023** Memory pressure and exhaustion test implemented.
+- [-] **TST-023** Certification exercises bounded frame/page-table allocation, accounting, destruction, and reuse; full allocator exhaustion and sustained pressure remain open.
 - [ ] **TST-024** Fault injection covers every allocation and teardown stage.
 
 ## 12.4 Long-duration certification

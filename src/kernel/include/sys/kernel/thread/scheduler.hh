@@ -437,6 +437,7 @@ namespace sys::kernel::thread
         (void)capability::delete_capability(root.cspace, task_selector);
         (void)capability::delete_capability(root.cspace, space_selector);
 
+        memory::unmap_all(target.address_space);
         (void)object::unregister_object(object::reference(target.scheduling_context.object));
         (void)object::unregister_object(object::reference(target.address_space.object));
         task::task* owner = target.owner;

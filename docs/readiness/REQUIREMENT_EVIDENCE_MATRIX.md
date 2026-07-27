@@ -90,3 +90,12 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | MEM-019 / SEC-017 | IN PROGRESS | EL1-idle commits call `arch::space::activate_kernel()` before clearing the previous thread execution claim or CPU binding. Blocking no longer publishes quiescence while the CPU still executes through the reclaimable user TTBR0 root. | Four-CPU root-created object and destroy/reuse suites must pass without EL1 instruction aborts in the kernel identity region. | Kernel mappings still reside in TTBR0; final architecture must move permanent kernel mappings to TTBR1 and add generalized address-space residency tracking. |
 
 - CAP-013 runtime correction (0099): two-phase mark/remove revoke preserves ancestry while discovering all descendants; `capability_control` exercises child + grandchild removal for 128 reuse cycles.
+
+## Batch 0100 — dynamic physical-memory lifecycle foundation
+
+| Requirement | Implementation | Verification | Status / limitation |
+|---|---|---|---|
+| MEM-001, MEM-002 | `memory/manager.hh` publishes an explicit QEMU allocatable region after the page-aligned kernel end. | ARM64 certification boot and allocator initialization. | In progress: DT/firmware parsing and discontiguous RAM remain open. |
+| MEM-007, MEM-008, MEM-010 | Serialized physical allocator, owner-tagged frame/page-table objects, quota charging, and balanced destroy accounting. | `memory_resource_lifecycle` creates eight frames and four page tables, verifies peak ownership, destroys all objects, and verifies accounting returns to baseline. | In progress: untyped delegation, scalable pools, and pressure policy remain open. |
+| MEM-015, MEM-019 | Bounded reverse mapping records plus `unmap_all()` during process bundle teardown. | Existing pager/process teardown, object reuse, and four-CPU lifecycle certification. | In progress: scalable mapping index and revoke/map race testing remain open. |
+| TST-023 | Bounded create/destroy/accounting lifecycle test. | `[TEST] name=memory_resource_lifecycle`. | In progress: complete exhaustion and sustained pressure are not yet covered. |

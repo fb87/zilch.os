@@ -20,6 +20,7 @@ namespace sys::kernel::memory
         object::header_t object{};
         paddr_t physical_address{};
         space_id_t owner{};
+        object::reference_t owner_task{};
         u32 mapping_count{};
         bool allocated{};
         bool in_use{};
@@ -30,6 +31,7 @@ namespace sys::kernel::memory
         object::header_t object{};
         paddr_t physical_address{};
         space_id_t owner{};
+        object::reference_t owner_task{};
         u8 level{};
         bool allocated{};
         bool in_use{};

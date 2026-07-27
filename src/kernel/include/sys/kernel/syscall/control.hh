@@ -222,6 +222,9 @@ namespace sys::kernel::syscall
                     case 12U:
                         name = "dynamic_ipc_objects";
                         break;
+                    case 13U:
+                        name = "memory_resource_lifecycle";
+                        break;
                     default:
                         break;
                 }
