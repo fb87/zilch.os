@@ -290,25 +290,53 @@ namespace sys::kernel::capability
     inline u32 revoke_descendants(derivation_id_t ancestor) noexcept {
         if (ancestor == 0U)
             return 0U;
+
+        /*
+         * Revoke is deliberately two-phase.  Removing a parent capability
+         * deactivates its derivation record; doing that while discovering the
+         * tree would make later grandchildren appear disconnected.  Hold the
+         * registered CSpaces stable, mark every descendant against the intact
+         * derivation graph, and only then invalidate slots and records.
+         */
+        static u8 revoke_marks[maximum_registered_cspaces][cspace_slot_count]{};
         u32 removed = 0U;
         spin_lock(cspace_registry_lock);
+
         for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
             cspace_t* cspace = cspace_registry[space_index];
             if (cspace == nullptr)
                 continue;
             lock(*cspace);
             for (u32 slot_index = 0U; slot_index < cspace_slot_count; ++slot_index) {
-                slot_t& slot = cspace->slots[slot_index];
-                if (slot.object.type != object::type_t::none &&
-                    descendant_of(slot.derivation, ancestor)) {
-                    if (slot.derivation < maximum_derivations)
-                        __atomic_store_n(&derivations[slot.derivation].active, 0U,
-                                         __ATOMIC_RELEASE);
-                    slot = {};
-                    ++removed;
-                }
+                const slot_t& slot = cspace->slots[slot_index];
+                revoke_marks[space_index][slot_index] =
+                    slot.object.type != object::type_t::none &&
+                            descendant_of(slot.derivation, ancestor)
+                        ? 1U
+                        : 0U;
             }
-            unlock(*cspace);
+        }
+
+        for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
+            cspace_t* cspace = cspace_registry[space_index];
+            if (cspace == nullptr)
+                continue;
+            for (u32 slot_index = 0U; slot_index < cspace_slot_count; ++slot_index) {
+                if (revoke_marks[space_index][slot_index] == 0U)
+                    continue;
+                slot_t& slot = cspace->slots[slot_index];
+                if (slot.derivation < maximum_derivations)
+                    __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
+                slot = {};
+                revoke_marks[space_index][slot_index] = 0U;
+                ++removed;
+            }
+        }
+
+        for (u32 space_index = maximum_registered_cspaces; space_index > 0U; --space_index) {
+            cspace_t* cspace = cspace_registry[space_index - 1U];
+            if (cspace != nullptr)
+                unlock(*cspace);
         }
         spin_unlock(cspace_registry_lock);
         return removed;

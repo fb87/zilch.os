@@ -32,6 +32,7 @@ namespace sys::kernel::thread
     inline thread user_threads[user_thread_count]{};
     inline task::task user_tasks[user_thread_count]{};
     inline u32 current_user_thread[maximum_cpu_count]{};
+    inline u32 current_user_generation[maximum_cpu_count]{};
     inline bool user_execution_active[maximum_cpu_count]{};
     inline bool user_cpu_idle[maximum_cpu_count]{};
     inline volatile bool user_scheduler_ready = false;
@@ -131,6 +132,13 @@ namespace sys::kernel::thread
                          : client_rights);
             if (result != error_t::success)
                 return result;
+
+            /*
+             * Publish the bootstrap thread only after its object table and
+             * capability-space construction is complete.  Scheduler-visible
+             * readiness is the transaction commit point.
+             */
+            store_state(user_threads[id], state::ready);
         }
         task::task& root_task = user_tasks[0];
         const capability::rights_t root_memory_rights{
@@ -194,6 +202,7 @@ namespace sys::kernel::thread
 
         for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
             current_user_thread[cpu] = CONFIG_ROOT_ONLY_BOOT ? 0U : cpu;
+            current_user_generation[cpu] = 0U;
             user_execution_active[cpu] = false;
             user_cpu_idle[cpu] = false;
             per_cpu_switches[cpu] = 0U;
@@ -217,7 +226,8 @@ namespace sys::kernel::thread
         target.last_fault = {};
         target.waiting_endpoint = 0U;
         target.ipc_timeout_active = false;
-        store_state(target, state::ready);
+        if (!compare_state(target, state::blocked_fault, state::ready))
+            return error_t::busy;
         ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
         return error_t::success;
     }
@@ -359,6 +369,14 @@ namespace sys::kernel::thread
             __atomic_store_n(&active_user_thread_count, id + 1U, __ATOMIC_RELEASE);
         certification_operations[id] = 0U;
         certification_failures[id] = 0U;
+
+        /*
+         * Commit the process bundle atomically from the scheduler's point of
+         * view.  Before this release store the slot remains inactive, so no
+         * CPU can execute a partially registered object graph or partially
+         * initialized address space.
+         */
+        store_state(target, state::ready);
         return error_t::success;
     }
 
@@ -372,9 +390,19 @@ namespace sys::kernel::thread
          * the context and publish executing=false before reclaiming or
          * replacing the address-space image.
          */
+        const u32 target_generation = target.object.generation;
         constexpr u32 maximum_wait_rounds = 1000000U;
         for (u32 round = 0U; round < maximum_wait_rounds; ++round) {
-            if (!__atomic_load_n(&target.executing, __ATOMIC_ACQUIRE))
+            bool cpu_bound = false;
+            for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
+                if (__atomic_load_n(&current_user_thread[cpu], __ATOMIC_ACQUIRE) == target.id &&
+                    __atomic_load_n(&current_user_generation[cpu], __ATOMIC_ACQUIRE) ==
+                        target_generation) {
+                    cpu_bound = true;
+                    break;
+                }
+            }
+            if (!cpu_bound && !__atomic_load_n(&target.executing, __ATOMIC_ACQUIRE))
                 return error_t::success;
             if ((round & 0x3ffU) == 0U) {
                 platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
@@ -675,7 +703,12 @@ namespace sys::kernel::thread
         if (user_execution_active[cpu]) {
             thread& value = user_threads[current_user_thread[cpu]];
             arch::thread::copy(value.context, frame);
-            __atomic_store_n(&value.executing, false, __ATOMIC_RELEASE);
+            /*
+             * Keep the execution claim while the scheduler still owns a
+             * lower-PL exception frame that may be returned to this thread.
+             * Quiescence is published only after load_user() commits to a
+             * different thread or to the kernel-idle frame.
+             */
             (void)scheduling::charge(value.scheduling_context, 1U);
         }
     }
@@ -717,36 +750,81 @@ namespace sys::kernel::thread
         return false;
     }
 
+    inline void commit_kernel_idle(arch::thread::context& frame, thread* previous) noexcept {
+        const cpu_id_t cpu = arch::cpu::current_id();
+        /*
+         * The kernel identity mapping still lives in TTBR0.  Switch to the
+         * permanent kernel root before publishing that the previous user
+         * context is quiescent; otherwise another CPU may clear that user
+         * address-space table while this CPU is executing EL1 code through it.
+         */
+        arch::space::activate_kernel();
+        arch::thread::prepare_kernel_idle(frame,
+                                          reinterpret_cast<uintptr_t>(&sys_kernel_user_idle));
+        user_cpu_idle[cpu] = true;
+        __atomic_store_n(&current_user_generation[cpu], 0U, __ATOMIC_RELEASE);
+        if (previous != nullptr)
+            __atomic_store_n(&previous->executing, false, __ATOMIC_RELEASE);
+    }
+
     inline void load_user(arch::thread::context& frame, u32 id) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
-        thread& old = user_threads[current_user_thread[cpu]];
-        if (load_state(old) == state::running)
-            store_state(old, state::ready);
+        const u32 old_index = __atomic_load_n(&current_user_thread[cpu], __ATOMIC_ACQUIRE);
+        const u32 old_generation = __atomic_load_n(&current_user_generation[cpu], __ATOMIC_ACQUIRE);
+        thread& old = user_threads[old_index];
+        const bool old_binding_valid =
+            old.object.type == object::type_t::thread && old.object.generation == old_generation;
+        if (old_binding_valid)
+            (void)compare_state(old, state::running, state::ready);
 
         u32 candidate = id;
         for (u32 attempts = 0U; attempts < active_user_thread_count; ++attempts) {
             thread& value = user_threads[candidate];
-            if (value.pinned_cpu == cpu && runnable(value) && validate_user_context(value)) {
-                current_user_thread[cpu] = candidate;
+            if (value.pinned_cpu == cpu && load_state(value) == state::ready &&
+                validate_user_context(value)) {
+                /*
+                 * Publish the execution claim before claiming ready->running.
+                 * Teardown may change ready to suspended concurrently; in that
+                 * case the CAS fails and the execution claim is withdrawn.
+                 * Once ready->running succeeds, teardown observes executing=true
+                 * before it may reclaim the process bundle.
+                 */
+                __atomic_store_n(&value.executing, true, __ATOMIC_RELEASE);
+                if (!compare_state(value, state::ready, state::running)) {
+                    __atomic_store_n(&value.executing, false, __ATOMIC_RELEASE);
+                    candidate = next_runnable(cpu, candidate);
+                    continue;
+                }
+                __atomic_store_n(&current_user_thread[cpu], candidate, __ATOMIC_RELEASE);
+                __atomic_store_n(&current_user_generation[cpu], value.object.generation,
+                                 __ATOMIC_RELEASE);
                 user_cpu_idle[cpu] = false;
-                store_state(value, state::running);
                 consume_pending(value);
                 if (!validate_user_context(value)) {
+                    __atomic_store_n(&value.executing, false, __ATOMIC_RELEASE);
+                    store_state(value, state::faulted);
                     candidate = next_runnable(cpu, candidate);
                     continue;
                 }
                 value.address_space.activate();
-                __atomic_store_n(&value.executing, true, __ATOMIC_RELEASE);
                 arch::thread::copy(frame, value.context);
+                if (old_binding_valid &&
+                    (candidate != old_index || value.object.generation != old_generation)) {
+                    /*
+                     * The return frame now belongs to another thread.  Only
+                     * at this commit point may teardown regard the previous
+                     * thread as no longer executing or return-bound.
+                     */
+                    __atomic_store_n(&old.executing, false, __ATOMIC_RELEASE);
+                }
                 __atomic_fetch_add(&per_cpu_switches[cpu], 1U, __ATOMIC_RELAXED);
                 return;
             }
             candidate = next_runnable(cpu, candidate);
         }
 
-        user_cpu_idle[cpu] = true;
-        arch::thread::prepare_kernel_idle(frame,
-                                          reinterpret_cast<uintptr_t>(&sys_kernel_user_idle));
+        /* No EL0 frame will be returned for the previous thread. */
+        commit_kernel_idle(frame, old_binding_valid ? &old : nullptr);
     }
 
     inline void schedule_user(arch::thread::context& frame) noexcept {
@@ -802,15 +880,10 @@ namespace sys::kernel::thread
         arch::thread::copy(value.context, frame);
 
         /*
-         * A thread becomes reclaimable only after the kernel has committed to
-         * not returning this exception frame to it.  Publishing quiescence on
-         * generic EL0 exception entry is unsafe because another CPU may then
-         * destroy the address space while the syscall or fault handler still
-         * owns the context.  Blocking is an explicit hand-off point: the
-         * saved context is complete and schedule_prepared() will install a
-         * different user context or the kernel-idle frame.
+         * Save the context and publish the blocking state, but retain the
+         * execution claim until schedule_prepared() has installed another
+         * address space or switched to the permanent kernel TTBR0 root.
          */
-        __atomic_store_n(&value.executing, false, __ATOMIC_RELEASE);
         store_state(value, blocked_state);
     }
 
@@ -818,9 +891,7 @@ namespace sys::kernel::thread
         thread& value = current();
         const u32 next = next_runnable(value.pinned_cpu, current_index());
         if (next == current_index() && !runnable(user_threads[next])) {
-            user_cpu_idle[value.pinned_cpu] = true;
-            arch::thread::prepare_kernel_idle(frame,
-                                              reinterpret_cast<uintptr_t>(&sys_kernel_user_idle));
+            commit_kernel_idle(frame, &value);
             return;
         }
         load_user(frame, next);
@@ -831,9 +902,28 @@ namespace sys::kernel::thread
         schedule_prepared(frame);
     }
 
-    inline void wake(thread& value) noexcept {
-        if (value.current_state != state::faulted && value.current_state != state::terminated) {
-            store_state(value, state::ready);
+    [[nodiscard]] inline bool wake(thread& value) noexcept {
+        /*
+         * Wake only a thread that is still in a blocking state.  In
+         * particular, never resurrect a suspended or terminated thread.
+         * Teardown publishes suspended before waiting for remote quiescence;
+         * a concurrent reply/cancel may have observed the earlier blocked
+         * state, so the transition must be conditional rather than an
+         * unconditional store to ready.
+         */
+        u8 observed =
+            __atomic_load_n(reinterpret_cast<const u8*>(&value.current_state), __ATOMIC_ACQUIRE);
+        for (;;) {
+            const state current_state = static_cast<state>(observed);
+            if (current_state != state::blocked_send && current_state != state::blocked_receive &&
+                current_state != state::blocked_reply && current_state != state::blocked_fault) {
+                return false;
+            }
+            const u8 desired = static_cast<u8>(state::ready);
+            if (__atomic_compare_exchange_n(reinterpret_cast<u8*>(&value.current_state), &observed,
+                                            desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                return true;
+            }
         }
     }
 
@@ -872,7 +962,7 @@ namespace sys::kernel::thread
                 thread& receiver = *reinterpret_cast<thread*>(receiver_header);
                 publish_pending(receiver, pending_ipc::incoming_call, value.id,
                                 value.object.generation, value.message);
-                wake(receiver);
+                (void)wake(receiver);
                 ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
                 ipc::unlock(endpoint);
                 schedule_prepared(frame);
@@ -920,9 +1010,7 @@ namespace sys::kernel::thread
              * that case, return to the per-CPU EL1 idle context and wait for a
              * timer or remote reschedule IPI to make a thread runnable.
              */
-            user_cpu_idle[cpu] = true;
-            arch::thread::prepare_kernel_idle(frame,
-                                              reinterpret_cast<uintptr_t>(&sys_kernel_user_idle));
+            commit_kernel_idle(frame, &value);
             return true;
         }
         load_user(frame, next);
@@ -941,18 +1029,26 @@ namespace sys::kernel::thread
         }
         if (first >= active_user_thread_count || user_threads[first].pinned_cpu != cpu ||
             !runnable(user_threads[first])) {
-            current_user_thread[cpu] = 0U;
+            __atomic_store_n(&current_user_thread[cpu], 0U, __ATOMIC_RELEASE);
+            __atomic_store_n(&current_user_generation[cpu], 0U, __ATOMIC_RELEASE);
             user_cpu_idle[cpu] = true;
             arch::irq::enable();
             sys_kernel_user_idle();
         }
 
-        current_user_thread[cpu] = first;
+        __atomic_store_n(&current_user_thread[cpu], first, __ATOMIC_RELEASE);
+        __atomic_store_n(&current_user_generation[cpu], user_threads[first].object.generation,
+                         __ATOMIC_RELEASE);
         user_cpu_idle[cpu] = false;
-        store_state(user_threads[first], state::running);
+        __atomic_store_n(&user_threads[first].executing, true, __ATOMIC_RELEASE);
+        if (!compare_state(user_threads[first], state::ready, state::running)) {
+            __atomic_store_n(&user_threads[first].executing, false, __ATOMIC_RELEASE);
+            user_cpu_idle[cpu] = true;
+            arch::irq::enable();
+            sys_kernel_user_idle();
+        }
         consume_pending(user_threads[first]);
         user_threads[first].address_space.activate();
-        __atomic_store_n(&user_threads[first].executing, true, __ATOMIC_RELEASE);
         arch::thread::enter_user(user_threads[first].context);
     }
 } // namespace sys::kernel::thread

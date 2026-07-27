@@ -157,10 +157,24 @@ namespace
                notification_recreated == success && notification_redestroyed == success;
     }
 
-    [[nodiscard]] bool report(test_id id, bool pass) noexcept {
-        return sys::certification::control(sys::test_abi::v1::control_operation::acceptance_report,
-                                           static_cast<sys::word_t>(id), pass ? 1U : 0U) ==
-               static_cast<sys::word_t>(sys::error_t::success);
+    struct acceptance_ledger {
+        sys::word_t failure_mask{};
+        sys::word_t failure_count{};
+        bool transport_ok{true};
+    };
+
+    void record(acceptance_ledger& ledger, test_id id, bool test_pass) noexcept {
+        const sys::word_t numeric_id = static_cast<sys::word_t>(id);
+        const bool reported =
+            sys::certification::control(sys::test_abi::v1::control_operation::acceptance_report,
+                                        numeric_id, test_pass ? 1U : 0U) ==
+            static_cast<sys::word_t>(sys::error_t::success);
+
+        if (!test_pass) {
+            ledger.failure_mask |= sys::word_t{1U} << (numeric_id - 1U);
+            ++ledger.failure_count;
+        }
+        ledger.transport_ok = ledger.transport_ok && (reported || !test_pass);
     }
 
     [[nodiscard]] sys::word_t xorshift(sys::word_t& state) noexcept {
@@ -254,14 +268,13 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     if (argument0 != 0U)
         worker(argument0, argument1);
 
-    bool pass = true;
-    pass = report(test_id::root_only_boot, true) && pass;
-    pass = report(test_id::bootinfo_contract, true) && pass;
+    acceptance_ledger ledger{};
+    record(ledger, test_id::root_only_boot, true);
+    record(ledger, test_id::bootinfo_contract, true);
 
     const sys::word_t poll = sys::control(sys::abi::v1::control_operation::notification_poll, 14U);
-    pass = report(test_id::notification_control,
-                  poll == static_cast<sys::word_t>(sys::error_t::success)) &&
-           pass;
+    record(ledger, test_id::notification_control,
+           poll == static_cast<sys::word_t>(sys::error_t::success));
 
     constexpr sys::word_t cap_read = 1U;
     constexpr sys::word_t cap_grant = 1U << 3U;
@@ -289,13 +302,13 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
         if (!capability_pass)
             break;
     }
-    pass = report(test_id::capability_control, capability_pass) && pass;
+    record(ledger, test_id::capability_control, capability_pass);
 
     const sys::word_t hv_self_test =
         sys::certification::control(sys::test_abi::v1::control_operation::hypervisor_self_test);
     const bool hypervisor_pass = hv_self_test == static_cast<sys::word_t>(sys::error_t::success);
-    pass = report(test_id::hypervisor_real_single_vcpu, hypervisor_pass) && pass;
-    pass = report(test_id::hypervisor_control_model_0_4, hypervisor_pass) && pass;
+    record(ledger, test_id::hypervisor_real_single_vcpu, hypervisor_pass);
+    record(ledger, test_id::hypervisor_control_model_0_4, hypervisor_pass);
     sys::word_t hv_fuzz_failures = 0U;
     for (sys::word_t iteration = 0U; iteration < 4096U; ++iteration) {
         const sys::word_t result = sys::hypervisor_invoke(
@@ -303,22 +316,22 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
         if (result != static_cast<sys::word_t>(sys::error_t::denied))
             ++hv_fuzz_failures;
     }
-    pass = report(test_id::hypervisor_negative_fuzz, hv_fuzz_failures == 0U) && pass;
+    record(ledger, test_id::hypervisor_negative_fuzz, hv_fuzz_failures == 0U);
 
     const bool pager_service_pass = run_userspace_pager_service();
-    pass = report(test_id::userspace_pager_service, pager_service_pass) && pass;
+    record(ledger, test_id::userspace_pager_service, pager_service_pass);
 
     const bool dynamic_ipc_pass = test_dynamic_ipc_objects();
-    pass = report(test_id::dynamic_ipc_objects, dynamic_ipc_pass) && pass;
+    record(ledger, test_id::dynamic_ipc_objects, dynamic_ipc_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
         created = create_worker(cpu) && created;
     }
-    pass = report(test_id::root_created_objects, created) && pass;
+    record(ledger, test_id::root_created_objects, created);
 
     const bool fuzz_pass = created && wait_workers();
-    pass = report(test_id::root_created_smp_fuzz, fuzz_pass) && pass;
+    record(ledger, test_id::root_created_smp_fuzz, fuzz_pass);
 
     bool destroyed = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
@@ -331,10 +344,12 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
         if (reused)
             reused = stop_destroy_worker(1U);
     }
-    pass = report(test_id::object_destroy_reuse, destroyed && reused) && pass;
+    record(ledger, test_id::object_destroy_reuse, destroyed && reused);
 
+    const bool pass = ledger.failure_count == 0U && ledger.transport_ok;
     (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,
-                                      pass ? 1U : 0U);
+                                      pass ? 1U : 0U, ledger.failure_count, ledger.failure_mask,
+                                      ledger.transport_ok ? 1U : 0U);
     return pass ? 0 : 1;
 }
 

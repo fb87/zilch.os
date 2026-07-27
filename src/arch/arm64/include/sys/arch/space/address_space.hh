@@ -172,6 +172,17 @@ namespace sys::arch::space
         __asm__ volatile("ic iallu\n\tdsb nsh\n\tisb" : : : "memory");
     }
 
+    inline void activate_kernel() noexcept {
+        /*
+         * Kernel execution currently shares TTBR0 with each bounded user
+         * address space.  Before an address-space table may be reclaimed, a
+         * CPU entering the EL1 idle context must switch back to the permanent
+         * kernel root so teardown cannot remove the translation backing the
+         * kernel instruction stream itself.
+         */
+        memory::activate(reinterpret_cast<paddr_t>(&memory::kernel_l0));
+    }
+
     inline void invalidate_asid(u16 asid) noexcept {
         const u64 operand = static_cast<u64>(asid) << 48U;
         __asm__ volatile("dsb ishst\n\ttlbi aside1is, %0\n\tdsb ish\n\tisb"

@@ -84,7 +84,7 @@ namespace sys::kernel::thread
                                 word_t argument1) noexcept {
         value.id = id;
         value.pinned_cpu = cpu;
-        value.current_state = state::ready;
+        value.current_state = state::inactive;
         value.waiting_endpoint = 0U;
         scheduling::initialize(value.scheduling_context, cpu);
         value.reply = {};
@@ -119,6 +119,13 @@ namespace sys::kernel::thread
     inline void store_state(thread& value, state new_state) noexcept {
         __atomic_store_n(reinterpret_cast<u8*>(&value.current_state), static_cast<u8>(new_state),
                          __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline bool compare_state(thread& value, state expected, state desired) noexcept {
+        u8 observed = static_cast<u8>(expected);
+        return __atomic_compare_exchange_n(reinterpret_cast<u8*>(&value.current_state), &observed,
+                                           static_cast<u8>(desired), false, __ATOMIC_ACQ_REL,
+                                           __ATOMIC_ACQUIRE);
     }
 
     [[nodiscard]] inline bool runnable(const thread& value) noexcept {

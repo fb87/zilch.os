@@ -1,4 +1,18 @@
 
+## 0095 - Generation-tagged CPU return-frame ownership
+
+- Track the generation of the thread bound to each CPU, not only the reusable slot index.
+- Prevent stale CPU bindings from mutating or clearing a newly created thread generation.
+- Require teardown to observe both `executing=false` and no CPU binding to the target generation before reclaiming the bundle.
+- Preserve conservative ASID and instruction-cache synchronization for the bounded bootstrap loader.
+## 0093 - Atomic scheduler execution claims
+
+- Close the scheduler-versus-teardown resurrection race with conditional state transitions.
+- Publish the execution claim before `ready -> running`, and withdraw it when the claim fails.
+- Make fault wakeup, deschedule, first entry, and IPC rollback teardown-safe.
+- Preserve the remote-CPU quiescence protocol while preventing suspended threads from being dispatched.
+
+
 ## 0091 - ASID reuse barrier and readiness reconciliation
 
 - Invalidate reused ARM64 ASIDs before installing replacement TTBR0 roots.
@@ -75,3 +89,39 @@
 - Pass mint badges through the explicit control ABI argument.
 - Fix duplicate capability transfer on direct IPC rendezvous.
 - Add repeated derivation/revoke/reuse and rights-attenuation certification coverage.
+
+## 0094 — Return-frame ownership quiescence
+
+- Keep a thread's execution claim while a lower-PL exception frame may still be
+  returned to it.
+- Publish quiescence only after the scheduler commits that frame to another
+  thread or to the kernel-idle context.
+- Close timer-preemption versus destroy/reuse race that could return a stale
+  user frame after teardown.
+
+## 0096 — Transactional user-thread publication
+
+- Dynamic and bootstrap user threads remain `inactive` while their object graph,
+  CSpace, address space, initial context, and certification counters are built.
+- `ready` is now the final release-store commit point of process creation.
+- This prevents a secondary CPU from dispatching a half-created thread during
+  immediate destroy/reuse tests.
+
+
+## 0097 — Permanent kernel-root idle transition
+
+- Switch to the global kernel TTBR0 root before publishing a user thread as quiescent.
+- Prevent user address-space teardown from removing the page tables backing an EL1 idle CPU's kernel instruction stream.
+- Retain the execution claim across IPC/fault blocking until another user address space or the permanent kernel root is installed.
+
+## 0098 - Acceptance failure ledger
+
+- Preserve a per-test failure count and bit mask in the PL3 certification runner.
+- Report the exact failure mask and certification-transport status in the final acceptance line.
+- Avoid collapsing every nonzero suite outcome into an uninformative `failures=1` record.
+
+## 0099 - Atomic two-phase capability revoke
+
+- Discover all derivation descendants before invalidating any parent record.
+- Prevent recursive revoke from losing grandchildren when an earlier slot is removed.
+- Preserve the selected ancestor capability while removing every marked descendant.

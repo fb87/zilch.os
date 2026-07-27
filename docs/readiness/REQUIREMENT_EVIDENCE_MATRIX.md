@@ -50,3 +50,43 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | CAP-016 | IN PROGRESS | generation checks plus reusable derivation records | destroy/reuse and capability-control runtime suites | long soak and concurrent ABA proof open |
 | CAP-017, CAP-019 | IN PROGRESS | single-cap IPC transfer and direct-rendezvous rollback in `syscall/ipc.hh` | pager and IPC integration; destination-occupied negative path | multi-cap receive windows and fault-injection matrix open |
 | IPC-007, IPC-013, IPC-014 | IN PROGRESS | bounded timeout/donation cleanup and receiver-CPU wakeup paths | certification integration baseline | timeout ABI, race fuzz, and fully targeted teardown IPIs open |
+
+## Batch 0092 evidence
+
+| Requirement | Status | Implementation | Verification | Remaining limitation |
+|---|---|---|---|---|
+| IPC-006 | IN PROGRESS | `thread::wake()` performs an atomic transition only from blocked states; suspended/terminated threads cannot be resurrected by late reply or cancel paths. | ARM64 certification and release compile gates; four-CPU runtime rerun required. | Exhaustive reply/cancel/destroy race stress and first-class reply objects remain open. |
+| SEC-017 | IN PROGRESS | Remote execution quiescence plus state-conditional wake protects user-bundle reclamation. | Existing SMP lifecycle suite plus pending 0092 runtime confirmation. | Other object classes still need explicit quiescence protocols. |
+
+## Batch 0093 additions
+
+| Requirement | Status | Implementation | Evidence | Remaining limitation |
+|---|---|---|---|---|
+| IPC-006 | IN PROGRESS | `thread::compare_state`, conditional wake/dispatch transitions, remote quiescence | ARM64 certification compile; runtime rerun pending | Exhaustive cancellation/reply/destroy interleavings are not fuzzed |
+| SEC-017 | IN PROGRESS | Atomic scheduler execution claim prevents suspended-thread resurrection | ARM64/AMD64 release builds and boundary gates | Other object classes still need quiescence protocols |
+| TST-018 | IN PROGRESS | Existing pager and object reuse suites exercise delayed teardown races | Four-CPU runtime confirmation pending | Dedicated controlled-scheduling race fuzz is absent |
+
+
+### Batch 0094 evidence
+
+| Requirement | Implementation | Evidence | Status | Remaining limitation |
+|---|---|---|---|---|
+| IPC-006 | `thread/scheduler.hh`: return-frame ownership remains busy until switch/idle commit | ARM64 four-CPU object destroy/reuse certification | IN PROGRESS | Controlled scheduler-vs-destroy race fuzz still required |
+| SEC-017 | User-thread execution and return-frame quiescence protocol | Root-created SMP and object reuse integration suite | IN PROGRESS | IRQ, VM/vCPU, and remaining object teardown protocols are open |
+
+| SEC-016..017 | In progress | `src/kernel/include/sys/kernel/thread/scheduler.hh` | generation-tagged CPU/thread binding and quiescent teardown | `object_destroy_reuse`, SMP fuzz | runtime rerun required for batch 0095 | other object classes and controlled race fuzz remain open |
+
+### 0096 transactional process publication evidence
+
+| Requirement | Status | Implementation | Runtime evidence required | Limitation |
+|---|---|---|---|---|
+| IPC-006 / SEC-017 | IN PROGRESS | `initialize_user()` leaves slots inactive; `create_user_bundle()` publishes `ready` only after the complete object/capability/address-space transaction commits. | Four-CPU `object_destroy_reuse` and full root-only acceptance pass without delayed user faults. | General multi-object transactional construction and controlled race-fuzz evidence remain open. |
+
+
+### 0097 kernel-root quiescence evidence
+
+| Requirement | Status | Implementation | Runtime evidence required | Limitation |
+|---|---|---|---|---|
+| MEM-019 / SEC-017 | IN PROGRESS | EL1-idle commits call `arch::space::activate_kernel()` before clearing the previous thread execution claim or CPU binding. Blocking no longer publishes quiescence while the CPU still executes through the reclaimable user TTBR0 root. | Four-CPU root-created object and destroy/reuse suites must pass without EL1 instruction aborts in the kernel identity region. | Kernel mappings still reside in TTBR0; final architecture must move permanent kernel mappings to TTBR1 and add generalized address-space residency tracking. |
+
+- CAP-013 runtime correction (0099): two-phase mark/remove revoke preserves ancestry while discovering all descendants; `capability_control` exercises child + grandchild removal for 128 reuse cycles.

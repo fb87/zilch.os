@@ -229,7 +229,7 @@ namespace sys::kernel::syscall
         install_reply(receiver, sender);
         thread::publish_pending(receiver, thread::pending_ipc::incoming_call, sender.id,
                                 sender.object.generation, sender.message);
-        thread::wake(receiver);
+        (void)thread::wake(receiver);
         ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
         return error_t::success;
     }
@@ -252,7 +252,7 @@ namespace sys::kernel::syscall
             const auto disposition = static_cast<fault::disposition>(server.message[0]);
             caller.fault_disposition = disposition;
             if (disposition == fault::disposition::resume) {
-                thread::wake(caller);
+                (void)thread::wake(caller);
                 ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
             } else {
                 thread::store_state(caller, thread::state::terminated);
@@ -262,7 +262,7 @@ namespace sys::kernel::syscall
         caller.ipc_timeout_active = false;
         thread::publish_pending(caller, thread::pending_ipc::reply, server.id,
                                 server.object.generation, server.message);
-        thread::wake(caller);
+        (void)thread::wake(caller);
         ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
     }
 
@@ -286,7 +286,7 @@ namespace sys::kernel::syscall
             if (transfer_result != error_t::success) {
                 sender.pending_result = transfer_result;
                 sender.ipc_timeout_active = false;
-                thread::wake(sender);
+                (void)thread::wake(sender);
                 ipc::remote_reschedule(sender.pinned_cpu, arch::cpu::current_id());
                 continue;
             }
@@ -361,7 +361,7 @@ namespace sys::kernel::syscall
                 install_reply(receiver, current);
                 thread::publish_pending(receiver, thread::pending_ipc::incoming_call, current.id,
                                         current.object.generation, current.message);
-                thread::wake(receiver);
+                (void)thread::wake(receiver);
                 ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
                 __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
                 ipc::unlock(*endpoint);
@@ -377,7 +377,8 @@ namespace sys::kernel::syscall
          */
         thread::prepare_block(frame, thread::state::blocked_send);
         if (!ipc::enqueue_sender(*endpoint, object::reference(current.object))) {
-            store_state(current, thread::state::running);
+            (void)thread::compare_state(current, thread::state::blocked_send,
+                                        thread::state::running);
             current.ipc_timeout_active = false;
             current.transfer = {};
             ipc::unlock(*endpoint);
@@ -430,7 +431,7 @@ namespace sys::kernel::syscall
         target.ipc_timeout_active = false;
         target.transfer = {};
         target.pending_result = error_t::timed_out;
-        thread::wake(target);
+        (void)thread::wake(target);
         ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
         set_error(frame, error_t::success);
         return true;

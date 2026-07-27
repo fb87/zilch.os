@@ -118,7 +118,7 @@ Every completed requirement must link to:
 - [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation is rejected; guarded CSpace and complete badge-delivery semantics remain open.
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
 - [-] **CAP-012** Single-capability delete exists. Concurrent lookup and teardown-race evidence remains open.
-- [-] **CAP-013** Recursive descendant revoke exists across registered CSpaces. It remains bounded, globally scanned, and not restartable.
+- [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
 - [ ] **CAP-014** Revocation is safe under concurrent lookup and IPC.
 - [ ] **CAP-015** Object destruction waits for capability/reference quiescence.
 - [-] **CAP-016** Generation checks and reusable derivation records prevent bounded stale-reference reuse. Long-duration and concurrent ABA evidence remains open.
@@ -204,7 +204,7 @@ Every completed requirement must link to:
 - [-] **MEM-016** Unmap/reclaim paths exist; concurrent revoke race evidence remains open.
 - [ ] **MEM-017** Cacheability/shareability attributes validated.
 - [ ] **MEM-018** Device-memory mappings use correct attributes.
-- [-] **MEM-019** Transactional process teardown removes mappings; stress/quiescence evidence remains open.
+- [-] **MEM-019** Transactional process teardown switches every CPU to a non-reclaimable kernel translation root before clearing user page tables; stress and generalized mapping-database evidence remain open.
 - [x] **MEM-020** SMP TLB shootdown implemented and runtime verified on four CPUs.
 - [ ] **MEM-021** ASID allocation, rollover, and reuse implemented.
 
@@ -501,8 +501,8 @@ Every completed requirement must link to:
 - [ ] **SEC-013** Lock hierarchy documented.
 - [ ] **SEC-014** Debug lock-order checker implemented.
 - [ ] **SEC-015** Refcount overflow/underflow prevented.
-- [ ] **SEC-016** ABA hazards addressed for reused objects.
-- [ ] **SEC-017** All teardown paths have quiescence protocols.
+- [-] **SEC-016** ABA hazards addressed for reused objects. Generation-tagged per-CPU thread bindings prevent slot reuse from aliasing an older return-frame owner; broader object-class and long-duration race evidence remains open.
+- [-] **SEC-017** User-thread teardown has generation-tagged return-frame quiescence and switches CPUs to the permanent kernel TTBR0 root before reclaiming user page tables; IRQ, VM/vCPU, and remaining object teardown protocols are open.
 - [ ] **SEC-018** Race tests cover revoke, destroy, map, IPC, IRQ, and vCPU execution.
 
 ## 10.4 Failure handling
@@ -558,7 +558,7 @@ Every completed requirement must link to:
 
 - [x] **TST-016** Deterministic bounded kernel/hypervisor fuzz exists. It is evidence for bounded mechanisms, not production completion.
 - [ ] **TST-017** Capability derivation/revoke fuzz implemented.
-- [ ] **TST-018** IPC cancellation/timeout race fuzz implemented.
+- [-] **TST-018** Reply/cancel-versus-thread-teardown regressions are covered by bounded certification paths; dedicated race fuzz and fault injection remain open.
 - [ ] **TST-019** Mapping/revoke/TLB-shootdown race fuzz implemented.
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.

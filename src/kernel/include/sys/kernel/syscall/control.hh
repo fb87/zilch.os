@@ -236,8 +236,14 @@ namespace sys::kernel::syscall
                     return true;
                 }
                 const word_t passed = arch::syscall::argument(frame, 1U);
-                pr_info("[ACCEPTANCE] suite=root-only boot=root-only result=%s failures=%u\n",
-                        passed != 0U ? "PASS" : "FAIL", passed != 0U ? 0U : 1U);
+                const word_t failures = arch::syscall::argument(frame, 2U);
+                const word_t failure_mask = arch::syscall::argument(frame, 3U);
+                const word_t transport_ok = arch::syscall::argument(frame, 4U);
+                pr_info("[ACCEPTANCE] suite=root-only boot=root-only result=%s failures=%llu "
+                        "failure_mask=%llx transport=%s\n",
+                        passed != 0U ? "PASS" : "FAIL", static_cast<unsigned long long>(failures),
+                        static_cast<unsigned long long>(failure_mask),
+                        transport_ok != 0U ? "PASS" : "FAIL");
                 set_control_result(frame,
                                    passed != 0U ? error_t::success : error_t::invalid_argument);
                 return true;
