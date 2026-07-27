@@ -199,6 +199,21 @@ namespace sys::kernel::thread
             boot::root_bootinfo.capabilities[index] = {selectors[index], slot.object,
                                                        slot.rights.bits};
         }
+        boot::root_bootinfo.memory_region_count = memory::physical_region_count;
+        boot::root_bootinfo.memory_page_size = static_cast<u32>(memory::page_size);
+        boot::root_bootinfo.memory_total_pages = memory::managed_pages;
+        boot::root_bootinfo.memory_free_pages =
+            __atomic_load_n(&memory::free_pages, __ATOMIC_ACQUIRE);
+        for (u32 index = 0U; index < boot::maximum_memory_region_count; ++index) {
+            if (index < memory::physical_region_count) {
+                const auto& region = memory::physical_regions[index];
+                boot::root_bootinfo.memory_regions[index] = {
+                    region.base, region.pages,
+                    region.allocatable ? boot::memory_region_allocatable : 0U, 0U};
+            } else {
+                boot::root_bootinfo.memory_regions[index] = {};
+            }
+        }
 
         for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
             current_user_thread[cpu] = CONFIG_ROOT_ONLY_BOOT ? 0U : cpu;
@@ -450,6 +465,32 @@ namespace sys::kernel::thread
 
 #if CONFIG_SELFTEST
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
+        if (memory::physical_region_count == 0U ||
+            memory::physical_region_count > memory::maximum_physical_regions ||
+            memory::managed_pages == 0U || memory::free_pages >= memory::managed_pages)
+            return error_t::invalid_argument;
+        u64 discovered_pages{};
+        for (u32 index = 0U; index < memory::physical_region_count; ++index) {
+            const auto& region = memory::physical_regions[index];
+            if (!region.allocatable || region.pages == 0U ||
+                (region.base & (memory::page_size - 1U)) != 0U ||
+                region.bitmap_offset != discovered_pages)
+                return error_t::invalid_argument;
+            if (index != 0U) {
+                const auto& previous = memory::physical_regions[index - 1U];
+                const paddr_t previous_end =
+                    previous.base + static_cast<paddr_t>(previous.pages) * memory::page_size;
+                if (previous_end > region.base)
+                    return error_t::invalid_argument;
+            }
+            discovered_pages += region.pages;
+        }
+        if (discovered_pages != memory::managed_pages ||
+            boot::root_bootinfo.memory_region_count != memory::physical_region_count ||
+            boot::root_bootinfo.memory_total_pages != memory::managed_pages ||
+            boot::root_bootinfo.memory_page_size != memory::page_size)
+            return error_t::invalid_argument;
+
         constexpr vaddr_t scratch_mapping_address = arch::space::user_code + 0x8000ULL;
         constexpr vaddr_t dynamic_mapping_address = arch::space::user_code + 0x9000ULL;
         static_assert(dynamic_mapping_address < arch::space::user_stack_base);

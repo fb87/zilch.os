@@ -62,6 +62,9 @@ _start:
   enter_el1 .Lboot_el1
 
 .Lboot_el1:
+  mov x19, x0
+  /* Preserve the firmware DTB pointer across BSS clearing. */
+
   /* Direct EL1 boot and EL2 boot converge on the kernel stack. */
   select_kernel_stack
 
@@ -74,6 +77,7 @@ _start:
   b .Lclear_bss
 
 .Lbss_done:
+  mov x0, x19
   bl sys_kernel_entry
 .Lboot_halt:
   wfe

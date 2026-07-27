@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/arch/memory.hh>
+#include <sys/kernel/boot/fdt.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/memory/object.hh>
 #include <sys/kernel/object/table.hh>
@@ -30,14 +31,23 @@ namespace sys::kernel::memory
     inline volatile u32 allocator_lock{};
     inline volatile u32 mapping_lock{};
     inline u32 next_mapping_generation{1U};
+    inline uintptr_t firmware_data{};
+
+    enum class inventory_source : u8 {
+        firmware_register = 0U,
+        platform_probe = 1U,
+        platform_fallback = 2U,
+    };
+    inline inventory_source physical_inventory_source{inventory_source::firmware_register};
 
     struct physical_region {
         paddr_t base{};
         u32 pages{};
         bool allocatable{};
+        u32 bitmap_offset{};
     };
 
-    inline constexpr u32 maximum_physical_regions = 4U;
+    inline constexpr u32 maximum_physical_regions = 16U;
     inline physical_region physical_regions[maximum_physical_regions]{};
     inline u32 physical_region_count{};
 
@@ -90,57 +100,181 @@ namespace sys::kernel::memory
             allocation_bitmap[index / 64U] &= ~mask;
     }
 
-    [[nodiscard]] inline error_t initialize_physical_allocator() noexcept {
-        const paddr_t kernel_end =
-            (reinterpret_cast<paddr_t>(__kernel_end) + page_size - 1U) & ~(page_size - 1U);
-        const paddr_t ram_end = platform::memory::ram_base + platform::memory::ram_size;
-        if (kernel_end >= ram_end)
+    [[nodiscard]] inline constexpr paddr_t align_up(paddr_t value) noexcept {
+        return (value + page_size - 1U) & ~(page_size - 1U);
+    }
+
+    [[nodiscard]] inline constexpr paddr_t align_down(paddr_t value) noexcept {
+        return value & ~(page_size - 1U);
+    }
+
+    inline error_t append_allocatable_region(paddr_t base, paddr_t end) noexcept {
+        base = align_up(base);
+        end = align_down(end);
+        if (base >= end)
+            return error_t::success;
+        const u64 pages64 = (end - base) / page_size;
+        if (pages64 > maximum_physical_pages || managed_pages + pages64 > maximum_physical_pages ||
+            physical_region_count >= maximum_physical_regions)
             return error_t::no_memory;
-        managed_base = kernel_end;
-        managed_pages = static_cast<u32>((ram_end - managed_base) / page_size);
-        if (managed_pages > maximum_physical_pages)
+        physical_regions[physical_region_count++] = {base, static_cast<u32>(pages64), true,
+                                                     managed_pages};
+        managed_pages += static_cast<u32>(pages64);
+        return error_t::success;
+    }
+
+    inline error_t
+    append_memory_minus_reservations(paddr_t base, psize_t size,
+                                     const boot::fdt::inventory& inventory) noexcept {
+        if (size == 0U || base + size < base)
             return error_t::invalid_argument;
+        struct segment {
+            paddr_t base{};
+            paddr_t end{};
+        };
+        segment active[maximum_physical_regions]{{base, base + size}};
+        u32 active_count = 1U;
+        for (u32 reserved_index = 0U; reserved_index < inventory.reserved_count; ++reserved_index) {
+            const auto& reserved = inventory.reserved[reserved_index];
+            if (reserved.size == 0U || reserved.base + reserved.size < reserved.base)
+                return error_t::invalid_argument;
+            const paddr_t reserved_begin = align_down(reserved.base);
+            const paddr_t reserved_end = align_up(reserved.base + reserved.size);
+            segment next[maximum_physical_regions]{};
+            u32 next_count{};
+            for (u32 index = 0U; index < active_count; ++index) {
+                const segment current = active[index];
+                if (reserved_end <= current.base || reserved_begin >= current.end) {
+                    if (next_count >= maximum_physical_regions)
+                        return error_t::no_memory;
+                    next[next_count++] = current;
+                    continue;
+                }
+                if (reserved_begin > current.base) {
+                    if (next_count >= maximum_physical_regions)
+                        return error_t::no_memory;
+                    next[next_count++] = {current.base, reserved_begin};
+                }
+                if (reserved_end < current.end) {
+                    if (next_count >= maximum_physical_regions)
+                        return error_t::no_memory;
+                    next[next_count++] = {reserved_end, current.end};
+                }
+            }
+            active_count = next_count;
+            for (u32 index = 0U; index < active_count; ++index)
+                active[index] = next[index];
+        }
+        for (u32 index = 0U; index < active_count; ++index) {
+            const error_t result = append_allocatable_region(active[index].base, active[index].end);
+            if (result != error_t::success)
+                return result;
+        }
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t initialize_physical_allocator() noexcept {
         for (u32 word = 0U; word < bitmap_words; ++word)
             allocation_bitmap[word] = 0U;
+        for (auto& region : physical_regions)
+            region = {};
+        physical_region_count = 0U;
+        managed_pages = 0U;
+        managed_base = 0U;
+
+        boot::fdt::inventory inventory{};
+        physical_inventory_source = inventory_source::firmware_register;
+        error_t parse_result = boot::fdt::parse(firmware_data, inventory);
+#if defined(__aarch64__)
+        if (parse_result != error_t::success &&
+            firmware_data != static_cast<uintptr_t>(platform::memory::ram_base)) {
+            // QEMU virt places its generated DTB at the start of RAM for the
+            // raw -kernel boot path, even when x0 is not preserved by a
+            // particular loader configuration. Probe that conventional
+            // location before using the explicit platform fallback.
+            parse_result =
+                boot::fdt::parse(static_cast<uintptr_t>(platform::memory::ram_base), inventory);
+            if (parse_result == error_t::success)
+                physical_inventory_source = inventory_source::platform_probe;
+        }
+#endif
+        if (parse_result != error_t::success) {
+            inventory.memory_count = 0U;
+            inventory.reserved_count = 0U;
+            inventory.blob_base = 0U;
+            inventory.blob_size = 0U;
+            for (auto& item : inventory.memory)
+                item = {};
+            for (auto& item : inventory.reserved)
+                item = {};
+            inventory.memory[0] = {platform::memory::ram_base, platform::memory::ram_size};
+            inventory.memory_count = 1U;
+            physical_inventory_source = inventory_source::platform_fallback;
+        }
+
+        const paddr_t kernel_begin = platform::memory::ram_base;
+        const paddr_t kernel_end = align_up(reinterpret_cast<paddr_t>(__kernel_end));
+        if (!boot::fdt::append(inventory.reserved, boot::fdt::inventory::maximum_reserved_ranges,
+                               inventory.reserved_count, kernel_begin, kernel_end - kernel_begin))
+            return error_t::no_memory;
+
+        for (u32 index = 0U; index < inventory.memory_count; ++index) {
+            const error_t result = append_memory_minus_reservations(
+                inventory.memory[index].base, inventory.memory[index].size, inventory);
+            if (result != error_t::success)
+                return result;
+        }
+        if (physical_region_count == 0U || managed_pages == 0U)
+            return error_t::no_memory;
+        managed_base = physical_regions[0].base;
         __atomic_store_n(&free_pages, managed_pages, __ATOMIC_RELEASE);
-        physical_region_count = 1U;
-        physical_regions[0] = {managed_base, managed_pages, true};
-        for (u32 index = 1U; index < maximum_physical_regions; ++index)
-            physical_regions[index] = {};
         return error_t::success;
     }
 
     [[nodiscard]] inline error_t allocate_physical_page(paddr_t& address) noexcept {
         address = 0U;
         lock_allocator();
-        for (u32 index = 0U; index < managed_pages; ++index) {
-            if (page_used(index))
-                continue;
-            mark_page(index, true);
-            __atomic_fetch_sub(&free_pages, 1U, __ATOMIC_ACQ_REL);
-            address = managed_base + static_cast<paddr_t>(index) * page_size;
-            unlock_allocator();
-            zero_page(address);
-            return error_t::success;
+        for (u32 region_index = 0U; region_index < physical_region_count; ++region_index) {
+            const auto& region = physical_regions[region_index];
+            for (u32 page = 0U; page < region.pages; ++page) {
+                const u32 bitmap_index = region.bitmap_offset + page;
+                if (page_used(bitmap_index))
+                    continue;
+                mark_page(bitmap_index, true);
+                __atomic_fetch_sub(&free_pages, 1U, __ATOMIC_ACQ_REL);
+                address = region.base + static_cast<paddr_t>(page) * page_size;
+                unlock_allocator();
+                zero_page(address);
+                return error_t::success;
+            }
         }
         unlock_allocator();
         return error_t::no_memory;
     }
 
     [[nodiscard]] inline error_t release_physical_page(paddr_t address) noexcept {
-        if (address < managed_base || ((address - managed_base) % page_size) != 0U)
+        if ((address & (page_size - 1U)) != 0U)
             return error_t::invalid_argument;
-        const u32 index = static_cast<u32>((address - managed_base) / page_size);
         lock_allocator();
-        if (index >= managed_pages || !page_used(index)) {
+        for (u32 region_index = 0U; region_index < physical_region_count; ++region_index) {
+            const auto& region = physical_regions[region_index];
+            const paddr_t end = region.base + static_cast<paddr_t>(region.pages) * page_size;
+            if (address < region.base || address >= end)
+                continue;
+            const u32 page = static_cast<u32>((address - region.base) / page_size);
+            const u32 bitmap_index = region.bitmap_offset + page;
+            if (!page_used(bitmap_index)) {
+                unlock_allocator();
+                return error_t::not_found;
+            }
+            zero_page(address);
+            mark_page(bitmap_index, false);
+            __atomic_fetch_add(&free_pages, 1U, __ATOMIC_ACQ_REL);
             unlock_allocator();
-            return error_t::not_found;
+            return error_t::success;
         }
-        zero_page(address);
-        mark_page(index, false);
-        __atomic_fetch_add(&free_pages, 1U, __ATOMIC_ACQ_REL);
         unlock_allocator();
-        return error_t::success;
+        return error_t::invalid_argument;
     }
 
     [[nodiscard]] inline error_t assign_frame(frame& target, space_id_t owner,

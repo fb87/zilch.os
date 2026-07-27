@@ -54,8 +54,9 @@ namespace sys::kernel
         arch::cpu::halt();
     }
 
-    [[noreturn]] inline void start() noexcept {
+    [[noreturn]] inline void start(uintptr_t firmware_data) noexcept {
         verify_contracts();
+        memory::firmware_data = firmware_data;
 
         platform::console::initialize();
         arch::cpu::initialize_boot_cpu();
@@ -102,11 +103,18 @@ namespace sys::kernel
         if constexpr (arch::space::user_available) {
             const error_t user_result = thread::initialize_user_threads();
             if (user_result == error_t::success) {
-                pr_info("memory: base=%llx pages=%u free=%u page_size=%llu\n",
+                const char* inventory_source = "firmware-register";
+                if (memory::physical_inventory_source == memory::inventory_source::platform_probe)
+                    inventory_source = "platform-probe";
+                else if (memory::physical_inventory_source ==
+                         memory::inventory_source::platform_fallback)
+                    inventory_source = "platform-fallback";
+                pr_info("memory: base=%llx pages=%u free=%u regions=%u page_size=%llu source=%s\n",
                         static_cast<unsigned long long>(memory::managed_base),
                         static_cast<unsigned int>(memory::managed_pages),
                         static_cast<unsigned int>(memory::free_pages),
-                        static_cast<unsigned long long>(memory::page_size));
+                        static_cast<unsigned int>(memory::physical_region_count),
+                        static_cast<unsigned long long>(memory::page_size), inventory_source);
             }
             if (user_result != error_t::success) {
                 pr_err("user object initialization failed=%d\n", static_cast<int>(user_result));

@@ -1,3 +1,11 @@
+## 0.8.0 — Batch 0107
+
+- Preserve the ARM64 firmware DTB pointer through early assembly startup.
+- Parse DTB memory nodes, reserve-map entries, `/reserved-memory`, and the DTB blob.
+- Support bounded discontiguous physical allocator regions.
+- Export memory inventory through bootinfo v2.
+- Add bootstrap validation for region ordering, accounting, and root metadata.
+
 ## 0106 - Reserve bootstrap certification mapping window
 
 - Move kernel bootstrap scratch mappings away from the growing `init.elf` load segment.
@@ -183,3 +191,13 @@
 - Emit ARM64 normal or device page descriptors according to validated attributes.
 - Reject executable device mappings and normal/device attribute mismatches.
 - Add bounded certification for MMIO lifecycle and failed-map accounting rollback.
+
+## 0108 - Robust DTB inventory source selection
+
+- Try the firmware-provided DTB pointer first.
+- Probe the QEMU ARM64 virt conventional DTB location at RAM base when the
+  firmware register is absent or invalid.
+- Fall back explicitly to the platform RAM description instead of halting with
+  `not_found`.
+- Report the selected inventory source in the memory boot log.
+- Keep the fallback freestanding without implicit `memcpy` dependencies.

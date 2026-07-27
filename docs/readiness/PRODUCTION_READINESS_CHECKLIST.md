@@ -180,11 +180,11 @@ Every completed requirement must link to:
 
 ## 4.1 Boot-time memory discovery
 
-- [-] **MEM-001** QEMU RAM is represented as an explicit allocatable physical-region inventory; general DT/firmware memory-node parsing remains open.
-- [-] **MEM-002** The kernel image is page-aligned and excluded before the allocatable region is published; malformed/general firmware-region handling remains open.
-- [ ] **MEM-003** Detect overlapping and malformed regions.
-- [ ] **MEM-004** Support multiple discontiguous RAM regions.
-- [ ] **MEM-005** Export remaining memory to the root resource server.
+- [-] **MEM-001** ARM64 imports bounded RAM ranges from DTB memory nodes; additional firmware formats and real-hardware evidence remain open.
+- [-] **MEM-002** Kernel image, DTB blob, FDT reservation-map entries, and `/reserved-memory` ranges are excluded before allocator publication; full platform-reservation coverage remains open.
+- [-] **MEM-003** DTB bounds, cell geometry, overflow, tuple shape, and post-subtraction region overlap are validated; broader malformed-map fuzz remains open.
+- [-] **MEM-004** The bounded physical allocator supports up to sixteen discontiguous allocatable regions; scalable metadata and real discontiguous-hardware evidence remain open.
+- [-] **MEM-005** Bootinfo v2 exports allocatable region metadata, total pages, and free pages to root; resource capabilities and userspace allocation ownership remain open.
 
 ## 4.2 Resource objects
 
@@ -310,7 +310,7 @@ Every completed requirement must link to:
 ## 7.1 Root resource manager
 
 - [x] **USR-001** PL3 root task boots.
-- [ ] **USR-002** Root task receives all delegated resources explicitly.
+- [-] **USR-002** Root receives memory inventory metadata and existing bootstrap capabilities; explicit capability delegation for all allocatable RAM remains open.
 - [ ] **USR-003** Root task contains no kernel acceptance-test policy in production.
 - [ ] **USR-004** Root task launches and supervises core servers.
 - [ ] **USR-005** Root task exposes resource-allocation policy through documented IPC.
@@ -318,7 +318,7 @@ Every completed requirement must link to:
 ## 7.2 Memory server and pager
 
 - [-] **USR-006** Independently linked userspace memory-server test service exists; production resource-server API/policy remains open.
-- [ ] **USR-007** Physical memory inventory imported from root resources.
+- [-] **USR-007** Root bootinfo carries the physical memory inventory; the userspace memory server does not yet import and manage it.
 - [-] **USR-008** Capability-authorized frame creation is exercised by the pager; general service API remains open.
 - [-] **USR-009** Independent pager service handles two sequential clients; concurrency, death, and pressure policies remain open.
 - [ ] **USR-010** Demand paging implemented where configured.
