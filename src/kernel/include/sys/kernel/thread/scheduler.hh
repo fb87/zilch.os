@@ -219,7 +219,8 @@ namespace sys::kernel::thread
         if (target.owner == nullptr || pager.owner == nullptr)
             return error_t::denied;
         const vaddr_t page_address = address & ~(memory::page_size - 1U);
-        const error_t result = memory::map(target.address_space, source, page_address, permissions);
+        const error_t result =
+            memory::map(target.address_space, source, page_address, permissions, 0U, 0U);
         if (result != error_t::success)
             return result;
         target.fault_disposition = fault::disposition::resume;
@@ -470,11 +471,12 @@ namespace sys::kernel::thread
             root.cspace.slots[10U].object.type == object::type_t::none)
             return error_t::invalid_argument;
 
-        result = memory::map(
-            user_threads[0].address_space, memory::frames[0],
-            CONFIG_ROOT_ONLY_BOOT ? 0x20002000ULL : 0x10002000ULL,
-            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                            static_cast<u8>(memory::permission::write)));
+        result =
+            memory::map(user_threads[0].address_space, memory::frames[0],
+                        CONFIG_ROOT_ONLY_BOOT ? 0x20002000ULL : 0x10002000ULL,
+                        static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
+                                                        static_cast<u8>(memory::permission::write)),
+                        0U, 0U);
         if (result != error_t::success)
             return result;
         result = memory::unmap(user_threads[0].address_space, memory::frames[0]);
@@ -505,11 +507,12 @@ namespace sys::kernel::thread
         if (result != error_t::success || dynamic_header == nullptr)
             return error_t::invalid_argument;
         auto& dynamic_frame = *reinterpret_cast<memory::frame*>(dynamic_header);
-        result = memory::map(
-            user_threads[0].address_space, dynamic_frame,
-            CONFIG_ROOT_ONLY_BOOT ? 0x20003000ULL : 0x10003000ULL,
-            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                            static_cast<u8>(memory::permission::write)));
+        result =
+            memory::map(user_threads[0].address_space, dynamic_frame,
+                        CONFIG_ROOT_ONLY_BOOT ? 0x20003000ULL : 0x10003000ULL,
+                        static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
+                                                        static_cast<u8>(memory::permission::write)),
+                        0U, 0U);
         if (result != error_t::success)
             return result;
         if (memory::destroy_frame(root, 18U) != error_t::busy)

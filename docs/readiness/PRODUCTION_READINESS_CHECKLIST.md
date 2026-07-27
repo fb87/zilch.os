@@ -119,8 +119,8 @@ Every completed requirement must link to:
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
 - [-] **CAP-012** Single-capability delete exists. Concurrent lookup and teardown-race evidence remains open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
-- [ ] **CAP-014** Revocation is safe under concurrent lookup and IPC.
-- [ ] **CAP-015** Object destruction waits for capability/reference quiescence.
+- [-] **CAP-014** Capability mutation is serialized against map/unmap authority use; revoke-versus-IPC and controlled concurrent race evidence remain open.
+- [-] **CAP-015** Frame destruction waits for mapping quiescence and capability revoke removes descendant-authorized mappings; generalized object-reference quiescence remains open.
 - [-] **CAP-016** Generation checks and reusable derivation records prevent bounded stale-reference reuse. Long-duration and concurrent ABA evidence remains open.
 
 ## 2.3 Capability transfer
@@ -201,7 +201,7 @@ Every completed requirement must link to:
 - [x] **MEM-013** Basic map/unmap and W^X checks exist.
 - [-] **MEM-014** Up to eight mappings per frame are supported with serialized transactions; scalable representation remains open.
 - [-] **MEM-015** Per-frame reverse mappings use generation-checked address-space references, and address-space teardown removes records for the exact object generation; scalable indexing remains open.
-- [-] **MEM-016** Unmap by frame/address-space and frame-wide teardown exist with serialized record updates; capability-revoke integration and concurrent race evidence remain open.
+- [-] **MEM-016** Unmap by frame/address-space, frame-wide teardown, and capability-delete/revoke-driven unmapping exist with serialized authority transactions; scalable indexing and controlled race evidence remain open.
 - [ ] **MEM-017** Cacheability/shareability attributes validated.
 - [ ] **MEM-018** Device-memory mappings use correct attributes.
 - [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root and removes all tracked frame mappings before clearing user page tables; stress and scalable mapping-database evidence remain open.
@@ -559,7 +559,7 @@ Every completed requirement must link to:
 - [x] **TST-016** Deterministic bounded kernel/hypervisor fuzz exists. It is evidence for bounded mechanisms, not production completion.
 - [ ] **TST-017** Capability derivation/revoke fuzz implemented.
 - [-] **TST-018** Reply/cancel-versus-thread-teardown regressions are covered by bounded certification paths; dedicated race fuzz and fault injection remain open.
-- [ ] **TST-019** Mapping/revoke/TLB-shootdown race fuzz implemented.
+- [-] **TST-019** Deterministic capability-revoke-driven unmapping integration test exists; concurrent revoke/map/unmap and TLB-shootdown race fuzz remain open.
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.

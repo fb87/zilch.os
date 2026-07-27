@@ -158,3 +158,12 @@
 - Make the userspace memory server request read/write mappings for resolved faults.
 - Preserve rejection of write-only and writable-executable stage-1 mappings.
 - Prevent pager failure from cascading into later memory and process lifecycle tests.
+
+
+## 0104 - Capability-bound mapping authority
+
+- Record the exact frame and address-space capability derivations that authorize every mapping.
+- Serialize capability mutation against mapping creation and removal.
+- Remove mappings automatically when their authorizing capability is deleted or recursively revoked.
+- Preserve descendant-only revoke semantics while keeping the selected ancestor capability valid.
+- Add PL3 certification for revoke-driven unmapping and subsequent frame destruction.

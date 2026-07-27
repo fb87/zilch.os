@@ -132,37 +132,68 @@ namespace sys::kernel::syscall
             if (lookup != error_t::success)
                 return lookup;
         }
+        capability::lock_authority();
+        error_t authority_result = error_t::unsupported;
         switch (operation) {
             case abi::v1::control_operation::capability_copy:
-                return capability::copy(destination_task->cspace, destination_selector,
-                                        current.owner->cspace, source_selector, {rights});
+                authority_result =
+                    capability::copy(destination_task->cspace, destination_selector,
+                                     current.owner->cspace, source_selector, {rights});
+                break;
             case abi::v1::control_operation::capability_mint:
-                return capability::mint(destination_task->cspace, destination_selector,
-                                        current.owner->cspace, source_selector, {rights}, badge);
+                authority_result =
+                    capability::mint(destination_task->cspace, destination_selector,
+                                     current.owner->cspace, source_selector, {rights}, badge);
+                break;
             case abi::v1::control_operation::capability_move:
-                return capability::move(destination_task->cspace, destination_selector,
-                                        current.owner->cspace, source_selector);
-            case abi::v1::control_operation::capability_delete:
-                return capability::delete_capability(destination_task->cspace,
-                                                     destination_selector);
+                authority_result = capability::move(destination_task->cspace, destination_selector,
+                                                    current.owner->cspace, source_selector);
+                break;
+            case abi::v1::control_operation::capability_delete: {
+                if (destination_selector >= capability::cspace_slot_count) {
+                    authority_result = error_t::invalid_argument;
+                    break;
+                }
+                capability::lock(destination_task->cspace);
+                const capability::slot_t deleted =
+                    destination_task->cspace.slots[destination_selector];
+                capability::unlock(destination_task->cspace);
+                if (deleted.object.type != object::type_t::none &&
+                    capability::derivation_valid(deleted.derivation, deleted.object))
+                    (void)memory::unmap_authority(deleted.derivation, false);
+                authority_result =
+                    capability::delete_capability(destination_task->cspace, destination_selector);
+                break;
+            }
             case abi::v1::control_operation::capability_revoke: {
-                if (source_selector >= capability::cspace_slot_count)
-                    return error_t::invalid_argument;
+                if (source_selector >= capability::cspace_slot_count) {
+                    authority_result = error_t::invalid_argument;
+                    break;
+                }
                 capability::lock(current.owner->cspace);
                 const capability::slot_t source_slot = current.owner->cspace.slots[source_selector];
                 capability::unlock(current.owner->cspace);
                 if (source_slot.object.type == object::type_t::none ||
-                    !capability::derivation_valid(source_slot.derivation, source_slot.object))
-                    return error_t::not_found;
+                    !capability::derivation_valid(source_slot.derivation, source_slot.object)) {
+                    authority_result = error_t::not_found;
+                    break;
+                }
                 if (!source_slot.rights.contains(capability::right_t::grant) &&
-                    !source_slot.rights.contains(capability::right_t::manage))
-                    return error_t::denied;
+                    !source_slot.rights.contains(capability::right_t::manage)) {
+                    authority_result = error_t::denied;
+                    break;
+                }
+                (void)memory::unmap_authority(source_slot.derivation, true);
                 (void)capability::revoke_descendants(source_slot.derivation);
-                return error_t::success;
+                authority_result = error_t::success;
+                break;
             }
             default:
-                return error_t::unsupported;
+                authority_result = error_t::unsupported;
+                break;
         }
+        capability::unlock_authority();
+        return authority_result;
     }
 
     [[nodiscard]] inline bool dispatch_control(thread::thread& current,
@@ -227,6 +258,9 @@ namespace sys::kernel::syscall
                         break;
                     case 14U:
                         name = "memory_mapping_database";
+                        break;
+                    case 15U:
+                        name = "memory_authority_revoke";
                         break;
                     default:
                         break;
@@ -341,15 +375,33 @@ namespace sys::kernel::syscall
                 break;
             }
             case abi::v1::control_operation::map_frame: {
-                space::address_space* target_space = nullptr;
-                memory::frame* source_frame = nullptr;
-                result = resolve_space(current, a1, target_space);
-                if (result == error_t::success)
-                    result = resolve_frame(current, a2, capability::right_t::write, source_frame);
-                if (result == error_t::success) {
-                    result = memory::map(*target_space, *source_frame, a3,
-                                         static_cast<memory::permission>(a4));
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
                 }
+                capability::lock_authority();
+                capability::slot_t space_cap{};
+                capability::slot_t frame_cap{};
+                result = capability::lookup_slot(current.owner->cspace, a1,
+                                                 object::type_t::address_space,
+                                                 capability::right_t::control, space_cap);
+                if (result == error_t::success)
+                    result =
+                        capability::lookup_slot(current.owner->cspace, a2, object::type_t::frame,
+                                                capability::right_t::write, frame_cap);
+                if (result == error_t::success) {
+                    auto* target_space =
+                        reinterpret_cast<space::address_space*>(object::resolve(space_cap.object));
+                    auto* source_frame =
+                        reinterpret_cast<memory::frame*>(object::resolve(frame_cap.object));
+                    if (target_space == nullptr || source_frame == nullptr)
+                        result = error_t::not_found;
+                    else
+                        result = memory::map(*target_space, *source_frame, a3,
+                                             static_cast<memory::permission>(a4),
+                                             frame_cap.derivation, space_cap.derivation);
+                }
+                capability::unlock_authority();
                 break;
             }
             case abi::v1::control_operation::frame_create: {
@@ -504,11 +556,13 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::unmap_frame: {
                 space::address_space* target_space = nullptr;
                 memory::frame* source_frame = nullptr;
+                capability::lock_authority();
                 result = resolve_space(current, a1, target_space);
                 if (result == error_t::success)
                     result = resolve_frame(current, a2, capability::right_t::write, source_frame);
                 if (result == error_t::success)
                     result = memory::unmap(*target_space, *source_frame, a3);
+                capability::unlock_authority();
                 break;
             }
             case abi::v1::control_operation::endpoint_create:

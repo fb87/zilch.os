@@ -362,7 +362,9 @@ namespace sys::kernel::memory
     }
 
     [[nodiscard]] inline error_t map(space::address_space& target, frame& source, vaddr_t address,
-                                     permission permissions) noexcept {
+                                     permission permissions,
+                                     capability::derivation_id_t frame_authority,
+                                     capability::derivation_id_t space_authority) noexcept {
         if (!valid_permission(permissions) || !source.allocated)
             return error_t::denied;
         const object::reference_t space_reference = object::reference(target.object);
@@ -400,7 +402,8 @@ namespace sys::kernel::memory
         u32 generation = next_mapping_generation++;
         if (generation == 0U)
             generation = next_mapping_generation++;
-        *free_record = {space_reference, address, permissions, generation, true};
+        *free_record = {space_reference, address,    permissions, frame_authority,
+                        space_authority, generation, true};
         ++source.mapping_count;
         unlock_mappings();
         return error_t::success;
@@ -427,6 +430,43 @@ namespace sys::kernel::memory
         }
         unlock_mappings();
         return error_t::not_found;
+    }
+
+    inline u32 unmap_authority(capability::derivation_id_t authority,
+                               bool descendants_only) noexcept {
+        if (authority == 0U)
+            return 0U;
+        u32 removed = 0U;
+        lock_mappings();
+        for (auto& source : frames) {
+            if (!source.allocated || source.mapping_count == 0U)
+                continue;
+            for (auto& mapping : source.mappings) {
+                if (!mapping.valid)
+                    continue;
+                const auto matches =
+                    [authority, descendants_only](capability::derivation_id_t candidate) noexcept {
+                        if (!descendants_only && candidate == authority)
+                            return true;
+                        return capability::descendant_of(candidate, authority);
+                    };
+                if (!matches(mapping.frame_authority) && !matches(mapping.space_authority))
+                    continue;
+                object::header_t* header = object::resolve(mapping.address_space);
+                if (header != nullptr && header->type == object::type_t::address_space) {
+                    auto& target = *reinterpret_cast<space::address_space*>(header);
+                    const error_t result = target.unmap_page(mapping.address);
+                    if (result != error_t::success && result != error_t::not_found)
+                        continue;
+                }
+                mapping = {};
+                if (source.mapping_count != 0U)
+                    --source.mapping_count;
+                ++removed;
+            }
+        }
+        unlock_mappings();
+        return removed;
     }
 
     [[nodiscard]] inline error_t unmap_all(frame& source) noexcept {

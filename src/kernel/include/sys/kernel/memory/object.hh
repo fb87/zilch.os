@@ -13,6 +13,8 @@ namespace sys::kernel::memory
         object::reference_t address_space{};
         vaddr_t address{};
         permission permissions{permission::none};
+        capability::derivation_id_t frame_authority{};
+        capability::derivation_id_t space_authority{};
         u32 generation{};
         bool valid{};
     };

@@ -29,6 +29,7 @@ namespace
         dynamic_ipc_objects = 12U,
         memory_resource_lifecycle = 13U,
         memory_mapping_database = 14U,
+        memory_authority_revoke = 15U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -249,6 +250,44 @@ namespace
         return passed;
     }
 
+    [[nodiscard]] bool test_memory_authority_revoke() noexcept {
+        constexpr sys::word_t frame_selector = 16U;
+        constexpr sys::word_t derived_selector = 17U;
+        constexpr sys::word_t root_space_selector = 3U;
+        constexpr sys::word_t address = 0x20006000U;
+        constexpr sys::word_t read_write = 3U;
+        constexpr sys::word_t cap_write = 1U << 1U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t not_found = static_cast<sys::word_t>(sys::error_t::not_found);
+
+        if (sys::control(sys::abi::v1::control_operation::frame_create, 0U, frame_selector) !=
+            success)
+            return false;
+        bool passed = sys::control(sys::abi::v1::control_operation::capability_copy, 0U,
+                                   derived_selector, frame_selector, cap_write) == success;
+        passed = sys::control(sys::abi::v1::control_operation::map_frame, root_space_selector,
+                              derived_selector, address, read_write) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::capability_revoke, 0U, 0U,
+                              frame_selector) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::capability_delete, 0U,
+                              derived_selector) == not_found &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) ==
+                     success &&
+                 passed;
+
+        if (!passed) {
+            (void)sys::control(sys::abi::v1::control_operation::unmap_frame, root_space_selector,
+                               frame_selector, address);
+            (void)sys::control(sys::abi::v1::control_operation::capability_delete, 0U,
+                               derived_selector);
+            (void)sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector);
+        }
+        return passed;
+    }
+
     struct acceptance_ledger {
         sys::word_t failure_mask{};
         sys::word_t failure_count{};
@@ -421,6 +460,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
 
     const bool mapping_database_pass = test_memory_mapping_database();
     record(ledger, test_id::memory_mapping_database, mapping_database_pass);
+    const bool authority_revoke_pass = test_memory_authority_revoke();
+    record(ledger, test_id::memory_authority_revoke, authority_revoke_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

@@ -29,6 +29,7 @@ namespace sys::kernel::capability
     inline volatile u32 cspace_registry_lock{};
     inline derivation_record_t derivations[maximum_derivations]{};
     inline volatile u32 derivation_lock{};
+    inline volatile u32 authority_lock{};
     inline derivation_id_t next_derivation_hint{1U};
 
     inline void spin_lock(volatile u32& value) noexcept {
@@ -45,6 +46,12 @@ namespace sys::kernel::capability
 
     inline void lock(cspace_t& cspace) noexcept {
         spin_lock(cspace.lock);
+    }
+    inline void lock_authority() noexcept {
+        spin_lock(authority_lock);
+    }
+    inline void unlock_authority() noexcept {
+        spin_unlock(authority_lock);
     }
     inline void unlock(cspace_t& cspace) noexcept {
         spin_unlock(cspace.lock);
@@ -194,6 +201,28 @@ namespace sys::kernel::capability
         return result != nullptr ? error_t::success : error_t::not_found;
     }
 
+    [[nodiscard]] inline error_t lookup_slot(const cspace_t& cspace, capability_id_t selector,
+                                             object::type_t expected_type, right_t required,
+                                             slot_t& result) noexcept {
+        result = {};
+        if (selector >= cspace_slot_count)
+            return error_t::not_found;
+        cspace_t& mutable_cspace = const_cast<cspace_t&>(cspace);
+        lock(mutable_cspace);
+        const slot_t slot = cspace.slots[selector];
+        unlock(mutable_cspace);
+        if (slot.object.type != expected_type)
+            return error_t::denied;
+        if (!derivation_valid(slot.derivation, slot.object))
+            return error_t::not_found;
+        const error_t rights_result = validate(slot, required);
+        if (rights_result != error_t::success)
+            return rights_result;
+        if (object::resolve(slot.object) == nullptr)
+            return error_t::not_found;
+        result = slot;
+        return error_t::success;
+    }
     [[nodiscard]] inline error_t derive(cspace_t& destination, capability_id_t destination_selector,
                                         const cspace_t& source, capability_id_t source_selector,
                                         rights_t rights_mask, badge_t badge) noexcept {
