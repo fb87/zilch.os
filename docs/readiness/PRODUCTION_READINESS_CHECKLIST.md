@@ -95,7 +95,7 @@ Every completed requirement must link to:
 - [x] **PRD-015** Virtual interrupt and timer state are isolated in `virtual_irq.hh` and `virtual_timer.hh`.
 - [x] **PRD-016** VM lifecycle and VMID allocation are isolated in `lifecycle.hh` and `vmid.hh`.
 - [x] **PRD-017** Hypervisor control models and guest fixtures live under test-only include/fixture paths selected only by certification builds.
-- [ ] **PRD-018** Establish maximum source/header size and dependency rules.
+- [x] **PRD-018** Boundary checks enforce 1,200-line source and 1,600-line header ceilings, forbid public-header test dependencies and parent-relative includes, and run in the production gate.
 
 ---
 
@@ -164,7 +164,7 @@ Every completed requirement must link to:
 ## 3.3 Fault IPC
 
 - [x] **IPC-017** User page faults delivered to configured pager. Two independent clients pass.
-- [ ] **IPC-018** Undefined instruction faults delivered to fault handler.
+- [-] **IPC-018** ARM64 undefined-instruction exceptions are classified as instruction faults and enter the same fault-IPC path; a real PL3 undefined-instruction integration test remains open.
 - [-] **IPC-019** Fault address, access syndrome, and PC are delivered; cross-architecture metadata contract is not frozen.
 - [-] **IPC-020** Resume path passes and terminate mechanism exists; negative-policy coverage remains open.
 - [ ] **IPC-021** Pager death handling implemented.
@@ -231,7 +231,7 @@ Every completed requirement must link to:
 - [x] **SCH-003** Deterministic priority ordering implemented.
 - [-] **SCH-004** CPU pinning/affinity exists; general migration policy is deferred/open.
 - [-] **SCH-005** Cross-CPU reschedule IPI exists; targeted preemption semantics and latency evidence remain open.
-- [ ] **SCH-006** CPU hotplug/offline state handled or explicitly unsupported for 1.0.
+- [x] **SCH-006** CPU hotplug/offline is explicitly unsupported for 1.0; the online CPU set is immutable after boot.
 
 ## 5.2 Scheduling contexts
 
@@ -282,7 +282,7 @@ Every completed requirement must link to:
 - [ ] **TIM-002** Per-CPU deadline programming implemented.
 - [ ] **TIM-003** Tickless timeout queue integrated.
 - [ ] **TIM-004** Counter frequency and overflow behavior validated.
-- [ ] **TIM-005** Suspend/resume behavior implemented or explicitly out of scope.
+- [x] **TIM-005** Suspend/resume is explicitly out of scope for 1.0; timer and scheduler state assume one uninterrupted boot.
 
 ## 6.3 Platform support
 
@@ -301,7 +301,7 @@ Every completed requirement must link to:
 - [ ] **PLT-010** Implement SMP startup.
 - [ ] **PLT-011** Implement page-table backend.
 - [ ] **PLT-012** Implement timer backend.
-- [ ] **PLT-013** Implement virtualization backend or explicitly defer it beyond 1.0.
+- [x] **PLT-013** AMD64 virtualization is explicitly deferred beyond 1.0 together with the compile-only AMD64 runtime.
 
 ---
 
@@ -484,15 +484,15 @@ Every completed requirement must link to:
 - [x] **SEC-002** Every production TTBR0 root shares page-granular kernel RX/RO-NX/RW-NX mappings; user and guest mapping APIs reject writable-executable permissions.
 - [x] **SEC-003** Embedded images and kernel rodata are mapped EL1 read-only and non-executable after MMU initialization; bootstrap validates every image-window PTE.
 - [x] **SEC-004** Every EL1 and EL2 per-CPU stack has an unmapped guard page below its 32 KiB usable region, plus exception-time bounds/canary checks and retained high-water marks. Bootstrap certification verifies all guard and adjacent usable PTEs.
-- [ ] **SEC-005** User copy routines validate full ranges and overflow.
+- [x] **SEC-005** User copy validates overflow, the complete page range, EL0 permissions, write permission, and the kernel boundary before unprivileged `LDTRB`/`STTRB` access; certification covers valid, read-only, unmapped, crossing, and wrapping ranges.
 - [x] **SEC-006** Reusable physical pages are scrubbed on release and allocation; user-thread and vCPU architectural, IPC, timer, interrupt, exit, and diagnostic state is cleared before slot reuse. Certification poisons and verifies both page and vCPU reuse boundaries.
 
 ## 10.2 Architecture hardening
 
 - [-] **SEC-007** Kernel MAIR/TCR programming uses constructed constants and trapped guest SCTLR_EL1 values are sanitized; a complete register-by-register reserved-bit audit remains open.
-- [ ] **SEC-008** Speculation mitigations evaluated and implemented.
-- [ ] **SEC-009** Pointer authentication strategy evaluated.
-- [ ] **SEC-010** Branch target identification strategy evaluated.
+- [-] **SEC-008** Every CPU inventories CSV2/CSV3/SSBS/PAuth/BTI and validation boundaries execute architectural CSDB+ISB; real-platform hardware/firmware mitigation qualification remains open.
+- [x] **SEC-009** Pointer authentication was evaluated and is explicitly deferred until all C++ and hand-written exception/boot/guest-entry paths can be signed and negatively tested together.
+- [x] **SEC-010** BTI was evaluated and is explicitly deferred until every indirect target, vector, context-switch, and guest-entry assembly path has audited landing pads.
 - [x] **SEC-011** PAN is enabled and UAO disabled on CPUs advertising each extension, with bootstrap readback verification; unsupported baseline Armv8-A CPUs safely skip optional instructions.
 - [x] **SEC-012** Release kernels exclude IPC fuzz/debug decoding, deny the guest diagnostic hypercall, omit detailed EL2 console walks, and retain only bounded production diagnostics.
 
@@ -594,11 +594,11 @@ Every completed requirement must link to:
 - [x] **DOC-003** Every mandatory requirement has a stable ID in this checklist.
 - [ ] **DOC-004** Every requirement maps to implementation and tests.
 - [-] **DOC-005** Model-only runtime results now use `HV-MODEL` and `hypervisor_control_model`; legacy profile documents still require complete renaming and archival.
-- [ ] **DOC-006** Unsupported features are explicitly documented.
-- [ ] **DOC-007** Threat model documented.
-- [ ] **DOC-008** Trust boundaries documented.
+- [x] **DOC-006** Unsupported 1.0 kernel and platform features are explicitly documented with non-partial-mutation rules.
+- [x] **DOC-007** Kernel threat model and excluded physical, firmware, timing, and pre-SMMU DMA threats are documented.
+- [x] **DOC-008** EL1, PL3, guest, capability, stage-2, firmware, root-policy, and device trust boundaries are documented.
 - [ ] **DOC-009** Capability and IPC semantics documented formally enough for independent implementation.
-- [ ] **DOC-010** Memory-ordering rules documented.
+- [x] **DOC-010** Lock, atomic publication, emergency/audit ring, page-table/TLBI, MMIO, and reclamation ordering rules are documented.
 - [-] **DOC-011** Kernel lock ordering and major object/user-thread/VM teardown protocols are documented; IRQ and device teardown protocols remain open.
 - [ ] **DOC-012** Hypervisor guest-visible architecture documented.
 - [ ] **DOC-013** Userspace server APIs documented.

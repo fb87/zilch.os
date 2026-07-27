@@ -3,6 +3,7 @@
 #include <sys/arch/context.hh>
 #include <sys/arch/cpu.hh>
 #include <sys/arch/exception.hh>
+#include <sys/arch/hardening.hh>
 #include <sys/arch/hypervisor.hh>
 #include <sys/arch/irq.hh>
 #include <sys/arch/memory.hh>

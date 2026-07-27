@@ -20,6 +20,7 @@ abi-headers-check:
 	@CXX=$(CXX) $(SRCTREE)/tools/abi/check_headers.sh $(SRCTREE)
 
 boundary-check: abi-headers-check
+	@sh $(SRCTREE)/tools/release/check_source_boundaries.sh $(SRCTREE)
 	@$(SRCTREE)/tools/release/check_guest_boundary.sh $(SRCTREE)
 	@$(SRCTREE)/tools/release/check_user_kernel_boundary.sh $(SRCTREE)
 	@$(SRCTREE)/tools/release/check_build_boundaries.sh $(SRCTREE)

@@ -20,6 +20,7 @@
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
+#include <sys/kernel/user_access.hh>
 #include <sys/platform/timer.hh>
 #include <sys/types.hh>
 
@@ -27,6 +28,16 @@ namespace sys::kernel::thread
 {
     inline constexpr u32 user_thread_count = 10U;
     inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
+
+    [[nodiscard]] inline constexpr fault::kind classify_user_fault(u64 exception_class) noexcept {
+        if (exception_class == 0x00U || exception_class == 0x20U || exception_class == 0x21U)
+            return fault::kind::instruction_abort;
+        if (exception_class == 0x22U || exception_class == 0x26U)
+            return fault::kind::alignment;
+        if (exception_class == 0x24U || exception_class == 0x25U)
+            return fault::kind::data_abort;
+        return fault::kind::none;
+    }
     inline constexpr u32 maximum_cpu_count = 4U;
     inline constexpr word_t memory_server_role = 0x100U;
     inline constexpr word_t fault_client_role = 0x101U;
@@ -730,6 +741,21 @@ namespace sys::kernel::thread
                     static_cast<unsigned long long>(hypervisor::test::operations),
                     static_cast<unsigned long long>(hypervisor::test::failures_total));
         }
+        const auto& root_space = user_threads[0].address_space.native;
+        if (!user_access::valid_range(root_space, arch::space::user_code, 4U, false) ||
+            user_access::valid_range(root_space, arch::space::user_code, 4U, true) ||
+            !user_access::valid_range(root_space, arch::space::user_stack_base, 16U, true) ||
+            user_access::valid_range(root_space, arch::space::kernel_identity_base - 1U, 2U,
+                                     false) ||
+            user_access::valid_range(root_space, ~static_cast<vaddr_t>(0U) - 1U, 4U, false) ||
+            user_access::valid_range(root_space, arch::space::user_image_end() + 0x1000U, 16U,
+                                     false) ||
+            classify_user_fault(0x00U) != fault::kind::instruction_abort ||
+            classify_user_fault(0x24U) != fault::kind::data_abort ||
+            classify_user_fault(0x3fU) != fault::kind::none ||
+            !arch::hardening::inventory_valid(arch::smp::online_count()))
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=user_range_and_arm_hardening result=PASS\n");
         const cpu_id_t panic_cpu = arch::cpu::current_id();
         const u32 saved_current = current_user_thread[panic_cpu];
         const u32 saved_printk_lock = ::sys::printk::raw_lock;
@@ -1106,7 +1132,8 @@ namespace sys::kernel::thread
     }
 
     [[nodiscard]] inline bool deliver_fault_ipc(thread& value, arch::thread::context& frame,
-                                                u64 syndrome, vaddr_t fault_address) noexcept {
+                                                u64 syndrome, vaddr_t fault_address,
+                                                fault::kind fault_kind) noexcept {
         if (value.owner == nullptr || value.owner->fault_endpoint == 0U)
             return false;
         object::header_t* endpoint_header = nullptr;
@@ -1116,7 +1143,7 @@ namespace sys::kernel::thread
         if (lookup_result != error_t::success || endpoint_header == nullptr)
             return false;
 
-        value.last_fault.type = fault::kind::data_abort;
+        value.last_fault.type = fault_kind;
         value.last_fault.thread = value.id;
         value.last_fault.thread_generation = value.object.generation;
         value.last_fault.syndrome = syndrome;
@@ -1163,9 +1190,13 @@ namespace sys::kernel::thread
         if (!user_execution_active[cpu] || vector != 8U)
             return false;
         const u64 exception_class = (syndrome >> 26U) & 0x3fU;
-        if (exception_class != 0x20U && exception_class != 0x21U && exception_class != 0x22U &&
-            exception_class != 0x24U && exception_class != 0x25U && exception_class != 0x26U)
+        if (exception_class != 0x00U && exception_class != 0x20U && exception_class != 0x21U &&
+            exception_class != 0x22U && exception_class != 0x24U && exception_class != 0x25U &&
+            exception_class != 0x26U)
             return false;
+        const fault::kind fault_kind = classify_user_fault(exception_class);
+        const vaddr_t delivered_address =
+            exception_class == 0x00U ? frame.instruction_pointer : fault_address;
 
         thread& value = current();
         ++value.faults;
@@ -1186,7 +1217,7 @@ namespace sys::kernel::thread
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U));
 #endif
-        if (deliver_fault_ipc(value, frame, syndrome, fault_address))
+        if (deliver_fault_ipc(value, frame, syndrome, delivered_address, fault_kind))
             return true;
         store_state(value, state::faulted);
         const u32 next = next_runnable(cpu, current_index());

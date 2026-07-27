@@ -44,6 +44,7 @@ namespace sys::kernel
         }
         platform::timer::initialize();
         arch::memory::initialize_cpu();
+        arch::hardening::initialize_cpu();
         scheduler::initialize_cpu();
         arch::smp::mark_online();
         arch::irq::enable();
@@ -67,6 +68,7 @@ namespace sys::kernel
             arch::cpu::halt();
         }
         arch::memory::initialize();
+        arch::hardening::initialize_cpu();
         scheduler::initialize();
         scheduler::initialize_cpu();
 

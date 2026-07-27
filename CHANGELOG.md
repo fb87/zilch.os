@@ -1,3 +1,12 @@
+## 0140 - Close remaining self-contained kernel hardening gaps
+
+- Add overflow-safe, page-complete EL0 range validation and unprivileged user-copy primitives.
+- Classify ARM64 undefined instructions for the existing fault-IPC path.
+- Inventory CSV2, CSV3, SSBS, pointer authentication, and BTI on every CPU and add CSDB/ISB validation barriers.
+- Enforce source/header size and dependency boundaries in the production gate.
+- Freeze CPU-hotplug, suspend/resume, and AMD64 virtualization as unsupported in 1.0.
+- Document the threat model, trust boundaries, memory ordering, PAuth/BTI strategy, and unsupported scope.
+
 ## 0139 - Make panic independent of scheduler state
 
 - Centralize fatal exception and stack-corruption handling in a lock-free panic path.
