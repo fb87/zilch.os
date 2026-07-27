@@ -184,7 +184,7 @@ namespace sys::kernel::syscall
                     break;
                 }
                 (void)memory::unmap_authority(source_slot.derivation, true);
-                (void)capability::revoke_descendants(source_slot.derivation);
+                (void)capability::revoke_descendants_locked(source_slot.derivation);
                 authority_result = error_t::success;
                 break;
             }
@@ -279,6 +279,12 @@ namespace sys::kernel::syscall
                         break;
                     case 21U:
                         name = "memory_server_protocol";
+                        break;
+                    case 22U:
+                        name = "ipc_lifecycle_races";
+                        break;
+                    case 23U:
+                        name = "capability_transfer_revoke_race";
                         break;
                     default:
                         break;
@@ -449,10 +455,9 @@ namespace sys::kernel::syscall
                  * A completion badge can therefore never race a later exit
                  * syscall or userspace instruction stream.
                  */
-                thread::prepare_block(frame, thread::state::terminated);
+                notification::notification* exit_notification = nullptr;
                 if (a2 != 0U) {
                     if (current.owner == nullptr) {
-                        thread::store_state(current, thread::state::running);
                         result = error_t::denied;
                         break;
                     }
@@ -460,14 +465,35 @@ namespace sys::kernel::syscall
                     result =
                         capability::lookup(current.owner->cspace, a2, object::type_t::notification,
                                            capability::right_t::write, notification_header);
-                    if (result != error_t::success) {
-                        thread::store_state(current, thread::state::running);
+                    if (result != error_t::success)
                         break;
-                    }
-                    auto& target =
-                        *reinterpret_cast<notification::notification*>(notification_header);
-                    notification::signal(target, a3);
+                    exit_notification =
+                        reinterpret_cast<notification::notification*>(notification_header);
                 }
+
+                thread::lock_ipc_lifecycle();
+                if (current.reply.valid && current.reply.caller < thread::user_thread_count) {
+                    thread::thread& caller = thread::user_threads[current.reply.caller];
+                    const thread::state caller_state = thread::load_state(caller);
+                    if (caller.object.generation == current.reply.generation) {
+                        if (caller_state == thread::state::blocked_reply) {
+                            caller.ipc_timeout_active = false;
+                            caller.transfer = {};
+                            caller.pending_result = error_t::timed_out;
+                            (void)thread::wake(caller);
+                            ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
+                        } else if (caller_state == thread::state::blocked_fault) {
+                            thread::store_state(caller, thread::state::terminated);
+                        }
+                    }
+                    if (current.reply.donation_active)
+                        scheduling::revoke_donation(current.scheduling_context);
+                    current.reply = {};
+                }
+                thread::prepare_block(frame, thread::state::terminated);
+                if (exit_notification != nullptr)
+                    notification::signal(*exit_notification, a3);
+                thread::unlock_ipc_lifecycle();
                 thread::schedule_prepared(frame);
                 return true;
             }

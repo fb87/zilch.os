@@ -29,6 +29,8 @@ namespace sys::kernel::thread
     inline constexpr u32 maximum_cpu_count = 4U;
     inline constexpr word_t memory_server_role = 0x100U;
     inline constexpr word_t fault_client_role = 0x101U;
+    inline constexpr word_t ipc_lifecycle_server_role = 0x113U;
+    inline constexpr word_t capability_race_server_role = 0x115U;
     inline thread user_threads[user_thread_count]{};
     inline task::task user_tasks[user_thread_count]{};
     inline u32 current_user_thread[maximum_cpu_count]{};
@@ -363,7 +365,8 @@ namespace sys::kernel::thread
                                          control_rights);
         if (result == error_t::success) {
             capability::rights_t endpoint_rights = capability::rights(capability::right_t::write);
-            if (role == memory_server_role) {
+            if (role == memory_server_role || role == ipc_lifecycle_server_role ||
+                role == capability_race_server_role) {
                 endpoint_rights.bits |= static_cast<u32>(capability::right_t::read);
             }
             result = capability::install(
@@ -413,7 +416,37 @@ namespace sys::kernel::thread
     }
 
     [[nodiscard]] inline error_t quiesce_user_thread(thread& target) noexcept {
+        const state previous_state = load_state(target);
+        if (target.owner != nullptr && target.waiting_endpoint < capability::cspace_slot_count &&
+            (previous_state == state::blocked_send || previous_state == state::blocked_receive)) {
+            object::header_t* endpoint_header = nullptr;
+            const capability::right_t endpoint_right = previous_state == state::blocked_receive
+                                                           ? capability::right_t::read
+                                                           : capability::right_t::write;
+            if (capability::lookup(target.owner->cspace, target.waiting_endpoint,
+                                   object::type_t::endpoint, endpoint_right,
+                                   endpoint_header) == error_t::success &&
+                endpoint_header != nullptr) {
+                auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
+                (void)ipc::cancel_thread(endpoint, object::reference(target.object));
+            }
+        }
+
+        lock_ipc_lifecycle();
         store_state(target, state::suspended);
+        for (u32 server_index = 0U; server_index < active_user_thread_count; ++server_index) {
+            thread& server = user_threads[server_index];
+            if (server.reply.valid && server.reply.caller == target.id &&
+                server.reply.generation == target.object.generation) {
+                if (server.reply.donation_active)
+                    scheduling::revoke_donation(server.scheduling_context);
+                server.reply = {};
+            }
+        }
+        target.ipc_timeout_active = false;
+        target.transfer = {};
+        target.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
+        unlock_ipc_lifecycle();
         platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
 
         /*
@@ -595,7 +628,7 @@ namespace sys::kernel::thread
         if (result != error_t::success || root.memory_pages_owned != owned_before)
             return error_t::invalid_argument;
         const u32 pages_before_pager = root.memory_pages_owned;
-        result = create_user_bundle(root, 1U, 0x50414745U, 20U, 21U, 22U);
+        result = create_user_bundle(root, 1U, fault_client_role, 20U, 21U, 22U);
         if (result != error_t::success)
             return result;
         object::header_t* pager_target_header = nullptr;
@@ -741,13 +774,29 @@ namespace sys::kernel::thread
             }
             if (value.owner != nullptr && value.waiting_endpoint < capability::cspace_slot_count) {
                 object::header_t* endpoint_header = nullptr;
-                if (capability::lookup(value.owner->cspace, value.waiting_endpoint,
-                                       object::type_t::endpoint, capability::right_t::read,
+                const capability::right_t endpoint_right = current_state == state::blocked_receive
+                                                               ? capability::right_t::read
+                                                               : capability::right_t::write;
+                if (current_state != state::blocked_reply &&
+                    capability::lookup(value.owner->cspace, value.waiting_endpoint,
+                                       object::type_t::endpoint, endpoint_right,
                                        endpoint_header) == error_t::success &&
                     endpoint_header != nullptr) {
                     auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
                     (void)ipc::cancel_thread(endpoint, object::reference(value.object));
                 }
+            }
+            /*
+             * Timer expiry runs in IRQ context and must never spin behind an
+             * interrupted syscall that owns the lifecycle lock.  A missed
+             * claim is retried on the next timer tick.
+             */
+            if (!try_lock_ipc_lifecycle())
+                continue;
+            if (load_state(value) != current_state || !value.ipc_timeout_active ||
+                now < value.ipc_deadline) {
+                unlock_ipc_lifecycle();
+                continue;
             }
             for (u32 server_index = 0U; server_index < active_user_thread_count; ++server_index) {
                 thread& server = user_threads[server_index];
@@ -763,6 +812,7 @@ namespace sys::kernel::thread
             value.pending_result = error_t::timed_out;
             if (load_state(value) != state::faulted && load_state(value) != state::terminated)
                 store_state(value, state::ready);
+            unlock_ipc_lifecycle();
         }
     }
 

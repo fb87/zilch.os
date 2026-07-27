@@ -316,7 +316,7 @@ namespace sys::kernel::capability
         return result;
     }
 
-    inline u32 revoke_descendants(derivation_id_t ancestor) noexcept {
+    inline u32 revoke_descendants_locked(derivation_id_t ancestor) noexcept {
         if (ancestor == 0U)
             return 0U;
 
@@ -371,6 +371,13 @@ namespace sys::kernel::capability
         return removed;
     }
 
+    inline u32 revoke_descendants(derivation_id_t ancestor) noexcept {
+        lock_authority();
+        const u32 removed = revoke_descendants_locked(ancestor);
+        unlock_authority();
+        return removed;
+    }
+
     inline u32 revoke_in(cspace_t& cspace, const object::reference_t& reference) noexcept {
         u32 removed = 0U;
         lock(cspace);
@@ -388,7 +395,7 @@ namespace sys::kernel::capability
         return removed;
     }
 
-    inline u32 revoke_reference(const object::reference_t& reference) noexcept {
+    inline u32 revoke_reference_locked(const object::reference_t& reference) noexcept {
         u32 removed = 0U;
         spin_lock(cspace_registry_lock);
         for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
@@ -398,6 +405,13 @@ namespace sys::kernel::capability
             removed += revoke_in(*cspace, reference);
         }
         spin_unlock(cspace_registry_lock);
+        return removed;
+    }
+
+    inline u32 revoke_reference(const object::reference_t& reference) noexcept {
+        lock_authority();
+        const u32 removed = revoke_reference_locked(reference);
+        unlock_authority();
         return removed;
     }
 } // namespace sys::kernel::capability

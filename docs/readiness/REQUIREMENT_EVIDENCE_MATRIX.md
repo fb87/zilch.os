@@ -153,3 +153,6 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | CAP-018 | IN PROGRESS | receiver-selected destination in memory-server reply protocol | occupied-slot negative test and successful frame-cap delivery | general receive windows remain open |
 
 | IPC-006 / USR-017 | IN PROGRESS | `src/kernel/include/sys/kernel/syscall/control.hh`, `src/user/include/sys/thread.hh` | `memory_server_protocol` | Atomic exit notification removes the completion/teardown gap; general process wait/status and controlled race fuzz remain open |
+
+| IPC-003, IPC-005..007 / SEC-017 / TST-018 | IN PROGRESS | `thread/thread.hh`, `syscall/ipc.hh`, `thread/scheduler.hh`, `syscall/control.hh` | `ipc_lifecycle_races` plus subsequent pager/memory-server endpoint reuse | Global correctness-first lifecycle lock; scalable locking, instruction-level race fuzz, and long-duration SMP evidence remain open |
+| CAP-014, CAP-021 / SEC-018 | IN PROGRESS | `capability/cspace.hh`, `syscall/control.hh`, `syscall/ipc.hh` | `capability_transfer_revoke_race` verifies the receiver has no descendant after a cross-CPU transfer/revoke race; public reference/descendant revoke is locked by construction | Scalable authority locking, remaining mutation interleavings, and long-duration race fuzz remain open |

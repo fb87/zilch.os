@@ -36,6 +36,8 @@ namespace
         memory_extent_metadata = 19U,
         memory_pressure_rollback = 20U,
         memory_server_protocol = 21U,
+        ipc_lifecycle_races = 22U,
+        capability_transfer_revoke_race = 23U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -50,6 +52,9 @@ namespace
     inline constexpr sys::word_t fault_client_role = 0x101U;
     inline constexpr sys::word_t second_fault_client_role = 0x102U;
     inline constexpr sys::word_t memory_client_role_base = 0x103U;
+    inline constexpr sys::word_t ipc_lifecycle_client_role_base = 0x110U;
+    inline constexpr sys::word_t capability_race_server_role = 0x115U;
+    inline constexpr sys::word_t capability_race_sender_role = 0x116U;
 
     [[nodiscard]] bool create_service_process(sys::word_t cpu, sys::word_t role,
                                               sys::word_t thread_selector,
@@ -116,6 +121,138 @@ namespace
         bool pager{};
         bool memory_protocol{};
     };
+
+    [[nodiscard]] bool test_ipc_lifecycle_races() noexcept {
+        constexpr sys::word_t thread_selector = 55U;
+        constexpr sys::word_t task_selector = 56U;
+        constexpr sys::word_t space_selector = 57U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+
+        bool passed = create_service_process(1U, ipc_lifecycle_client_role_base, thread_selector,
+                                             task_selector, space_selector);
+        if (passed)
+            passed = wait_for_badges(1U << 6U);
+        if (passed) {
+            passed = false;
+            for (sys::word_t attempt = 0U; attempt < 100000U; ++attempt) {
+                const sys::word_t cancelled = sys_ipc_invoke_raw(
+                    0U, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::cancel),
+                    thread_selector, 0U, 0U, 0U, 0U, 0U);
+                if (cancelled == success) {
+                    passed = true;
+                    break;
+                }
+                if (cancelled != static_cast<sys::word_t>(sys::error_t::not_found))
+                    break;
+            }
+        }
+        if (passed)
+            passed = wait_for_badges(1U << 7U);
+        passed = destroy_service_process(thread_selector, task_selector, space_selector) && passed;
+
+        if (passed)
+            passed = create_service_process(1U, ipc_lifecycle_client_role_base + 1U,
+                                            thread_selector, task_selector, space_selector);
+        if (passed)
+            passed = wait_for_badges(1U << 8U);
+        passed = destroy_service_process(thread_selector, task_selector, space_selector) && passed;
+
+        if (passed)
+            passed = create_service_process(1U, ipc_lifecycle_client_role_base + 2U,
+                                            thread_selector, task_selector, space_selector);
+        if (passed)
+            passed = wait_for_badges(1U << 9U);
+        passed = destroy_service_process(thread_selector, task_selector, space_selector) && passed;
+
+        constexpr sys::word_t caller_thread_selector = 58U;
+        constexpr sys::word_t caller_task_selector = 59U;
+        constexpr sys::word_t caller_space_selector = 60U;
+        if (passed)
+            passed = create_service_process(1U, ipc_lifecycle_client_role_base + 3U,
+                                            thread_selector, task_selector, space_selector);
+        if (passed)
+            passed = create_service_process(2U, ipc_lifecycle_client_role_base + 4U,
+                                            caller_thread_selector, caller_task_selector,
+                                            caller_space_selector);
+        if (passed)
+            passed = wait_for_badges((1U << 10U) | (1U << 11U));
+        passed = destroy_service_process(caller_thread_selector, caller_task_selector,
+                                         caller_space_selector) &&
+                 passed;
+        passed = destroy_service_process(thread_selector, task_selector, space_selector) && passed;
+        return passed;
+    }
+
+    [[nodiscard]] bool test_capability_transfer_revoke_race() noexcept {
+        constexpr sys::word_t server_thread = 55U;
+        constexpr sys::word_t server_task = 56U;
+        constexpr sys::word_t server_space = 57U;
+        constexpr sys::word_t sender_thread = 58U;
+        constexpr sys::word_t sender_task = 59U;
+        constexpr sys::word_t sender_space = 60U;
+        constexpr sys::word_t authority = 30U;
+        constexpr sys::word_t transferred_slot = 20U;
+        constexpr sys::word_t ready_badge = 1U << 12U;
+        constexpr sys::word_t sender_started_badge = 1U << 13U;
+        constexpr sys::word_t sender_done_badge = 1U << 15U;
+        constexpr sys::word_t cap_write = 1U << 1U;
+        constexpr sys::word_t cap_grant = 1U << 3U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t not_found = static_cast<sys::word_t>(sys::error_t::not_found);
+
+        bool server_created = false;
+        bool sender_created = false;
+        bool authority_created = false;
+        bool passed = sys::control(sys::abi::v1::control_operation::notification_create,
+                                   authority) == success;
+        authority_created = passed;
+        if (passed) {
+            server_created = create_service_process(1U, capability_race_server_role, server_thread,
+                                                    server_task, server_space);
+            passed = server_created;
+        }
+        if (passed)
+            passed = wait_for_badges(ready_badge);
+        if (passed) {
+            sender_created = create_service_process(2U, capability_race_sender_role, sender_thread,
+                                                    sender_task, sender_space);
+            passed = sender_created;
+        }
+        if (passed) {
+            passed =
+                sys::control(sys::abi::v1::control_operation::capability_mint, sender_task,
+                             transferred_slot, authority, cap_write | cap_grant, 0U) == success;
+        }
+        if (passed)
+            passed = wait_for_badges(sender_started_badge);
+        if (passed) {
+            passed = sys::control(sys::abi::v1::control_operation::capability_revoke, 0U, 0U,
+                                  authority) == success;
+        }
+        if (passed)
+            passed = wait_for_badges(sender_done_badge);
+
+        /*
+         * Both legal linearizations have the same postcondition: revoke after
+         * mint removes the receiver descendant; revoke before mint makes the
+         * transfer fail.  A successful delete here proves authority escaped.
+         */
+        if (passed) {
+            passed = sys::control(sys::abi::v1::control_operation::capability_delete, server_task,
+                                  transferred_slot) == not_found;
+        }
+
+        if (sender_created)
+            passed = destroy_service_process(sender_thread, sender_task, sender_space) && passed;
+        if (server_created)
+            passed = destroy_service_process(server_thread, server_task, server_space) && passed;
+        if (authority_created) {
+            const sys::word_t destroy =
+                sys::control(sys::abi::v1::control_operation::notification_destroy, authority);
+            passed = destroy == success && passed;
+        }
+        return passed;
+    }
 
     [[nodiscard]] service_results run_userspace_services() noexcept {
         /*
@@ -510,8 +647,8 @@ namespace
     [[nodiscard]] bool test_memory_mapping_database() noexcept {
         constexpr sys::word_t frame_selector = 16U;
         constexpr sys::word_t root_space_selector = 3U;
-        constexpr sys::word_t first_address = 0x20004000U;
-        constexpr sys::word_t second_address = 0x20005000U;
+        constexpr sys::word_t first_address = 0x2000a000U;
+        constexpr sys::word_t second_address = 0x2000b000U;
         constexpr sys::word_t read_write = 3U;
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
         const sys::word_t busy = static_cast<sys::word_t>(sys::error_t::busy);
@@ -798,6 +935,11 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
             ++hv_fuzz_failures;
     }
     record(ledger, test_id::hypervisor_negative_fuzz, hv_fuzz_failures == 0U);
+
+    const bool ipc_lifecycle_pass = test_ipc_lifecycle_races();
+    record(ledger, test_id::ipc_lifecycle_races, ipc_lifecycle_pass);
+    const bool capability_race_pass = test_capability_transfer_revoke_race();
+    record(ledger, test_id::capability_transfer_revoke_race, capability_race_pass);
 
     const service_results services = run_userspace_services();
     record(ledger, test_id::userspace_pager_service, services.pager);

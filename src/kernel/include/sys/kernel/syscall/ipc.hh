@@ -193,9 +193,16 @@ namespace sys::kernel::syscall
             sender.transfer.rights.bits == 0U) {
             return error_t::invalid_argument;
         }
+        /*
+         * Transfer is an authority transaction just like control-path
+         * copy/mint/delete/revoke.  Otherwise revoke can finish scanning the
+         * tree while this mint publishes a descendant that survives it.
+         */
+        capability::lock_authority();
         const error_t result = capability::mint(receiver.owner->cspace, sender.transfer.destination,
                                                 sender.owner->cspace, sender.transfer.source,
                                                 sender.transfer.rights, sender.transfer.badge);
+        capability::unlock_authority();
         if (result == error_t::success)
             sender.transfer = {};
         return result;
@@ -235,14 +242,18 @@ namespace sys::kernel::syscall
     }
 
     [[nodiscard]] inline error_t reply_to_caller(thread::thread& server) noexcept {
+        thread::lock_ipc_lifecycle();
         const thread::reply_capability reply = server.reply;
-        if (!reply.valid || reply.caller >= thread::user_thread_count)
+        if (!reply.valid || reply.caller >= thread::user_thread_count) {
+            thread::unlock_ipc_lifecycle();
             return error_t::not_found;
+        }
         thread::thread& caller = thread::user_threads[reply.caller];
         const thread::state caller_state = thread::load_state(caller);
         if (caller.object.generation != reply.generation ||
             (caller_state != thread::state::blocked_reply &&
              caller_state != thread::state::blocked_fault)) {
+            thread::unlock_ipc_lifecycle();
             return error_t::not_found;
         }
 
@@ -253,9 +264,12 @@ namespace sys::kernel::syscall
          */
         if (caller_state == thread::state::blocked_reply) {
             const error_t transfer_result = transfer_capability(server, caller);
-            if (transfer_result != error_t::success)
+            if (transfer_result != error_t::success) {
+                thread::unlock_ipc_lifecycle();
                 return transfer_result;
+            }
         } else if (server.transfer.valid) {
+            thread::unlock_ipc_lifecycle();
             return error_t::invalid_argument;
         }
 
@@ -271,6 +285,7 @@ namespace sys::kernel::syscall
             } else {
                 thread::store_state(caller, thread::state::terminated);
             }
+            thread::unlock_ipc_lifecycle();
             return error_t::success;
         }
         caller.ipc_timeout_active = false;
@@ -278,6 +293,7 @@ namespace sys::kernel::syscall
                                 server.object.generation, server.message);
         (void)thread::wake(caller);
         ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
+        thread::unlock_ipc_lifecycle();
         return error_t::success;
     }
 
@@ -297,11 +313,19 @@ namespace sys::kernel::syscall
             if (sender_pointer == nullptr)
                 continue;
             thread::thread& sender = *sender_pointer;
+            thread::lock_ipc_lifecycle();
+            const thread::state sender_state = thread::load_state(sender);
+            if (sender_state != thread::state::blocked_send &&
+                sender_state != thread::state::blocked_fault) {
+                thread::unlock_ipc_lifecycle();
+                continue;
+            }
             const error_t transfer_result = transfer_capability(sender, current);
             if (transfer_result != error_t::success) {
                 sender.pending_result = transfer_result;
                 sender.ipc_timeout_active = false;
                 (void)thread::wake(sender);
+                thread::unlock_ipc_lifecycle();
                 ipc::remote_reschedule(sender.pinned_cpu, arch::cpu::current_id());
                 continue;
             }
@@ -311,8 +335,9 @@ namespace sys::kernel::syscall
                 frame.x[i + 2U] = sender.message[i];
             install_reply(current, sender);
             sender.ipc_timeout_active = false;
-            if (thread::load_state(sender) != thread::state::blocked_fault)
+            if (sender_state != thread::state::blocked_fault)
                 thread::store_state(sender, thread::state::blocked_reply);
+            thread::unlock_ipc_lifecycle();
             __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
             const bool valid = ipc::validate(*endpoint);
             ipc::unlock(*endpoint);
@@ -360,6 +385,11 @@ namespace sys::kernel::syscall
             thread::thread* receiver_pointer = resolve_thread_reference(receiver_reference);
             if (receiver_pointer != nullptr) {
                 thread::thread& receiver = *receiver_pointer;
+                thread::lock_ipc_lifecycle();
+                if (thread::load_state(receiver) != thread::state::blocked_receive) {
+                    thread::unlock_ipc_lifecycle();
+                    goto enqueue_sender;
+                }
 
                 /*
                  * The caller must become blocked before the receiver is made
@@ -368,6 +398,7 @@ namespace sys::kernel::syscall
                 const error_t transfer_result = transfer_capability(current, receiver);
                 if (transfer_result != error_t::success) {
                     endpoint->receiver = receiver_reference;
+                    thread::unlock_ipc_lifecycle();
                     ipc::unlock(*endpoint);
                     set_error(frame, transfer_result);
                     return true;
@@ -377,6 +408,7 @@ namespace sys::kernel::syscall
                 thread::publish_pending(receiver, thread::pending_ipc::incoming_call, current.id,
                                         current.object.generation, current.message);
                 (void)thread::wake(receiver);
+                thread::unlock_ipc_lifecycle();
                 ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
                 __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
                 ipc::unlock(*endpoint);
@@ -390,6 +422,7 @@ namespace sys::kernel::syscall
          * A remote receiver may dequeue, reply, and wake this thread before
          * this CPU has left the syscall path.
          */
+    enqueue_sender:
         thread::prepare_block(frame, thread::state::blocked_send);
         if (!ipc::enqueue_sender(*endpoint, object::reference(current.object))) {
             (void)thread::compare_state(current, thread::state::blocked_send,
@@ -429,10 +462,20 @@ namespace sys::kernel::syscall
         }
         if (target.owner != nullptr && target.waiting_endpoint < capability::cspace_slot_count) {
             ipc::endpoint* endpoint = nullptr;
-            if (resolve_endpoint(target, target.waiting_endpoint, capability::right_t::read,
-                                 endpoint) == error_t::success) {
+            const capability::right_t endpoint_right =
+                target_state == thread::state::blocked_receive ? capability::right_t::read
+                                                               : capability::right_t::write;
+            if (target_state != thread::state::blocked_reply &&
+                resolve_endpoint(target, target.waiting_endpoint, endpoint_right, endpoint) ==
+                    error_t::success) {
                 (void)ipc::cancel_thread(*endpoint, object::reference(target.object));
             }
+        }
+        thread::lock_ipc_lifecycle();
+        if (thread::load_state(target) != target_state) {
+            thread::unlock_ipc_lifecycle();
+            set_error(frame, error_t::not_found);
+            return true;
         }
         for (u32 index = 0U; index < thread::active_user_thread_count; ++index) {
             thread::thread& server = thread::user_threads[index];
@@ -448,6 +491,7 @@ namespace sys::kernel::syscall
         target.pending_result = error_t::timed_out;
         (void)thread::wake(target);
         ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
+        thread::unlock_ipc_lifecycle();
         set_error(frame, error_t::success);
         return true;
     }

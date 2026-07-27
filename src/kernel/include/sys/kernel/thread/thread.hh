@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sys/arch/cpu.hh>
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/context.hh>
 #include <sys/kernel/fault/fault.hh>
@@ -11,6 +12,31 @@
 
 namespace sys::kernel::thread
 {
+    /*
+     * Serializes ownership changes for blocked IPC state, pending results,
+     * and single-use reply authority.  Endpoint queues are always locked
+     * before this lock; code that starts here must not acquire an endpoint
+     * lock until it releases the lifecycle lock.
+     */
+    inline volatile u32 ipc_lifecycle_lock{};
+
+    inline void lock_ipc_lifecycle() noexcept {
+        while (__atomic_exchange_n(&ipc_lifecycle_lock, 1U, __ATOMIC_ACQUIRE) != 0U) {
+            while (__atomic_load_n(&ipc_lifecycle_lock, __ATOMIC_RELAXED) != 0U)
+                arch::cpu::relax();
+        }
+    }
+
+    [[nodiscard]] inline bool try_lock_ipc_lifecycle() noexcept {
+        u32 expected = 0U;
+        return __atomic_compare_exchange_n(&ipc_lifecycle_lock, &expected, 1U, false,
+                                           __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+    }
+
+    inline void unlock_ipc_lifecycle() noexcept {
+        __atomic_store_n(&ipc_lifecycle_lock, 0U, __ATOMIC_RELEASE);
+    }
+
     enum class state : u8 {
         inactive,
         ready,
@@ -153,8 +179,14 @@ namespace sys::kernel::thread
     inline void consume_pending(thread& value) noexcept {
         const auto kind = static_cast<pending_ipc>(__atomic_exchange_n(
             &value.pending_ipc_kind, static_cast<u8>(pending_ipc::none), __ATOMIC_ACQUIRE));
-        if (kind == pending_ipc::none)
+        if (kind == pending_ipc::none) {
+            if (value.pending_result != error_t::success) {
+                value.context.x[0] = static_cast<word_t>(static_cast<s64>(value.pending_result));
+                value.pending_result = error_t::success;
+                value.ipc_timeout_active = false;
+            }
             return;
+        }
 
         value.context.x[0] = static_cast<word_t>(static_cast<s64>(value.pending_result));
         value.pending_result = error_t::success;

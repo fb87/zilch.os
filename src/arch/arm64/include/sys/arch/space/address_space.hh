@@ -35,6 +35,7 @@ namespace sys::arch::space
     inline constexpr word_t memory_server_image_role = 0x100U;
     inline constexpr word_t pager_client_image_role_base = 0x101U;
     inline constexpr word_t memory_client_image_role_base = 0x103U;
+    inline constexpr word_t ipc_lifecycle_client_role_base = 0x110U;
 
     struct image_view {
         char* start;
@@ -44,7 +45,13 @@ namespace sys::arch::space
     [[nodiscard]] inline image_view image_for_role(word_t role) noexcept {
         if (role == memory_server_image_role)
             return {sys_arm64_memory_server_image_start, sys_arm64_memory_server_image_end};
-        if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U)
+        if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
+            role == ipc_lifecycle_client_role_base || role == ipc_lifecycle_client_role_base + 1U ||
+            role == ipc_lifecycle_client_role_base + 2U ||
+            role == ipc_lifecycle_client_role_base + 3U ||
+            role == ipc_lifecycle_client_role_base + 4U ||
+            role == ipc_lifecycle_client_role_base + 5U ||
+            role == ipc_lifecycle_client_role_base + 6U)
             return {sys_arm64_pager_client_image_start, sys_arm64_pager_client_image_end};
         if (role >= memory_client_image_role_base && role < memory_client_image_role_base + 3U)
             return {sys_arm64_memory_client_image_start, sys_arm64_memory_client_image_end};

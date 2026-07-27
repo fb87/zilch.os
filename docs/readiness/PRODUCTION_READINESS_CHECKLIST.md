@@ -119,7 +119,7 @@ Every completed requirement must link to:
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
 - [-] **CAP-012** Single-capability delete exists. Concurrent lookup and teardown-race evidence remains open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
-- [-] **CAP-014** Capability mutation is serialized against map/unmap authority use; revoke-versus-IPC and controlled concurrent race evidence remain open.
+- [-] **CAP-014** Capability mutation, IPC transfer, object-reference/descendant revoke, and map/unmap authority use share one authority transaction; scalable locking and complete concurrent mutation stress remain open.
 - [-] **CAP-015** Frame destruction waits for mapping quiescence and capability revoke removes descendant-authorized mappings; generalized object-reference quiescence remains open.
 - [-] **CAP-016** Generation checks and reusable derivation records prevent bounded stale-reference reuse. Long-duration and concurrent ABA evidence remains open.
 
@@ -129,7 +129,7 @@ Every completed requirement must link to:
 - [-] **CAP-018** Receiver-selected destination slots are supported for single-capability memory-server replies; general receive windows and multi-capability placement remain open.
 - [-] **CAP-019** Direct-call and reply-transfer failures preserve IPC authority and support transactional server rollback. Multi-capability partial-failure rollback and systematic fault injection remain open.
 - [ ] **CAP-020** Cross-CSpace transfer fuzz test passes.
-- [ ] **CAP-021** Concurrent revoke-versus-transfer race test passes.
+- [x] **CAP-021** Cross-CPU revoke-versus-transfer race passes with a post-revoke no-descendant invariant for both legal linearizations.
 
 ### Capability completion gate
 
@@ -143,11 +143,11 @@ Every completed requirement must link to:
 
 - [x] **IPC-001** Basic send/receive path exists. Runtime IPC paths pass.
 - [x] **IPC-002** Synchronous call implemented.
-- [-] **IPC-003** One-shot reply authority implemented. Full production semantics and race stress remain open.
+- [-] **IPC-003** One-shot reply authority is serialized against cancellation, timeout, server exit, and teardown; scalable locking and race stress remain open.
 - [-] **IPC-004** Reply-receive and reply-only operations exist; complete atomicity/race evidence remains open.
-- [-] **IPC-005** Bounded endpoint cancellation exists; forced race certification remains open.
-- [-] **IPC-006** Teardown cancellation exists; concurrency/quiescence proof remains open.
-- [-] **IPC-007** Bounded IPC timeout expiration exists. Complete timeout ABI, race stress, and donation rollback remain open.
+- [-] **IPC-005** Endpoint cancellation removes blocked senders/receivers with state-appropriate endpoint authority and serializes completion; forced interleaving fuzz remains open.
+- [-] **IPC-006** Teardown cancellation serializes blocked state and reply authority, and blocked-destroy endpoint reuse passes; broader quiescence proof remains open.
+- [-] **IPC-007** Bounded IPC timeout expiration returns deterministic error-only completions, removes write-only callers, and never spins in IRQ context. Complete timeout ABI and race stress remain open.
 - [-] **IPC-008** Basic notification signal/wait and dynamic lifecycle exist; full binding policy remains open.
 - [-] **IPC-009** Single-capability transfer works on calls and replies, including receiver-selected destinations for the memory-server protocol; multi-capability atomic transfer remains open.
 - [ ] **IPC-010** Bounded out-of-line message strategy implemented.
@@ -503,7 +503,7 @@ Every completed requirement must link to:
 - [ ] **SEC-015** Refcount overflow/underflow prevented.
 - [-] **SEC-016** ABA hazards addressed for reused objects. Generation-tagged per-CPU thread bindings prevent slot reuse from aliasing an older return-frame owner; broader object-class and long-duration race evidence remains open.
 - [-] **SEC-017** User-thread teardown has generation-tagged return-frame quiescence and switches CPUs to the permanent kernel TTBR0 root before reclaiming user page tables; IRQ, VM/vCPU, and remaining object teardown protocols are open.
-- [ ] **SEC-018** Race tests cover revoke, destroy, map, IPC, IRQ, and vCPU execution.
+- [-] **SEC-018** Race tests cover capability revoke versus IPC transfer, IPC lifecycle versus destroy/timeout/cancel, and vCPU execution; controlled map/IRQ races and broader stress remain open.
 
 ## 10.4 Failure handling
 
@@ -558,7 +558,7 @@ Every completed requirement must link to:
 
 - [x] **TST-016** Deterministic bounded kernel/hypervisor fuzz exists. It is evidence for bounded mechanisms, not production completion.
 - [ ] **TST-017** Capability derivation/revoke fuzz implemented.
-- [-] **TST-018** Reply/cancel-versus-thread-teardown regressions are covered by bounded certification paths; dedicated race fuzz and fault injection remain open.
+- [-] **TST-018** `ipc_lifecycle_races` covers explicit cancel, timer expiry, blocked destroy, server exit with live reply authority, and endpoint reuse across CPUs; controlled instruction-level race fuzz and fault injection remain open.
 - [-] **TST-019** Deterministic capability-revoke-driven unmapping integration test exists; concurrent revoke/map/unmap and TLB-shootdown race fuzz remain open.
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
@@ -748,3 +748,14 @@ Until the release gates above pass, the correct status is:
 <!-- 0121 evidence: `thread_exit` can atomically publish a supervisor badge and
 terminate/deschedule the caller. This advances IPC-006 and USR-017 but does not
 complete process wait/status or supervision semantics. -->
+
+<!-- 0122 evidence: IPC reply/cancel/timeout/exit/teardown ownership changes are
+serialized by an IRQ-safe lifecycle protocol. This advances IPC-003, IPC-005
+through IPC-007, SEC-017, and TST-018 without claiming scalable locking or
+exhaustive race-fuzz completion. -->
+
+<!-- 0123 evidence: IPC capability minting is serialized with revoke/delete and
+mapping authority transactions. `capability_transfer_revoke_race` runs the
+sender and receiver on separate CPUs and verifies that no receiver descendant
+exists after revoke returns, independent of which operation linearizes first.
+This completes CAP-021 and advances CAP-014 and SEC-018. -->

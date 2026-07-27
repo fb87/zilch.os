@@ -1,3 +1,21 @@
+## 0123 - Capability transfer/revoke serialization
+
+- Serialize IPC capability minting with control-path copy, mint, delete, revoke, and mapping authority.
+- Make public descendant and object-reference revocation acquire the authority lock by construction.
+- Add a cross-CPU transfer-versus-revoke certification race with a linearization-independent postcondition.
+- Route the race roles to the pager-client image and grant endpoint receive authority only to the server.
+- Make the bootstrap pager fixture use the pager-client image instead of assuming the init image leaves page four unused.
+- Move root mapping-database scratch mappings outside the expanded init image.
+
+## 0122 - IPC lifecycle serialization
+
+- Serialize reply, cancellation, timeout, exit, and teardown ownership changes.
+- Remove blocked senders with the endpoint right appropriate to their wait state.
+- Restore error-only IPC completions instead of returning stale syscall registers.
+- Make timer expiry non-blocking in IRQ context and retry lifecycle contention.
+- Cancel live reply authority when a server exits.
+- Add four-CPU cancellation, timeout, blocked-destroy, server-exit, and endpoint-reuse evidence.
+
 ## 0120 - Disjoint memory-service selectors
 
 - Reserve root CSpace selectors 40-51 for the memory server and three clients.
