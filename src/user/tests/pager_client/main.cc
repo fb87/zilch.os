@@ -17,6 +17,7 @@ namespace
     inline constexpr sys::word_t capability_race_server_role = 0x115U;
     inline constexpr sys::word_t capability_race_sender_role = 0x116U;
     inline constexpr sys::word_t object_race_worker_role = 0x117U;
+    inline constexpr sys::word_t undefined_instruction_role = 0x106U;
 } // namespace
 
 extern "C" int main(sys::word_t role, sys::word_t) noexcept {
@@ -92,6 +93,12 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
                static_cast<sys::word_t>(sys::error_t::success)) {
         }
         sys::thread_exit(0U, notification, 1U << 13U);
+    }
+    if (role == undefined_instruction_role) {
+#if defined(__aarch64__)
+        asm volatile(".inst 0x00000000");
+#endif
+        return 11;
     }
     const sys::word_t client_index = role - 0x101U;
     if (client_index >= 2U)

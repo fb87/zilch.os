@@ -1,3 +1,10 @@
+## 0147 - Contain a real PL3 undefined-instruction fault
+
+- Publish ABI v1 fault-kind and disposition values.
+- Execute a real ARM64 `udf` instruction from a userspace fault client.
+- Validate instruction-fault metadata and apply terminate policy in the userspace pager.
+- Keep the pager and remaining service graph operational after containment.
+
 ## 0146 - Deliver endpoint capability badges through IPC
 
 - Snapshot the invoking endpoint capability's badge for direct, queued, and fault IPC.

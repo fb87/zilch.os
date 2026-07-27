@@ -1,5 +1,6 @@
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/fault.hh>
 #include <abi/sys/v1/hypervisor.hh>
 #include <abi/sys/v1/ipc.hh>
 #include <abi/sys/v1/memory.hh>
@@ -27,6 +28,8 @@ static_assert(std::is_same_v<std::underlying_type_t<memory_type>, u8>);
 static_assert(std::is_same_v<std::underlying_type_t<memory_shareability>, u8>);
 static_assert(std::is_same_v<std::underlying_type_t<ObjectType>, u16>);
 static_assert(std::is_same_v<std::underlying_type_t<CapabilityRight>, u32>);
+static_assert(std::is_same_v<std::underlying_type_t<fault_kind>, u8>);
+static_assert(std::is_same_v<std::underlying_type_t<fault_disposition>, u8>);
 static_assert(sizeof(MessageTag) == sizeof(word_t));
 static_assert(alignof(Message) == alignof(word_t));
 static_assert(offsetof(Message, words) == sizeof(MessageTag));
@@ -50,6 +53,8 @@ static_assert(static_cast<word_t>(syscall::ipc) == 0U);
 static_assert(static_cast<word_t>(syscall::control) == 1U);
 static_assert(static_cast<word_t>(control_operation::thread_exit) == 42U);
 static_assert(static_cast<word_t>(guest_hypercall::diagnostic) == 6U);
+static_assert(static_cast<u8>(fault_kind::instruction_abort) == 1U);
+static_assert(static_cast<u8>(fault_disposition::terminate) == 2U);
 int main() {
     return 0;
 }

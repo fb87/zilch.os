@@ -53,6 +53,7 @@ namespace
     inline constexpr sys::word_t fault_client_role = 0x101U;
     inline constexpr sys::word_t second_fault_client_role = 0x102U;
     inline constexpr sys::word_t memory_client_role_base = 0x103U;
+    inline constexpr sys::word_t undefined_instruction_role = 0x106U;
     inline constexpr sys::word_t ipc_lifecycle_client_role_base = 0x110U;
     inline constexpr sys::word_t capability_race_server_role = 0x115U;
     inline constexpr sys::word_t capability_race_sender_role = 0x116U;
@@ -336,6 +337,14 @@ namespace
                                            client_space);
         if (pager)
             pager = wait_for_badges(2U);
+        if (pager)
+            pager = destroy_service_process(client_thread, client_task, client_space);
+
+        if (pager)
+            pager = create_service_process(2U, undefined_instruction_role, client_thread,
+                                           client_task, client_space);
+        if (pager)
+            pager = wait_for_badges(1U << 6U);
         if (pager)
             pager = destroy_service_process(client_thread, client_task, client_space);
         result.pager = pager;

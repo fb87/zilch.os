@@ -5,6 +5,7 @@
 
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/fault.hh>
 #include <abi/sys/v1/memory.hh>
 
 namespace
@@ -130,6 +131,20 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         if (signalled != static_cast<sys::word_t>(sys::error_t::success))
             fail(7U + index * 8U);
     }
+
+    const auto instruction_fault = sys::ipc_receive(endpoint);
+    if (instruction_fault.status != static_cast<sys::word_t>(sys::error_t::success) ||
+        instruction_fault.message1 !=
+            static_cast<sys::word_t>(sys::abi::v1::fault_kind::instruction_abort) ||
+        instruction_fault.message3 == 0U)
+        fail(0x30U);
+    const sys::word_t terminated = sys::ipc_reply(
+        static_cast<sys::word_t>(sys::abi::v1::fault_disposition::terminate), 0U, 0U, 0U);
+    if (terminated != static_cast<sys::word_t>(sys::error_t::success))
+        fail(0x31U);
+    if (sys::control(sys::abi::v1::control_operation::notification_signal, notification,
+                     1U << 6U) != static_cast<sys::word_t>(sys::error_t::success))
+        fail(0x32U);
 
     sys::word_t completed_clients = 0U;
     while (completed_clients < pressure_client_count) {

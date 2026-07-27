@@ -36,6 +36,7 @@ namespace sys::arch::space
     inline constexpr word_t memory_server_image_role = 0x100U;
     inline constexpr word_t pager_client_image_role_base = 0x101U;
     inline constexpr word_t memory_client_image_role_base = 0x103U;
+    inline constexpr word_t undefined_instruction_image_role = 0x106U;
     inline constexpr word_t ipc_lifecycle_client_role_base = 0x110U;
 
     struct image_view {
@@ -47,7 +48,8 @@ namespace sys::arch::space
         if (role == memory_server_image_role)
             return {sys_arm64_memory_server_image_start, sys_arm64_memory_server_image_end};
         if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
-            role == ipc_lifecycle_client_role_base || role == ipc_lifecycle_client_role_base + 1U ||
+            role == undefined_instruction_image_role || role == ipc_lifecycle_client_role_base ||
+            role == ipc_lifecycle_client_role_base + 1U ||
             role == ipc_lifecycle_client_role_base + 2U ||
             role == ipc_lifecycle_client_role_base + 3U ||
             role == ipc_lifecycle_client_role_base + 4U ||
