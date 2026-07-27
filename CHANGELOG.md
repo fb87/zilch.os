@@ -1,3 +1,11 @@
+## 0131 - Contain user and guest faults
+
+- Reconstruct guest fault IPA from HPFAR_EL2 and FAR_EL2 in abort exit records.
+- Classify unexpected guest exits as fatal to only the owning vCPU and VM.
+- Preserve stage-2 faults as recoverable VMM exits.
+- Add negative certification for abort classification, IPA reconstruction, and fatal-exit policy.
+- Close user-fault recovery using existing pager IPC and end-to-end acceptance evidence.
+
 ## 0130 - ARM privilege and guest-control hardening
 
 - Feature-detect PAN and UAO while retaining the Armv8-A build baseline.

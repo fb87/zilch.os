@@ -30,6 +30,20 @@ namespace sys::arch::hypervisor
         }
         return false;
     }
+
+    [[nodiscard]] inline constexpr bool guest_abort_exception(u64 syndrome) noexcept {
+        const u64 exception_class = (syndrome >> 26U) & 0x3fU;
+        return exception_class == 0x20U || exception_class == 0x21U || exception_class == 0x24U ||
+               exception_class == 0x25U;
+    }
+
+    [[nodiscard]] inline constexpr u64 guest_fault_ipa(u64 syndrome, u64 fault_address,
+                                                       u64 hpfar) noexcept {
+        if (!guest_abort_exception(syndrome))
+            return 0U;
+        constexpr u64 hpfar_fault_number_mask = 0x0000fffffffffff0ULL;
+        return ((hpfar & hpfar_fault_number_mask) << 8U) | (fault_address & 0xfffU);
+    }
     inline constexpr bool available = true;
     inline constexpr bool active = true;
     inline constexpr u64 abi_signature = 0x5a494c4300000000ULL;
@@ -347,7 +361,7 @@ namespace sys::arch::hypervisor
             exit->guest_pc = frame.instruction_pointer;
             u64 hpfar = 0U;
             __asm__ volatile("mrs %0, hpfar_el2" : "=r"(hpfar));
-            exit->qualification = hpfar;
+            exit->qualification = guest_fault_ipa(syndrome, exit->fault_address, hpfar);
         }
         load_el1_system_state(saved_host_el1[id]);
         __asm__ volatile(

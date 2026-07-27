@@ -433,7 +433,7 @@ Every completed requirement must link to:
 - [ ] **HYP-044** MMIO exits delivered to userspace VMM.
 - [ ] **HYP-045** WFI/WFE behavior correctly virtualized.
 - [-] **HYP-046** Trapped guest SCTLR_EL1 writes are masked to supported controls with mandatory RES1 bits restored; complete trapped system-register coverage remains open.
-- [ ] **HYP-047** Guest aborts produce complete fault records.
+- [x] **HYP-047** Guest abort exits record ESR, FAR, guest PC, and reconstructed IPA from HPFAR/FAR; negative certification validates abort classification and IPA reconstruction.
 
 ### Hypervisor execution gate
 
@@ -511,8 +511,8 @@ Every completed requirement must link to:
 - [ ] **SEC-020** Per-CPU emergency log buffer implemented.
 - [ ] **SEC-021** Crash record preserved for postmortem analysis.
 - [ ] **SEC-022** Watchdog integration implemented.
-- [ ] **SEC-023** Recoverable userspace failures do not panic the kernel.
-- [ ] **SEC-024** Guest failures are contained to the owning VM.
+- [x] **SEC-023** Recoverable user instruction/data faults are delivered through fault IPC or isolate only the faulting thread; pager recovery and continued four-CPU acceptance prove the kernel remains live.
+- [x] **SEC-024** Guest traps always return through bounded VM exits; unexpected traps fault only the owning vCPU/VM, while stage-2 faults remain recoverable VMM exits.
 
 ---
 

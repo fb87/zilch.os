@@ -750,6 +750,13 @@ namespace sys::kernel::hypervisor::test
                   (arch::hypervisor::sanitize_guest_sctlr_el1(0U) &
                    arch::hypervisor::sctlr_el1_res1) == arch::hypervisor::sctlr_el1_res1,
               9U);
+        constexpr u64 data_abort_syndrome = 0x24ULL << 26U;
+        check(arch::hypervisor::guest_fault_ipa(data_abort_syndrome, 0xabcU, 0x123450U) ==
+                      0x12345abcULL &&
+                  arch::hypervisor::guest_fault_ipa(0U, 0xabcU, 0x123450U) == 0U &&
+                  !fatal_guest_exit(abi::v1::vm_exit_reason::stage2_fault) &&
+                  fatal_guest_exit(abi::v1::vm_exit_reason::unexpected),
+              7U);
         check(reset(vm) == error_t::success, 10U);
         check(stage2_map(vm, 0U, 0x48000000U, page_size,
                          static_cast<u32>(stage2_permission::read) |

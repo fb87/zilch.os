@@ -5,6 +5,10 @@
 
 namespace sys::kernel::hypervisor
 {
+    [[nodiscard]] inline constexpr bool fatal_guest_exit(abi::v1::vm_exit_reason reason) noexcept {
+        return reason == abi::v1::vm_exit_reason::unexpected;
+    }
+
     [[nodiscard]] inline error_t configure_vcpu(virtual_cpu_t& vcpu, u64 pc, u64 pstate,
                                                 u64 sp) noexcept {
         if (!aligned(pc) || !aligned(sp))
@@ -56,13 +60,18 @@ namespace sys::kernel::hypervisor
         vcpu.last_exit = exit;
         --vm.active_vcpus;
         __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
-        vcpu.lifecycle = result == error_t::success ? vcpu_state::runnable : vcpu_state::faulted;
-        if (result != error_t::success) {
-            vcpu.last_diagnostic.result = result;
+        const bool fatal_exit = result != error_t::success || fatal_guest_exit(exit.reason);
+        vcpu.lifecycle = fatal_exit ? vcpu_state::faulted : vcpu_state::runnable;
+        if (fatal_exit) {
+            vcpu.state = vm_state::faulted;
+            if (exit.reason == abi::v1::vm_exit_reason::unexpected)
+                vm.state = vm_state::faulted;
+            vcpu.last_diagnostic.result =
+                result == error_t::success ? error_t::invalid_argument : result;
             vcpu.last_diagnostic.syndrome = exit.syndrome;
             vcpu.last_diagnostic.fault_address = exit.fault_address;
             vcpu.last_diagnostic.guest_pc = exit.guest_pc;
-            pr_err("hv guest-exit result=%d reason=%u esr=%llx far=%llx hpfar=%llx pc=%llx "
+            pr_err("hv guest-exit result=%d reason=%u esr=%llx far=%llx ipa=%llx pc=%llx "
                    "pstate=%llx vmid=%u run=%u\n",
                    static_cast<int>(result), static_cast<unsigned int>(exit.reason),
                    static_cast<unsigned long long>(exit.syndrome),
