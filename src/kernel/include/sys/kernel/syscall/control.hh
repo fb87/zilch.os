@@ -141,9 +141,9 @@ namespace sys::kernel::syscall
                                             current.owner->cspace, source_selector, {rights});
                 break;
             case abi::v1::control_operation::capability_mint:
-                authority_result =
-                    capability::mint_locked(destination_task->cspace, destination_selector,
-                                            current.owner->cspace, source_selector, {rights}, badge);
+                authority_result = capability::mint_locked(
+                    destination_task->cspace, destination_selector, current.owner->cspace,
+                    source_selector, {rights}, badge);
                 break;
             case abi::v1::control_operation::capability_move:
                 authority_result =
@@ -162,9 +162,8 @@ namespace sys::kernel::syscall
                 if (deleted.object.type != object::type_t::none &&
                     capability::derivation_valid(deleted.derivation, deleted.object))
                     (void)memory::unmap_authority(deleted.derivation, false);
-                authority_result =
-                    capability::delete_capability_locked(destination_task->cspace,
-                                                         destination_selector);
+                authority_result = capability::delete_capability_locked(destination_task->cspace,
+                                                                        destination_selector);
                 break;
             }
             case abi::v1::control_operation::capability_revoke: {
@@ -287,6 +286,9 @@ namespace sys::kernel::syscall
                         break;
                     case 23U:
                         name = "capability_transfer_revoke_race";
+                        break;
+                    case 24U:
+                        name = "object_lookup_destroy_race";
                         break;
                     default:
                         break;

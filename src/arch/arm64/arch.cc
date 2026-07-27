@@ -1,4 +1,5 @@
 #include <sys/arch/arch.hh>
+#include <sys/kernel/object/table.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
 #include <sys/kernel/syscall/control.hh>
@@ -11,6 +12,7 @@ extern "C" void sys_arch_link_anchor() noexcept {}
 
 extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame,
                                             sys::u64 level) noexcept {
+    const sys::kernel::object::read_guard object_read_guard{};
     const sys::u64 vector = frame->vector;
     const sys::u64 syndrome = sys::arch::exception::syndrome(static_cast<sys::u32>(level));
 

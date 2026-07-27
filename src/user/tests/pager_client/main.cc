@@ -16,6 +16,7 @@ namespace
     inline constexpr sys::word_t lifecycle_role_base = 0x110U;
     inline constexpr sys::word_t capability_race_server_role = 0x115U;
     inline constexpr sys::word_t capability_race_sender_role = 0x116U;
+    inline constexpr sys::word_t object_race_worker_role = 0x117U;
 } // namespace
 
 extern "C" int main(sys::word_t role, sys::word_t) noexcept {
@@ -80,6 +81,17 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             result.status != static_cast<sys::word_t>(sys::error_t::not_found))
             return 10;
         sys::thread_exit(0U, notification, 1U << 15U);
+    }
+    if (role == object_race_worker_role) {
+        while (sys::control(sys::abi::v1::control_operation::notification_signal, 20U, 1U) !=
+               static_cast<sys::word_t>(sys::error_t::success)) {
+        }
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal, notification,
+                           1U << 12U);
+        while (sys::control(sys::abi::v1::control_operation::notification_signal, 20U, 1U) ==
+               static_cast<sys::word_t>(sys::error_t::success)) {
+        }
+        sys::thread_exit(0U, notification, 1U << 13U);
     }
     const sys::word_t client_index = role - 0x101U;
     if (client_index >= 2U)

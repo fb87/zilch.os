@@ -8,6 +8,7 @@ namespace sys::kernel::object
 {
     inline constexpr u32 table_capacity = 512U;
     inline constexpr object_id_t dynamic_id_base = 96U;
+    inline constexpr u32 maximum_reader_cpus = 64U;
 
     namespace bootstrap_id
     {
@@ -50,6 +51,7 @@ namespace sys::kernel::object
 
     inline table_slot_t object_table[table_capacity]{};
     inline volatile u32 table_lock{};
+    inline u32 reader_depth[maximum_reader_cpus]{};
 
     inline void lock_table() noexcept {
         while (__atomic_exchange_n(&table_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
@@ -59,6 +61,39 @@ namespace sys::kernel::object
 
     inline void unlock_table() noexcept {
         __atomic_store_n(&table_lock, 0U, __ATOMIC_RELEASE);
+    }
+
+    inline void enter_read_side() noexcept {
+        const u32 cpu = arch::cpu::current_id();
+        if (cpu < maximum_reader_cpus)
+            __atomic_add_fetch(&reader_depth[cpu], 1U, __ATOMIC_SEQ_CST);
+    }
+
+    inline void leave_read_side() noexcept {
+        const u32 cpu = arch::cpu::current_id();
+        if (cpu < maximum_reader_cpus)
+            __atomic_sub_fetch(&reader_depth[cpu], 1U, __ATOMIC_SEQ_CST);
+    }
+
+    struct read_guard final {
+        read_guard() noexcept {
+            enter_read_side();
+        }
+        ~read_guard() noexcept {
+            leave_read_side();
+        }
+        read_guard(const read_guard&) = delete;
+        read_guard& operator=(const read_guard&) = delete;
+    };
+
+    inline void synchronize_readers() noexcept {
+        const u32 current_cpu = arch::cpu::current_id();
+        for (u32 cpu = 0U; cpu < maximum_reader_cpus; ++cpu) {
+            if (cpu == current_cpu)
+                continue;
+            while (__atomic_load_n(&reader_depth[cpu], __ATOMIC_SEQ_CST) != 0U)
+                arch::cpu::relax();
+        }
     }
 
     [[nodiscard]] inline constexpr reference_t null_reference() noexcept {
@@ -137,6 +172,14 @@ namespace sys::kernel::object
         if (!__atomic_compare_exchange_n(&slot.object, &expected, nullptr, false, __ATOMIC_ACQ_REL,
                                          __ATOMIC_ACQUIRE))
             return error_t::busy;
+        /*
+         * The table removal prevents new generation-checked resolutions.
+         * Readers that resolved the old pointer before removal must leave
+         * their exception dispatch before the backing object can be reused.
+         * The current CPU is excluded because destruction itself runs inside
+         * a read-side section and already owns all of its local references.
+         */
+        synchronize_readers();
         return error_t::success;
     }
 

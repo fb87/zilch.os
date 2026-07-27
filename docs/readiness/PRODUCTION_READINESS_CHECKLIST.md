@@ -117,11 +117,11 @@ Every completed requirement must link to:
 - [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
 - [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation is rejected; guarded CSpace and complete badge-delivery semantics remain open.
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
-- [-] **CAP-012** Single-capability delete and atomic locked lookup snapshots exist; controlled lookup/delete interleaving and complete object-use quiescence evidence remain open.
+- [-] **CAP-012** Single-capability delete, atomic lookup snapshots, and exception-scoped lookup/use quiescence exist; generalized non-exception readers and long-duration interleaving evidence remain open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
 - [-] **CAP-014** Public capability mutation/revoke APIs acquire the authority lock by construction; control, IPC transfer, and map/unmap use explicit locked transaction primitives. Scalable locking and complete concurrent mutation stress remain open.
-- [-] **CAP-015** Frame destruction waits for mapping quiescence and capability revoke removes descendant-authorized mappings; generalized object-reference quiescence remains open.
-- [-] **CAP-016** Generation checks and reusable derivation records prevent bounded stale-reference reuse. Long-duration and concurrent ABA evidence remains open.
+- [-] **CAP-015** Frame destruction waits for mapping quiescence, capability revoke removes descendant mappings, and object unregister waits for pre-existing remote exception readers; per-object scalable reclamation remains open.
+- [-] **CAP-016** Generation checks, reusable derivation records, and an object-table read-side grace period prevent bounded stale-reference reuse. Long-duration ABA evidence remains open.
 
 ## 2.3 Capability transfer
 
@@ -483,7 +483,7 @@ Every completed requirement must link to:
 - [-] **SEC-001** Kernel and guest W^X checks exist in bring-up paths.
 - [ ] **SEC-002** W^X enforced in every production address space.
 - [ ] **SEC-003** Kernel read-only data protected after initialization.
-- [ ] **SEC-004** Kernel stacks have guard pages.
+- [-] **SEC-004** EL1 and EL2 use disjoint 32 KiB per-CPU stacks, removing the 16 KiB race-teardown overflow margin; guard pages and high-water enforcement remain open.
 - [ ] **SEC-005** User copy routines validate full ranges and overflow.
 - [ ] **SEC-006** Reused memory and architectural state are zeroed.
 
@@ -501,9 +501,9 @@ Every completed requirement must link to:
 - [ ] **SEC-013** Lock hierarchy documented.
 - [ ] **SEC-014** Debug lock-order checker implemented.
 - [ ] **SEC-015** Refcount overflow/underflow prevented.
-- [-] **SEC-016** ABA hazards addressed for reused objects. Generation-tagged per-CPU thread bindings prevent slot reuse from aliasing an older return-frame owner; broader object-class and long-duration race evidence remains open.
+- [-] **SEC-016** ABA hazards are bounded by generation-tagged references, per-CPU thread bindings, and object-table read-side grace periods before reuse; long-duration wraparound evidence remains open.
 - [-] **SEC-017** User-thread teardown has generation-tagged return-frame quiescence and switches CPUs to the permanent kernel TTBR0 root before reclaiming user page tables; IRQ, VM/vCPU, and remaining object teardown protocols are open.
-- [-] **SEC-018** Race tests cover capability revoke versus IPC transfer, IPC lifecycle versus destroy/timeout/cancel, and vCPU execution; controlled map/IRQ races and broader stress remain open.
+- [-] **SEC-018** Race tests cover capability revoke versus IPC transfer, object lookup/use versus destroy, IPC lifecycle versus destroy/timeout/cancel, and vCPU execution; controlled map/IRQ races and broader stress remain open.
 
 ## 10.4 Failure handling
 

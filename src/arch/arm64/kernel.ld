@@ -9,14 +9,14 @@ SECTIONS
   .rodata : ALIGN(4096) { *(.rodata .rodata.*) }
   .data : ALIGN(4096) { *(.data .data.*) }
   .bss (NOLOAD) : ALIGN(4096) { __bss_start = .; *(.bss .bss.* COMMON) __bss_end = .; }
-  .stacks (NOLOAD) : ALIGN(16384) {
+  .stacks (NOLOAD) : ALIGN(32768) {
     __cpu_stacks_start = .;
-    . += 4 * 0x4000;
+    . += 4 * 0x8000;
     __cpu_stacks_end = .;
   }
-  .hypervisor_stacks (NOLOAD) : ALIGN(16384) {
+  .hypervisor_stacks (NOLOAD) : ALIGN(32768) {
     __hypervisor_stacks_start = .;
-    . += 4 * 0x4000;
+    . += 4 * 0x8000;
     __hypervisor_stacks_end = .;
   }
   __kernel_end = ALIGN(4096);

@@ -38,6 +38,7 @@ namespace
         memory_server_protocol = 21U,
         ipc_lifecycle_races = 22U,
         capability_transfer_revoke_race = 23U,
+        object_lookup_destroy_race = 24U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -55,6 +56,7 @@ namespace
     inline constexpr sys::word_t ipc_lifecycle_client_role_base = 0x110U;
     inline constexpr sys::word_t capability_race_server_role = 0x115U;
     inline constexpr sys::word_t capability_race_sender_role = 0x116U;
+    inline constexpr sys::word_t object_race_worker_role = 0x117U;
 
     [[nodiscard]] bool create_service_process(sys::word_t cpu, sys::word_t role,
                                               sys::word_t thread_selector,
@@ -250,6 +252,50 @@ namespace
             const sys::word_t destroy =
                 sys::control(sys::abi::v1::control_operation::notification_destroy, authority);
             passed = destroy == success && passed;
+        }
+        return passed;
+    }
+
+    [[nodiscard]] bool test_object_lookup_destroy_race() noexcept {
+        constexpr sys::word_t worker_thread = 55U;
+        constexpr sys::word_t worker_task = 56U;
+        constexpr sys::word_t worker_space = 57U;
+        constexpr sys::word_t notification = 30U;
+        constexpr sys::word_t worker_slot = 20U;
+        constexpr sys::word_t started_badge = 1U << 12U;
+        constexpr sys::word_t completed_badge = 1U << 13U;
+        constexpr sys::word_t cap_write = 1U << 1U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+
+        bool notification_created =
+            sys::control(sys::abi::v1::control_operation::notification_create, notification) ==
+            success;
+        bool worker_created = false;
+        bool passed = notification_created;
+        if (passed) {
+            worker_created = create_service_process(1U, object_race_worker_role, worker_thread,
+                                                    worker_task, worker_space);
+            passed = worker_created;
+        }
+        if (passed) {
+            passed = sys::control(sys::abi::v1::control_operation::capability_mint, worker_task,
+                                  worker_slot, notification, cap_write, 0U) == success;
+        }
+        if (passed)
+            passed = wait_for_badges(started_badge);
+        if (passed) {
+            passed = sys::control(sys::abi::v1::control_operation::notification_destroy,
+                                  notification) == success;
+            notification_created = !passed;
+        }
+        if (passed)
+            passed = wait_for_badges(completed_badge);
+        if (worker_created)
+            passed = destroy_service_process(worker_thread, worker_task, worker_space) && passed;
+        if (notification_created) {
+            passed = sys::control(sys::abi::v1::control_operation::notification_destroy,
+                                  notification) == success &&
+                     passed;
         }
         return passed;
     }
@@ -940,6 +986,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::ipc_lifecycle_races, ipc_lifecycle_pass);
     const bool capability_race_pass = test_capability_transfer_revoke_race();
     record(ledger, test_id::capability_transfer_revoke_race, capability_race_pass);
+    const bool object_race_pass = test_object_lookup_destroy_race();
+    record(ledger, test_id::object_lookup_destroy_race, object_race_pass);
 
     const service_results services = run_userspace_services();
     record(ledger, test_id::userspace_pager_service, services.pager);

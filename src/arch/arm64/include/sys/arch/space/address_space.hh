@@ -51,7 +51,8 @@ namespace sys::arch::space
             role == ipc_lifecycle_client_role_base + 3U ||
             role == ipc_lifecycle_client_role_base + 4U ||
             role == ipc_lifecycle_client_role_base + 5U ||
-            role == ipc_lifecycle_client_role_base + 6U)
+            role == ipc_lifecycle_client_role_base + 6U ||
+            role == ipc_lifecycle_client_role_base + 7U)
             return {sys_arm64_pager_client_image_start, sys_arm64_pager_client_image_end};
         if (role >= memory_client_image_role_base && role < memory_client_image_role_base + 3U)
             return {sys_arm64_memory_client_image_start, sys_arm64_memory_client_image_end};

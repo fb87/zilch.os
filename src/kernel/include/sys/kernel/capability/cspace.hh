@@ -245,10 +245,11 @@ namespace sys::kernel::capability
         unlock(mutable_cspace);
         return lookup_result;
     }
-    [[nodiscard]] inline error_t
-    derive_locked(cspace_t& destination, capability_id_t destination_selector,
-                  const cspace_t& source, capability_id_t source_selector, rights_t rights_mask,
-                  badge_t badge) noexcept {
+    [[nodiscard]] inline error_t derive_locked(cspace_t& destination,
+                                               capability_id_t destination_selector,
+                                               const cspace_t& source,
+                                               capability_id_t source_selector,
+                                               rights_t rights_mask, badge_t badge) noexcept {
         if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
             return error_t::invalid_argument;
         cspace_t& mutable_source = const_cast<cspace_t&>(source);
@@ -327,9 +328,9 @@ namespace sys::kernel::capability
                       badge);
     }
 
-    [[nodiscard]] inline error_t
-    move_locked(cspace_t& destination, capability_id_t destination_selector, cspace_t& source,
-                capability_id_t source_selector) noexcept {
+    [[nodiscard]] inline error_t move_locked(cspace_t& destination,
+                                             capability_id_t destination_selector, cspace_t& source,
+                                             capability_id_t source_selector) noexcept {
         if (&destination == &source && destination_selector == source_selector)
             return error_t::success;
         if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)

@@ -199,10 +199,9 @@ namespace sys::kernel::syscall
          * tree while this mint publishes a descendant that survives it.
          */
         capability::lock_authority();
-        const error_t result =
-            capability::mint_locked(receiver.owner->cspace, sender.transfer.destination,
-                                    sender.owner->cspace, sender.transfer.source,
-                                    sender.transfer.rights, sender.transfer.badge);
+        const error_t result = capability::mint_locked(
+            receiver.owner->cspace, sender.transfer.destination, sender.owner->cspace,
+            sender.transfer.source, sender.transfer.rights, sender.transfer.badge);
         capability::unlock_authority();
         if (result == error_t::success)
             sender.transfer = {};

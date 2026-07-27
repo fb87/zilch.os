@@ -1,3 +1,11 @@
+## 0126 - Object lookup/use quiescence
+
+- Add per-CPU object-table read-side sections around ARM64 exception dispatch.
+- Remove an object from the generation-checked table before waiting for pre-existing remote readers.
+- Delay backing-object reuse until every remote lookup/use section has completed.
+- Add a cross-CPU notification lookup/signal versus destroy/reuse certification race.
+- Increase disjoint EL1 and EL2 per-CPU stacks from 16 KiB to 32 KiB after the wider dispatch path exposed stack-frame corruption under race teardown.
+
 ## 0125 - Authority-safe capability mutation API
 
 - Make public install, derive, copy, mint, move, remove, and delete operations acquire the authority lock.
