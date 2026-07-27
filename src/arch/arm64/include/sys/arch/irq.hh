@@ -27,4 +27,8 @@ namespace sys::arch::irq
     inline void disable() noexcept {
         __asm__ volatile("msr daifset, #2" ::: "memory");
     }
+
+    inline void mask_all() noexcept {
+        __asm__ volatile("msr daifset, #0xf" ::: "memory");
+    }
 } // namespace sys::arch::irq

@@ -16,6 +16,7 @@
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/object/table.hh>
+#include <sys/kernel/panic.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
@@ -729,6 +730,21 @@ namespace sys::kernel::thread
                     static_cast<unsigned long long>(hypervisor::test::operations),
                     static_cast<unsigned long long>(hypervisor::test::failures_total));
         }
+        const cpu_id_t panic_cpu = arch::cpu::current_id();
+        const u32 saved_current = current_user_thread[panic_cpu];
+        const u32 saved_printk_lock = ::sys::printk::raw_lock;
+        current_user_thread[panic_cpu] = user_thread_count + 1U;
+        ::sys::printk::raw_lock = 1U;
+        panic::capture(panic::reason::internal_failure, 1U, 0xf0U, 0xdeadU, 0xbeefU, 0xcafef00dU);
+        ::sys::printk::raw_lock = saved_printk_lock;
+        current_user_thread[panic_cpu] = saved_current;
+        if (!emergency::crash_valid() || emergency::preserved_crash.level != 1U ||
+            emergency::preserved_crash.vector != 0xf0U ||
+            emergency::preserved_crash.syndrome != 0xdeadU ||
+            emergency::preserved_crash.fault_address != 0xbeefU ||
+            emergency::preserved_crash.instruction_pointer != 0xcafef00dU)
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=scheduler_independent_panic result=PASS\n");
         return error_t::success;
     }
 #endif

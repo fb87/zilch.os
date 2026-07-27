@@ -1,3 +1,11 @@
+## 0139 - Make panic independent of scheduler state
+
+- Centralize fatal exception and stack-corruption handling in a lock-free panic path.
+- Mask debug, SError, IRQ, and FIQ exceptions before recording.
+- Avoid scheduler, allocator, capability, object-table, and formatted-console dependencies.
+- Certify crash capture with poisoned scheduler identity and a deliberately held printk lock.
+- Document the retained-record and CPU-park protocol.
+
 ## 0138 - Certify the kernel lock hierarchy
 
 - Define one global rank order for every active blocking kernel spinlock.

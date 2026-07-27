@@ -507,7 +507,7 @@ Every completed requirement must link to:
 
 ## 10.4 Failure handling
 
-- [ ] **SEC-019** Panic path works with corrupted scheduler state.
+- [x] **SEC-019** Fatal exception and stack-corruption handling masks all exception classes and records through lock-free emergency storage without consulting scheduler, allocator, capability, object, or console-lock state; certification poisons scheduler identity and holds printk locked while validating capture.
 - [x] **SEC-020** Each CPU has a lock-free 32-record emergency ring for exception entry, fatal traps, stack corruption, and bounded-printk contention.
 - [x] **SEC-021** Fatal exceptions preserve a checksummed EL/vector/ESR/FAR/PC crash record in a linker-reserved `.noinit` page excluded from BSS clearing.
 - [ ] **SEC-022** Watchdog integration implemented.
