@@ -271,6 +271,9 @@ namespace sys::kernel::syscall
                     case 18U:
                         name = "memory_extent_retype";
                         break;
+                    case 19U:
+                        name = "memory_extent_metadata";
+                        break;
                     default:
                         break;
                 }

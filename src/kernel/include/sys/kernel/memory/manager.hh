@@ -18,6 +18,7 @@ namespace sys::kernel::memory
     inline constexpr u32 frame_count = 64U;
     inline constexpr u32 page_table_count = 32U;
     inline constexpr u32 resource_count = 32U;
+    inline constexpr u32 extent_node_count = 256U;
     inline constexpr u64 page_size = arch::memory::page_size;
     inline constexpr u32 maximum_physical_pages =
         static_cast<u32>(platform::memory::ram_size / page_size);
@@ -26,6 +27,13 @@ namespace sys::kernel::memory
     inline frame frames[frame_count]{};
     inline page_table page_tables[page_table_count]{};
     inline resource resources[resource_count]{};
+    struct extent_node {
+        paddr_t base{};
+        u32 pages{};
+        u32 next{invalid_extent_index};
+        bool in_use{};
+    };
+    inline extent_node extent_nodes[extent_node_count]{};
     inline u64 allocation_bitmap[bitmap_words]{};
     inline paddr_t managed_base{};
     inline u32 managed_pages{};
@@ -89,9 +97,15 @@ namespace sys::kernel::memory
         value.quota_pages = 0U;
         value.used_pages = 0U;
         value.delegated_pages = 0U;
+        u32 extent = value.extent_head;
+        while (extent != invalid_extent_index) {
+            const u32 next = extent_nodes[extent].next;
+            extent_nodes[extent] = {};
+            extent_nodes[extent].next = invalid_extent_index;
+            extent = next;
+        }
+        value.extent_head = invalid_extent_index;
         value.extent_count = 0U;
-        for (auto& extent : value.extents)
-            extent = {};
         value.root = false;
         value.in_use = false;
     }
@@ -261,10 +275,41 @@ namespace sys::kernel::memory
         return error_t::success;
     }
 
+    [[nodiscard]] inline u32 allocate_extent_node() noexcept {
+        for (u32 index = 0U; index < extent_node_count; ++index) {
+            if (!extent_nodes[index].in_use) {
+                extent_nodes[index] = {};
+                extent_nodes[index].next = invalid_extent_index;
+                extent_nodes[index].in_use = true;
+                return index;
+            }
+        }
+        return invalid_extent_index;
+    }
+
+    inline void release_extent_node(u32 index) noexcept {
+        if (index >= extent_node_count)
+            return;
+        extent_nodes[index] = {};
+        extent_nodes[index].next = invalid_extent_index;
+    }
+
+    inline void release_resource_extents(resource& value) noexcept {
+        u32 current = value.extent_head;
+        while (current != invalid_extent_index) {
+            const u32 next = extent_nodes[current].next;
+            release_extent_node(current);
+            current = next;
+        }
+        value.extent_head = invalid_extent_index;
+        value.extent_count = 0U;
+    }
+
     [[nodiscard]] inline bool address_in_resource_extent(const resource& value,
                                                          paddr_t address) noexcept {
-        for (u32 index = 0U; index < value.extent_count; ++index) {
-            const auto& extent = value.extents[index];
+        for (u32 current = value.extent_head; current != invalid_extent_index;
+             current = extent_nodes[current].next) {
+            const auto& extent = extent_nodes[current];
             const paddr_t end = extent.base + static_cast<paddr_t>(extent.pages) * page_size;
             if (address >= extent.base && address < end)
                 return true;
@@ -286,8 +331,9 @@ namespace sys::kernel::memory
                                                         paddr_t& address) noexcept {
         address = 0U;
         lock_allocator();
-        for (u32 extent_index = 0U; extent_index < authority.extent_count; ++extent_index) {
-            const auto& extent = authority.extents[extent_index];
+        for (u32 current = authority.extent_head; current != invalid_extent_index;
+             current = extent_nodes[current].next) {
+            const auto& extent = extent_nodes[current];
             for (u32 page = 0U; page < extent.pages; ++page) {
                 const paddr_t candidate = extent.base + static_cast<paddr_t>(page) * page_size;
                 for (u32 region_index = 0U; region_index < physical_region_count; ++region_index) {
@@ -314,55 +360,104 @@ namespace sys::kernel::memory
         return error_t::no_memory;
     }
 
+    inline void insert_extent_node_sorted(resource& value, u32 node_index) noexcept {
+        auto& incoming = extent_nodes[node_index];
+        u32 previous = invalid_extent_index;
+        u32 current = value.extent_head;
+        while (current != invalid_extent_index && extent_nodes[current].base < incoming.base) {
+            previous = current;
+            current = extent_nodes[current].next;
+        }
+        incoming.next = current;
+        if (previous == invalid_extent_index)
+            value.extent_head = node_index;
+        else
+            extent_nodes[previous].next = node_index;
+        ++value.extent_count;
+
+        if (previous != invalid_extent_index) {
+            auto& left = extent_nodes[previous];
+            if (left.base + static_cast<paddr_t>(left.pages) * page_size == incoming.base) {
+                left.pages += incoming.pages;
+                left.next = incoming.next;
+                release_extent_node(node_index);
+                node_index = previous;
+                --value.extent_count;
+            }
+        }
+        auto& merged = extent_nodes[node_index];
+        const u32 right_index = merged.next;
+        if (right_index != invalid_extent_index) {
+            auto& right = extent_nodes[right_index];
+            if (merged.base + static_cast<paddr_t>(merged.pages) * page_size == right.base) {
+                merged.pages += right.pages;
+                merged.next = right.next;
+                release_extent_node(right_index);
+                --value.extent_count;
+            }
+        }
+    }
+
     [[nodiscard]] inline bool append_resource_extent(resource& value, paddr_t base,
                                                      u32 pages) noexcept {
         if (pages == 0U)
             return true;
-        for (u32 index = 0U; index < value.extent_count; ++index) {
-            auto& extent = value.extents[index];
-            const paddr_t end = extent.base + static_cast<paddr_t>(extent.pages) * page_size;
-            const paddr_t incoming_end = base + static_cast<paddr_t>(pages) * page_size;
-            if (end == base) {
-                extent.pages += pages;
-                return true;
-            }
-            if (incoming_end == extent.base) {
-                extent.base = base;
-                extent.pages += pages;
-                return true;
-            }
-        }
-        if (value.extent_count >= maximum_extents_per_resource)
+        const u32 node = allocate_extent_node();
+        if (node == invalid_extent_index)
             return false;
-        value.extents[value.extent_count++] = {base, pages};
+        extent_nodes[node].base = base;
+        extent_nodes[node].pages = pages;
+        insert_extent_node_sorted(value, node);
         return true;
     }
 
     [[nodiscard]] inline error_t carve_resource_extents(resource& parent, resource& child,
                                                         u32 pages) noexcept {
+        if (pages == 0U)
+            return error_t::invalid_argument;
         u32 remaining = pages;
+        child.extent_head = invalid_extent_index;
         child.extent_count = 0U;
-        for (u32 index = parent.extent_count; index > 0U && remaining != 0U; --index) {
-            auto& extent = parent.extents[index - 1U];
-            const u32 take = extent.pages < remaining ? extent.pages : remaining;
-            const paddr_t child_base =
-                extent.base + static_cast<paddr_t>(extent.pages - take) * page_size;
-            if (!append_resource_extent(child, child_base, take))
-                return error_t::no_memory;
-            extent.pages -= take;
-            remaining -= take;
-            if (extent.pages == 0U) {
-                for (u32 move = index; move < parent.extent_count; ++move)
-                    parent.extents[move - 1U] = parent.extents[move];
-                parent.extents[--parent.extent_count] = {};
+        while (remaining != 0U) {
+            u32 previous = invalid_extent_index;
+            u32 current = parent.extent_head;
+            if (current == invalid_extent_index)
+                break;
+            while (extent_nodes[current].next != invalid_extent_index) {
+                previous = current;
+                current = extent_nodes[current].next;
             }
+            auto& tail = extent_nodes[current];
+            const u32 take = tail.pages < remaining ? tail.pages : remaining;
+            if (take == tail.pages) {
+                if (previous == invalid_extent_index)
+                    parent.extent_head = invalid_extent_index;
+                else
+                    extent_nodes[previous].next = invalid_extent_index;
+                --parent.extent_count;
+                tail.next = invalid_extent_index;
+                insert_extent_node_sorted(child, current);
+            } else {
+                const u32 node = allocate_extent_node();
+                if (node == invalid_extent_index)
+                    break;
+                extent_nodes[node].base =
+                    tail.base + static_cast<paddr_t>(tail.pages - take) * page_size;
+                extent_nodes[node].pages = take;
+                tail.pages -= take;
+                insert_extent_node_sorted(child, node);
+            }
+            remaining -= take;
         }
         if (remaining == 0U)
             return error_t::success;
-        for (u32 index = 0U; index < child.extent_count; ++index)
-            (void)append_resource_extent(parent, child.extents[index].base,
-                                         child.extents[index].pages);
-        child.extent_count = 0U;
+        while (child.extent_head != invalid_extent_index) {
+            const u32 node = child.extent_head;
+            child.extent_head = extent_nodes[node].next;
+            --child.extent_count;
+            extent_nodes[node].next = invalid_extent_index;
+            insert_extent_node_sorted(parent, node);
+        }
         return error_t::no_memory;
     }
 
@@ -481,9 +576,8 @@ namespace sys::kernel::memory
             target->quota_pages = quota_pages;
             target->used_pages = 0U;
             target->delegated_pages = 0U;
+            target->extent_head = invalid_extent_index;
             target->extent_count = 0U;
-            for (auto& extent : target->extents)
-                extent = {};
             if (root_resource) {
                 for (u32 index = 0U; index < physical_region_count; ++index) {
                     if (!append_resource_extent(*target, physical_regions[index].base,
@@ -570,9 +664,12 @@ namespace sys::kernel::memory
             result = capability::lookup(target_owner.cspace, destination,
                                         object::type_t::memory_resource,
                                         capability::right_t::control, child_header);
-            if (result == error_t::success)
+            if (result == error_t::success) {
+                lock_allocator();
                 result = carve_resource_extents(parent, *reinterpret_cast<resource*>(child_header),
                                                 quota_pages);
+                unlock_allocator();
+            }
             if (result != error_t::success)
                 (void)destroy_resource(target_owner, destination);
         }
@@ -597,11 +694,15 @@ namespace sys::kernel::memory
         if (valid_reference(target.parent)) {
             auto* parent = reinterpret_cast<resource*>(object::resolve(target.parent));
             if (parent != nullptr) {
-                for (u32 index = 0U; index < target.extent_count; ++index) {
-                    if (!append_resource_extent(*parent, target.extents[index].base,
-                                                target.extents[index].pages))
-                        return error_t::no_memory;
+                lock_allocator();
+                while (target.extent_head != invalid_extent_index) {
+                    const u32 node = target.extent_head;
+                    target.extent_head = extent_nodes[node].next;
+                    --target.extent_count;
+                    extent_nodes[node].next = invalid_extent_index;
+                    insert_extent_node_sorted(*parent, node);
                 }
+                unlock_allocator();
                 __atomic_fetch_sub(&parent->delegated_pages, target.quota_pages, __ATOMIC_ACQ_REL);
             }
         }

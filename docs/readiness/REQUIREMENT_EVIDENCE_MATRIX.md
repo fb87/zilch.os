@@ -135,3 +135,11 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | MEM-007, MEM-008 | Resource-backed frame and page-table creation allocates only from the authority resource's owned extents. | Existing pager/resource tests plus nested parent/child allocation exhaustion. | Fixed frame/page-table metadata pools remain. |
 | MEM-010, MEM-012 | Quota, extent ownership, global allocation bitmap, zero/release, and parent/child accounting are enforced together. | Parent and child each exhaust exactly their physically owned pages, then return them without leaks. | Controlled concurrent split/retype/reclaim fuzz remains open. |
 | TST-023 | Nested four-page parent/two-page child split, retype, exhaustion, destroy, merge, and reuse sequence. | `[TEST] name=memory_extent_retype result=PASS`. | Full-RAM exhaustion, fragmentation permutations, and long-duration pressure remain open. |
+
+## Batch 0112 — scalable extent metadata and fragmentation recovery
+
+| Requirement | Implementation evidence | Runtime/certification evidence | Remaining limitations |
+|---|---|---|---|
+| MEM-006, MEM-009 | Shared 256-node extent pool; per-resource sorted linked lists; whole-node transfer, split-node creation, rollback, and adjacent coalescing. | `[TEST] name=memory_extent_metadata result=PASS`. | Bounded global pool; no unbounded tree or restartable operation. |
+| MEM-010, MEM-012 | Deterministic physical ordering, reusable metadata nodes, and global allocation bitmap preserve non-overlap and balanced ownership through fragmented return. | Twenty one-page children are returned in alternating order and successfully redelegated as one twenty-page resource. | Controlled concurrent split/retype/reclaim fuzz remains open. |
+| TST-023 | Fragmentation and metadata-reuse certification sequence. | `memory_extent_metadata` plus existing `memory_extent_retype`. | Full-RAM near-exhaustion and long-duration pressure remain open. |

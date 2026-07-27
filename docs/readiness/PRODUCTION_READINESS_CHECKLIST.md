@@ -188,11 +188,11 @@ Every completed requirement must link to:
 
 ## 4.2 Resource objects
 
-- [-] **MEM-006** Allocator-backed frame/page-table pools are charged through bounded memory-resource capabilities that now own explicit physical extents; fixed metadata pools remain open.
-- [-] **MEM-007** Frame allocation is capability-authorized and constrained to the exact physical extents owned by the selected memory resource; scalable extent indexing remains open.
+- [-] **MEM-006** Allocator-backed frame/page-table pools are charged through memory-resource capabilities with explicit physical extents; extent storage now uses a shared 256-node reusable metadata pool, while unbounded/scalable allocation remains open.
+- [-] **MEM-007** Frame allocation is capability-authorized and constrained to the exact physical extents owned by the selected memory resource; deterministic sorted extent traversal exists, while a scalable indexed allocator remains open.
 - [-] **MEM-008** Page-table allocation uses the same delegated physical extents and accounting; scalable page-table hierarchy and metadata remain open.
-- [-] **MEM-009** Bounded memory-resource objects split physical extents during delegation and retype owned pages into frame/page-table objects; scalable, restartable retyping remains open.
-- [-] **MEM-010** Per-resource and per-task quotas/accounting are enforced together with extent ownership; certification proves nested exhaustion and balanced extent return, while policy remains basic.
+- [-] **MEM-009** Memory-resource objects split and transfer physical extent nodes during delegation and retype owned pages into frame/page-table objects; rollback and coalescing exist, while restartable and unbounded retyping remain open.
+- [-] **MEM-010** Per-resource and per-task quotas/accounting are enforced together with extent ownership; certification now proves fragmented return, deterministic coalescing, metadata reuse, nested exhaustion, and balanced extent return, while policy remains basic.
 - [x] **MEM-011** Zero memory before delegation and reuse.
 - [-] **MEM-012** Generation, owner, extent, bitmap, double-release, and overlapping-delegation checks exist; exhaustive concurrent fault injection remains open.
 
@@ -563,7 +563,7 @@ Every completed requirement must link to:
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
-- [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, quota exhaustion, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion remains open.
+- [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, twenty-way fragmentation/coalescing, metadata reuse, quota exhaustion, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion and sustained pressure remain open.
 - [-] **TST-024** Attribute and mapping rejection paths verify cleanup/accounting rollback; systematic per-stage allocation fault injection remains open.
 
 ## 12.4 Long-duration certification

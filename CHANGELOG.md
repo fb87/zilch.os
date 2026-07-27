@@ -226,3 +226,13 @@
   tables, notifications, interrupts, scheduling contexts, address spaces,
   hypervisor objects, and the root memory resource.
 - Add compile-time range and uniqueness checks below the dynamic object ID base.
+
+## 0112 - Scalable extent metadata and fragmentation recovery
+
+- Replace per-resource fixed extent arrays with a shared 256-node extent metadata pool.
+- Keep each resource's extents in deterministic physical-address order.
+- Split and transfer extent nodes without copying physical ownership records.
+- Merge adjacent extents on every return and reuse released metadata nodes.
+- Add PL3 certification that creates twenty one-page child resources, returns
+  them in alternating order, redelegates the fully merged range, and verifies
+  frame allocation and complete cleanup.

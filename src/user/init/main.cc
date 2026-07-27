@@ -33,6 +33,7 @@ namespace
         memory_attributes_pressure = 16U,
         memory_resource_delegation = 17U,
         memory_extent_retype = 18U,
+        memory_extent_metadata = 19U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -260,6 +261,53 @@ namespace
                  passed;
         passed = sys::control(sys::abi::v1::control_operation::frame_destroy, parent_frame1) ==
                      success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                              parent_resource) == success &&
+                 passed;
+        return passed;
+    }
+
+    [[nodiscard]] bool test_memory_extent_metadata() noexcept {
+        constexpr sys::word_t root_task_selector = 1U;
+        constexpr sys::word_t root_resource_selector = 32U;
+        constexpr sys::word_t parent_resource = 33U;
+        constexpr sys::word_t first_child = 34U;
+        constexpr sys::word_t child_count = 20U;
+        constexpr sys::word_t frame_selector = 54U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+
+        bool passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                                   root_task_selector, root_resource_selector, parent_resource,
+                                   child_count) == success;
+        for (sys::word_t index = 0U; index < child_count && passed; ++index) {
+            passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                                  root_task_selector, parent_resource, first_child + index,
+                                  1U) == success;
+        }
+
+        /* Return alternating extents first to force a fragmented parent list. */
+        for (sys::word_t parity = 0U; parity < 2U && passed; ++parity) {
+            for (sys::word_t index = parity; index < child_count; index += 2U) {
+                passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                                      first_child + index) == success &&
+                         passed;
+            }
+        }
+
+        /* A full-size redelegation proves deterministic merge and node reuse. */
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                              root_task_selector, parent_resource, first_child,
+                              child_count) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create, first_child,
+                              frame_selector) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::frame_destroy, frame_selector) ==
+                     success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                              first_child) == success &&
                  passed;
         passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
                               parent_resource) == success &&
@@ -624,6 +672,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::memory_resource_delegation, resource_delegation_pass);
     const bool extent_retype_pass = test_memory_extent_retype();
     record(ledger, test_id::memory_extent_retype, extent_retype_pass);
+    const bool extent_metadata_pass = test_memory_extent_metadata();
+    record(ledger, test_id::memory_extent_metadata, extent_metadata_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {
