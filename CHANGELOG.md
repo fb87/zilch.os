@@ -1,3 +1,11 @@
+## 0151 - Program per-CPU tickless deadlines
+
+- Drive each ARM64 virtual timer from an absolute local scheduler deadline.
+- Integrate idle timer programming with the head of the per-CPU timeout queue.
+- Advance logical time by the programmed one-shot delta.
+- Validate frequency and interval bounds and saturate deadline arithmetic.
+- Close TIM-002, TIM-003, TIM-004, and SCH-019 with live certification evidence.
+
 ## 0150 - Bind pager replies to the pending fault
 
 - Reject pager mappings for a page other than the recorded fault page.

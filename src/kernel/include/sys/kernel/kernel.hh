@@ -204,6 +204,11 @@ namespace sys::kernel
 
         pr_info("timer per-cpu=%s cpus=%u\n", timers_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected));
+        if (!timers_online || !platform::timer::certification_valid())
+            arch::cpu::halt();
+#if CONFIG_SELFTEST
+        pr_info("[TEST] name=timer_deadline_timebase result=PASS mode=per-cpu-tickless\n");
+#endif
 
         platform::interrupt::send_ipi_all_others(platform::interrupt::tlb_shootdown_ipi);
         bool tlb_online = false;

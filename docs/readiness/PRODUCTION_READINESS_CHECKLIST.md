@@ -250,7 +250,7 @@ Every completed requirement must link to:
 - [ ] **SCH-016** Maximum lock hold times measured.
 - [ ] **SCH-017** IRQ-disabled sections measured and bounded.
 - [ ] **SCH-018** Logging has RT-safe deferred path.
-- [ ] **SCH-019** Tickless scheduling implemented where required.
+- [x] **SCH-019** Active CPUs retain a one-tick scheduling quantum while idle CPUs program the next timeout deadline or a bounded one-second housekeeping deadline.
 - [ ] **SCH-020** Interrupt latency target defined and met.
 - [ ] **SCH-021** Preemption latency target defined and met.
 - [ ] **SCH-022** Cross-CPU wake latency target defined and met.
@@ -279,9 +279,9 @@ Every completed requirement must link to:
 ## 6.2 Timers
 
 - [x] **TIM-001** Architectural virtual timer initializes and per-CPU progress is verified.
-- [ ] **TIM-002** Per-CPU deadline programming implemented.
-- [ ] **TIM-003** Tickless timeout queue integrated.
-- [ ] **TIM-004** Counter frequency and overflow behavior validated.
+- [x] **TIM-002** Each ARM64 CPU programs its local virtual timer from an absolute scheduler deadline.
+- [x] **TIM-003** The head of each per-CPU timeout queue drives idle timer programming without losing elapsed logical ticks.
+- [x] **TIM-004** Counter frequency, hardware interval bounds, zero-delay behavior, and deadline-addition overflow are validated and fail closed.
 - [x] **TIM-005** Suspend/resume is explicitly out of scope for 1.0; timer and scheduler state assume one uninterrupted boot.
 
 ## 6.3 Platform support

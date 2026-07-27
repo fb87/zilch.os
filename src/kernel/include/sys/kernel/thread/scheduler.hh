@@ -1213,6 +1213,19 @@ namespace sys::kernel::thread
         }
     }
 
+    [[nodiscard]] inline u64 next_timer_deadline(cpu_id_t cpu, u64 now) noexcept {
+        if (cpu >= maximum_cpu_count || !user_execution_active[cpu] || !user_cpu_idle[cpu])
+            return now == ~0ULL ? now : now + 1U;
+        const arch::irq::irq_state_t irq_state = lock_timeout_queue(cpu);
+        const u64 idle_deadline = now <= ~0ULL - platform::timer::ticks_per_second
+                                      ? now + platform::timer::ticks_per_second
+                                      : ~0ULL;
+        const u64 deadline =
+            timeout_queue_counts[cpu] == 0U ? idle_deadline : timeout_queues[cpu][0].deadline;
+        unlock_timeout_queue(cpu, irq_state);
+        return deadline;
+    }
+
     inline void save_current_user(const arch::thread::context& frame) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         if (user_execution_active[cpu]) {
@@ -1365,15 +1378,6 @@ namespace sys::kernel::thread
     }
 
     [[nodiscard]] inline bool is_kernel_idle_frame(const arch::thread::context& frame) noexcept {
-        /*
-         * An IRQ interrupts at an instruction inside sys_kernel_user_idle(),
-         * normally the architecture wait-for-event instruction, rather than
-         * at the function entry address.  The per-CPU user_cpu_idle flag is
-         * published only when the scheduler deliberately enters this EL1h
-         * idle context and is cleared before installing an EL0 context.
-         * Combined with the lower-EL IRQ vector check in arch.cc, EL1h is the
-         * correct architectural provenance test here.
-         */
         return (frame.status & 0xfU) == 0x5U;
     }
 
@@ -1383,11 +1387,6 @@ namespace sys::kernel::thread
             return false;
         }
 
-        /*
-         * This is the only EL1 exception frame that may be replaced by an
-         * EL0 context.  IRQs interrupting syscall, fault, printk, scheduler,
-         * or other kernel execution must return to that kernel instruction.
-         */
         expire_ipc_timeouts(cpu, platform::timer::ticks(cpu));
         const u32 old = current_user_thread[cpu];
         const u32 next = next_runnable(cpu, old);
@@ -1480,7 +1479,8 @@ namespace sys::kernel::thread
         value.message[3] = static_cast<word_t>(frame.instruction_pointer);
         value.waiting_endpoint = value.owner->fault_endpoint;
         value.ipc_timeout_active = true;
-        value.ipc_deadline = platform::timer::ticks(value.pinned_cpu) + fault_timeout_ticks;
+        value.ipc_deadline = platform::timer::deadline_after(
+            platform::timer::ticks(value.pinned_cpu), fault_timeout_ticks);
         arm_ipc_timeout(value);
         prepare_block(frame, state::blocked_fault);
 

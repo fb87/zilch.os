@@ -15,7 +15,9 @@ priority. Consumed donated ticks remain charged to the original chain.
 Per-CPU timeout queues are ordered by absolute deadline. Arming the same thread
 replaces its previous entry. Timer expiry pops only due entries, validates the
 thread generation and current deadline, and uses a non-blocking lifecycle claim
-so IRQ context never spins behind an interrupted IPC transition.
+so IRQ context never spins behind an interrupted IPC transition. Idle CPUs
+program the queue head directly; runnable CPUs retain a one-tick scheduling
+quantum. Long one-shot intervals advance logical time by their programmed delta.
 
 The mechanism is compiled into product builds. Measured latency limits and
 multi-hour real-time stress evidence remain required before production

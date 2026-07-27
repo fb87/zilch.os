@@ -70,6 +70,13 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
         } else {
             userspace_deactivate = sys::kernel::interrupt::dispatch(irq);
         }
+        if (irq == sys::platform::interrupt::virtual_timer_irq ||
+            irq == sys::platform::interrupt::reschedule_ipi) {
+            const sys::cpu_id_t cpu = sys::arch::cpu::current_id();
+            const sys::u64 now = sys::platform::timer::ticks(cpu);
+            sys::platform::timer::program_deadline(
+                cpu, sys::kernel::thread::next_timer_deadline(cpu, now));
+        }
         if (irq < 1020U) {
             sys::platform::interrupt::complete(irq);
             if (!userspace_deactivate)

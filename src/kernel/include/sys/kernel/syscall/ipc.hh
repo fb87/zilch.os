@@ -194,7 +194,9 @@ namespace sys::kernel::syscall
         value.ipc_timeout_active = (descriptor & abi::v1::ipc_timeout_valid) != 0U;
         const u64 timeout = descriptor & ~abi::v1::ipc_timeout_valid;
         value.ipc_deadline =
-            value.ipc_timeout_active ? platform::timer::ticks(value.pinned_cpu) + timeout : 0U;
+            value.ipc_timeout_active
+                ? platform::timer::deadline_after(platform::timer::ticks(value.pinned_cpu), timeout)
+                : 0U;
         if (value.ipc_timeout_active)
             thread::arm_ipc_timeout(value);
     }

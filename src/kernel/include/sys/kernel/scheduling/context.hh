@@ -8,6 +8,11 @@ namespace sys::kernel::scheduling
     inline constexpr u8 lowest_priority = 0U;
     inline constexpr u8 highest_priority = 255U;
     inline constexpr u32 maximum_donation_depth = 8U;
+    inline constexpr u64 maximum_time = ~0ULL;
+
+    [[nodiscard]] inline constexpr bool deadline_fits(u64 now, u64 delay) noexcept {
+        return delay <= maximum_time - now;
+    }
 
     struct context {
         object::header_t object{};
@@ -45,6 +50,8 @@ namespace sys::kernel::scheduling
         if (budget == 0U || period == 0U || budget > period || priority > value.maximum_priority) {
             return error_t::invalid_argument;
         }
+        if (!deadline_fits(now, period))
+            return error_t::invalid_argument;
         value.priority = priority;
         value.effective_priority = priority;
         value.budget_ticks = budget;
@@ -64,8 +71,9 @@ namespace sys::kernel::scheduling
             return;
         }
         const u64 elapsed = now - value.next_replenishment;
-        const u64 periods = (elapsed / value.period_ticks) + 1U;
-        value.next_replenishment += periods * value.period_ticks;
+        const u64 remainder = elapsed % value.period_ticks;
+        const u64 until_next = value.period_ticks - remainder;
+        value.next_replenishment = deadline_fits(now, until_next) ? now + until_next : maximum_time;
         value.consumed_ticks = 0U;
         value.throttled = false;
     }
@@ -133,3 +141,6 @@ namespace sys::kernel::scheduling
         receiver.donation_depth = 0U;
     }
 } // namespace sys::kernel::scheduling
+
+static_assert(sys::kernel::scheduling::deadline_fits(0U, ~0ULL));
+static_assert(!sys::kernel::scheduling::deadline_fits(~0ULL, 1U));
