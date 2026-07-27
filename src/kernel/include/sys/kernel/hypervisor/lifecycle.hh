@@ -7,6 +7,27 @@
 
 namespace sys::kernel::hypervisor
 {
+    inline void scrub_bytes(void* address, usize_t size) noexcept {
+        auto* bytes = reinterpret_cast<volatile u8*>(address);
+        for (usize_t index = 0U; index < size; ++index)
+            bytes[index] = 0U;
+    }
+
+    inline void scrub_vcpu_state(virtual_cpu_t& vcpu) noexcept {
+        vcpu.interrupt_state.reset();
+        vcpu.timer.reset();
+        vcpu.virtual_irq_pending = false;
+        vcpu.virtual_irq = 0U;
+        vcpu.previous_host_cpu = 0U;
+        vcpu.migration_count = 0U;
+        vcpu.run_generation = 0U;
+        vcpu.executed_quanta = 0U;
+        vcpu.virtual_ipi_count = 0U;
+        scrub_bytes(&vcpu.context, sizeof(vcpu.context));
+        scrub_bytes(&vcpu.last_exit, sizeof(vcpu.last_exit));
+        scrub_bytes(&vcpu.last_diagnostic, sizeof(vcpu.last_diagnostic));
+    }
+
     [[nodiscard]] inline error_t initialize() noexcept {
         if constexpr (!arch::hypervisor::active)
             return error_t::unsupported;
@@ -69,19 +90,7 @@ namespace sys::kernel::hypervisor
             const error_t result = stop_vcpu(vcpus[index]);
             if (result != error_t::success)
                 return result;
-            for (u32 reg = 0U; reg < 31U; ++reg)
-                vcpus[index].context.x[reg] = 0U;
-            vcpus[index].context.pc = 0U;
-            vcpus[index].context.pstate = 0U;
-            vcpus[index].context.sp_el0 = 0U;
-            vcpus[index].context.sp_el1 = 0U;
-            vcpus[index].context.elr_el1 = 0U;
-            vcpus[index].context.spsr_el1 = 0U;
-            vcpus[index].last_exit.reason = abi::v1::vm_exit_reason::none;
-            vcpus[index].last_exit.syndrome = 0U;
-            vcpus[index].last_exit.fault_address = 0U;
-            vcpus[index].last_exit.guest_pc = 0U;
-            vcpus[index].last_exit.qualification = 0U;
+            scrub_vcpu_state(vcpus[index]);
         }
         for (auto& mapping : vm.mappings)
             mapping = {};

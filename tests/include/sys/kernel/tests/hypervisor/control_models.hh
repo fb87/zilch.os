@@ -802,9 +802,29 @@ namespace sys::kernel::hypervisor::test
         for (u32 index = 0U; index < 2U; ++index) {
             teardown_vcpus[index].lifecycle = vcpu_state::runnable;
             teardown_vcpus[index].state = vm_state::runnable;
+            teardown_vcpus[index].context.x[30] = 0xfeedfacecafebeefULL;
+            teardown_vcpus[index].context.ttbr0_el1 = 0xdead0000ULL + index;
+            teardown_vcpus[index].context.tpidr_el0 = 0x12340000ULL + index;
+            teardown_vcpus[index].timer = {0xffff0000ULL + index, true};
+            teardown_vcpus[index].interrupt_state = {1ULL << index, 2ULL << index, 4ULL << index};
+            teardown_vcpus[index].last_exit.syndrome = 0xbad00000ULL + index;
+            teardown_vcpus[index].last_diagnostic.value = 0xabad1deaULL + index;
         }
         const u16 released_a = isolation_a.vmid;
         check(teardown_vm(isolation_a, teardown_vcpus, 2U) == error_t::success, 52U);
+        for (u32 index = 0U; index < 2U; ++index) {
+            check(teardown_vcpus[index].context.x[30] == 0U &&
+                      teardown_vcpus[index].context.ttbr0_el1 == 0U &&
+                      teardown_vcpus[index].context.tpidr_el0 == 0U &&
+                      teardown_vcpus[index].timer.deadline == 0U &&
+                      !teardown_vcpus[index].timer.armed &&
+                      teardown_vcpus[index].interrupt_state.pending == 0U &&
+                      teardown_vcpus[index].interrupt_state.active == 0U &&
+                      teardown_vcpus[index].interrupt_state.masked == 0U &&
+                      teardown_vcpus[index].last_exit.syndrome == 0U &&
+                      teardown_vcpus[index].last_diagnostic.value == 0U,
+                  60U + index);
+        }
         u16 reused_vmid = 0U;
         check(allocate_vmid(reused_vmid) == error_t::success, 53U);
         check(reused_vmid == released_a, 54U);

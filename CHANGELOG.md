@@ -1,3 +1,10 @@
+## 0129 - Scrub reused memory and architectural state
+
+- Certify that a poisoned physical page is zeroed across release and immediate reuse.
+- Clear retained user-thread register, IPC, scheduling, fault, and diagnostic state at teardown.
+- Scrub complete vCPU register, system-register, timer, interrupt, exit, and diagnostic state.
+- Extend hypervisor teardown certification with poisoned-state assertions.
+
 ## 0128 - Unmapped kernel stack guard pages
 
 - Replace the coarse ARM64 kernel identity block with a shared L2 identity map.

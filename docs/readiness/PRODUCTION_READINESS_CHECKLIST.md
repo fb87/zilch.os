@@ -485,7 +485,7 @@ Every completed requirement must link to:
 - [ ] **SEC-003** Kernel read-only data protected after initialization.
 - [x] **SEC-004** Every EL1 and EL2 per-CPU stack has an unmapped guard page below its 32 KiB usable region, plus exception-time bounds/canary checks and retained high-water marks. Bootstrap certification verifies all guard and adjacent usable PTEs.
 - [ ] **SEC-005** User copy routines validate full ranges and overflow.
-- [ ] **SEC-006** Reused memory and architectural state are zeroed.
+- [x] **SEC-006** Reusable physical pages are scrubbed on release and allocation; user-thread and vCPU architectural, IPC, timer, interrupt, exit, and diagnostic state is cleared before slot reuse. Certification poisons and verifies both page and vCPU reuse boundaries.
 
 ## 10.2 Architecture hardening
 

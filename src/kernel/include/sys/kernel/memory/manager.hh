@@ -134,6 +134,36 @@ namespace sys::kernel::memory
         __asm__ volatile("dsb ishst" ::: "memory");
     }
 
+    [[nodiscard]] inline bool page_is_zero(paddr_t address) noexcept {
+        const auto* words = reinterpret_cast<const volatile u64*>(static_cast<uintptr_t>(address));
+        for (u32 index = 0U; index < page_size / sizeof(u64); ++index) {
+            if (words[index] != 0U)
+                return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] inline error_t allocate_physical_page(paddr_t& address) noexcept;
+    [[nodiscard]] inline error_t release_physical_page(paddr_t address) noexcept;
+
+    [[nodiscard]] inline bool verify_page_reuse_scrubbing() noexcept {
+        paddr_t first{};
+        if (allocate_physical_page(first) != error_t::success)
+            return false;
+        auto* words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(first));
+        for (u32 index = 0U; index < page_size / sizeof(u64); ++index)
+            words[index] = 0xa5a55a5adeadbeefULL ^ static_cast<u64>(index);
+        __asm__ volatile("dsb ishst" ::: "memory");
+        if (release_physical_page(first) != error_t::success)
+            return false;
+
+        paddr_t reused{};
+        if (allocate_physical_page(reused) != error_t::success)
+            return false;
+        const bool valid = reused == first && page_is_zero(reused);
+        return release_physical_page(reused) == error_t::success && valid;
+    }
+
     [[nodiscard]] inline bool page_used(u32 index) noexcept {
         return (allocation_bitmap[index / 64U] & (1ULL << (index % 64U))) != 0U;
     }

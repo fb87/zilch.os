@@ -276,6 +276,32 @@ namespace sys::kernel::thread
     }
 
     inline void clear_user_bundle(thread& target, task::task& owner) noexcept {
+        arch::thread::clear(target.context);
+        for (usize_t index = 0U; index < 4U; ++index) {
+            target.message[index] = 0U;
+            target.pending_message[index] = 0U;
+        }
+        target.pending_sender = static_cast<thread_id_t>(-1);
+        target.pending_sender_generation = 0U;
+        target.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
+        target.pending_result = error_t::success;
+        target.ipc_deadline = 0U;
+        target.reports = 0U;
+        target.fuzz_seed = 0U;
+        target.fuzz_iterations = 0U;
+        target.fuzz_failures = 0U;
+        target.faults = 0U;
+        target.scheduling_context.priority = 0U;
+        target.scheduling_context.effective_priority = 0U;
+        target.scheduling_context.maximum_priority = 0U;
+        target.scheduling_context.donation_depth = 0U;
+        target.scheduling_context.budget_ticks = 0U;
+        target.scheduling_context.period_ticks = 0U;
+        target.scheduling_context.consumed_ticks = 0U;
+        target.scheduling_context.next_replenishment = 0U;
+        target.scheduling_context.affinity = 0U;
+        target.scheduling_context.enabled = false;
+        target.scheduling_context.throttled = false;
         target.owner = nullptr;
         target.object = {};
         target.address_space.object = {};
@@ -520,6 +546,8 @@ namespace sys::kernel::thread
 #if CONFIG_SELFTEST
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
         if (!arch::memory::kernel_stack_guards_valid())
+            return error_t::invalid_argument;
+        if (!memory::verify_page_reuse_scrubbing())
             return error_t::invalid_argument;
         if (memory::physical_region_count == 0U ||
             memory::physical_region_count > memory::maximum_physical_regions ||
