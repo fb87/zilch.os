@@ -74,7 +74,7 @@ Every completed requirement must link to:
 
 - [x] **PRD-001** Add `CONFIG_SELFTEST`. Evidence: `Makefile` release/certification selection.
 - [x] **PRD-002** Add `CONFIG_HYPERVISOR_SELFTEST`. Evidence: `Makefile` and guarded hypervisor test entry points.
-- [-] **PRD-003** Exclude all self-test code from production builds. Test dispatch and the embedded guest fixture are excluded; hypervisor model implementation still needs extraction from production headers.
+- [x] **PRD-003** Self-test dispatch, IPC fuzz decoding, modeled hypervisor tests, acceptance reporting, embedded guest fixtures, and verbose EL2 diagnostics are excluded or disabled in release builds.
 - [x] **PRD-004** Ensure production kernel boots with all self-test options disabled. Runtime evidence: release boot reports `selftests=disabled`.
 - [x] **PRD-005** Ensure production binary contains no profile-specific guest images or test fixtures. Evidence: release ELF symbol/string gate in batch 0079.
 - [-] **PRD-006** Add CI jobs for both production and self-test configurations. Local build gates exist; hosted CI evidence is not yet retained.
@@ -90,11 +90,11 @@ Every completed requirement must link to:
 
 ## 1.3 Module boundaries
 
-- [ ] **PRD-013** Split hypervisor object model from ARM64 EL2 backend.
-- [ ] **PRD-014** Split stage-2 translation management into its own module.
-- [ ] **PRD-015** Split virtual interrupt and timer state into dedicated modules.
-- [ ] **PRD-016** Split VM lifecycle and VMID allocation into dedicated modules.
-- [ ] **PRD-017** Move profile tests into test-only modules.
+- [x] **PRD-013** Architecture-independent VM/vCPU objects live under `kernel/hypervisor/object.hh`; ARM64 entry/exit and register handling remain under `arch/arm64`.
+- [x] **PRD-014** Stage-2 translation management is isolated in `kernel/hypervisor/stage2.hh`.
+- [x] **PRD-015** Virtual interrupt and timer state are isolated in `virtual_irq.hh` and `virtual_timer.hh`.
+- [x] **PRD-016** VM lifecycle and VMID allocation are isolated in `lifecycle.hh` and `vmid.hh`.
+- [x] **PRD-017** Hypervisor control models and guest fixtures live under test-only include/fixture paths selected only by certification builds.
 - [ ] **PRD-018** Establish maximum source/header size and dependency rules.
 
 ---
@@ -494,7 +494,7 @@ Every completed requirement must link to:
 - [ ] **SEC-009** Pointer authentication strategy evaluated.
 - [ ] **SEC-010** Branch target identification strategy evaluated.
 - [x] **SEC-011** PAN is enabled and UAO disabled on CPUs advertising each extension, with bootstrap readback verification; unsupported baseline Armv8-A CPUs safely skip optional instructions.
-- [ ] **SEC-012** Debug interfaces disabled or capability-controlled in production.
+- [x] **SEC-012** Release kernels exclude IPC fuzz/debug decoding, deny the guest diagnostic hypercall, omit detailed EL2 console walks, and retain only bounded production diagnostics.
 
 ## 10.3 Concurrency hardening
 

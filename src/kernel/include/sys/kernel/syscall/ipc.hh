@@ -15,10 +15,11 @@
 
 namespace sys::kernel::syscall
 {
-    inline volatile u64 total_fuzz_operations = 0U;
-    inline volatile u64 total_fuzz_failures = 0U;
     inline volatile u64 total_ipc_rendezvous = 0U;
     inline volatile u32 next_reply_nonce = 1U;
+#if CONFIG_SELFTEST
+    inline volatile u64 total_fuzz_operations = 0U;
+    inline volatile u64 total_fuzz_failures = 0U;
     inline constexpr u64 fuzz_progress_interval = 16384U;
     inline volatile u64 next_fuzz_progress = fuzz_progress_interval;
     inline u64 previous_cpu_operations[thread::maximum_cpu_count]{};
@@ -73,6 +74,7 @@ namespace sys::kernel::syscall
         verification::report_final(
             operations, __atomic_load_n(&total_fuzz_failures, __ATOMIC_ACQUIRE), all_cpus_advanced);
     }
+#endif
 
     [[nodiscard]] inline error_t resolve_endpoint(thread::thread& current, capability_id_t selector,
                                                   capability::right_t required,
@@ -103,6 +105,7 @@ namespace sys::kernel::syscall
         arch::syscall::set_result(frame, static_cast<word_t>(static_cast<s64>(result)));
     }
 
+#if CONFIG_SELFTEST
     [[nodiscard]] inline error_t decode_fuzz_result(const thread::thread& current,
                                                     const arch::thread::context& frame) noexcept {
         const word_t endpoint = arch::syscall::argument(frame, 0U);
@@ -160,6 +163,7 @@ namespace sys::kernel::syscall
             log_fuzz_cpu_health(operations);
         }
     }
+#endif
 
     inline void capture_transfer(thread::thread& value,
                                  const arch::thread::context& frame) noexcept {
@@ -505,6 +509,7 @@ namespace sys::kernel::syscall
             return true;
         }
 
+#if CONFIG_SELFTEST
         if (arch::syscall::argument(frame, 6U) == abi::v1::fuzz_magic) {
             /*
              * x6 is a test-only discriminator, not part of normal IPC.
@@ -518,6 +523,7 @@ namespace sys::kernel::syscall
             set_error(frame, result);
             return true;
         }
+#endif
 
         const auto operation =
             static_cast<abi::v1::ipc_operation>(arch::syscall::argument(frame, 1U));

@@ -411,6 +411,7 @@ namespace sys::arch::hypervisor
                         frame.x[0] = guest_report_mask[id];
                         return true;
                     case abi::v1::guest_hypercall::diagnostic:
+#if CONFIG_VERBOSE_DIAGNOSTICS
                         diagnose_guest_mmu(frame);
                         if (frame.x[1] == 1U) {
                             /*
@@ -427,6 +428,9 @@ namespace sys::arch::hypervisor
                             guest_mmu_enable_armed[id] = true;
                         }
                         frame.x[0] = 0U;
+#else
+                        frame.x[0] = static_cast<u64>(static_cast<s64>(error_t::denied));
+#endif
                         return true;
                     case abi::v1::guest_hypercall::shutdown: {
                         auto* exit = active_exit[id];
@@ -463,6 +467,7 @@ namespace sys::arch::hypervisor
                  * mappings and intentionally enables both M and WXN here.
                  */
                 const u64 applied_sctlr = sanitize_guest_sctlr_el1(trapped_operand);
+#if CONFIG_VERBOSE_DIAGNOSTICS
                 console_puts("\n[HV-MMU] phase=el2-enable");
                 console_field("ec", exception_class);
                 console_field("esr", syndrome);
@@ -475,6 +480,7 @@ namespace sys::arch::hypervisor
                 console_field("resume_spsr", frame.status);
                 console_field("hcr_before", hcr);
                 console_putc('\n');
+#endif
                 /*
                  * Apply the guest SCTLR value and discard any stale stage-1
                  * translation or instruction-cache state before the first
@@ -501,6 +507,7 @@ namespace sys::arch::hypervisor
                                    "=r"(ttbr0_readback), "=r"(hcr_readback)
                                  : "r"(post_enable_pc)
                                  : "memory");
+#if CONFIG_VERBOSE_DIAGNOSTICS
                 console_puts("[HV-MMU] phase=el2-resume");
                 console_field("combined_par", combined_par);
                 console_field("sctlr", sctlr_readback);
@@ -510,6 +517,7 @@ namespace sys::arch::hypervisor
                 console_field("elr", post_enable_pc);
                 console_field("spsr", frame.status);
                 console_putc('\n');
+#endif
 
                 guest_mmu_enable_armed[id] = false;
                 /*
@@ -531,6 +539,7 @@ namespace sys::arch::hypervisor
             const auto reason = (exception_class == 0x24U || exception_class == 0x25U)
                                     ? abi::v1::vm_exit_reason::stage2_fault
                                     : abi::v1::vm_exit_reason::unexpected;
+#if CONFIG_VERBOSE_DIAGNOSTICS
             u64 hpfar = 0U;
             __asm__ volatile("mrs %0, hpfar_el2" : "=r"(hpfar));
             console_puts("\n[HV-TRAP] phase=guest-bootstrap");
@@ -541,6 +550,7 @@ namespace sys::arch::hypervisor
             console_field("elr", frame.instruction_pointer);
             console_field("spsr", frame.status);
             console_putc('\n');
+#endif
             complete_guest_exit(frame, syndrome, reason);
             return true;
         }

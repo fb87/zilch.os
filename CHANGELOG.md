@@ -1,3 +1,10 @@
+## 0135 - Lock down product/test boundaries
+
+- Compile IPC fuzz counters, decoders, and progress reporting only in certification builds.
+- Deny guest diagnostic hypercalls and omit detailed EL2 page-table/register walks in release.
+- Verify release images contain no fuzz, profile-model, acceptance, or HV-walk strings.
+- Reconcile the completed VM object, stage-2, virtual IRQ/timer, lifecycle, VMID, and test-module split.
+
 ## 0134 - Versioned production trace policy
 
 - Add version-1 IRQ, scheduler, IPC, VM-exit, and user-fault event records.
