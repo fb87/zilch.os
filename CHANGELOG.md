@@ -1,3 +1,10 @@
+## 0136 - Freeze native ABI v1
+
+- Freeze native ABI 1.0.0 register, numeric, size, alignment, and field-offset contracts.
+- Move fuzz endpoints, cases, and magic values out of the product ABI into certification ABI.
+- Expand ABI checks to all public structures, enum widths, trivial-copy/layout properties, and selected numeric values.
+- Document compatibility, deprecation, release-class, and diagnostic-version policies.
+
 ## 0135 - Lock down product/test boundaries
 
 - Compile IPC fuzz counters, decoders, and progress reporting only in certification builds.

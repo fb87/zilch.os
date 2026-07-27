@@ -9,7 +9,7 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | PRD-004 | Complete | Boot flow | release build | product boot log with selftests disabled | QEMU evidence retained externally |
 | PRD-005 | Complete | Guest ownership | `src/user/guests/test-arm64/` | guest-boundary and production ELF gates | Certification uses temporary blob adapter |
 | PRD-007..009 | Complete | ABI separation | `include/abi`, `tests/include/sys/test_abi` | production ELF gate | None |
-| PRD-010..012 | In progress | `docs/architecture/abi/ABI_COMPATIBILITY.md` | `include/abi/sys/v1`, `tests/abi/layout.cc` | `make abi-check` | ABI remains C++-only and not frozen |
+| PRD-010..012 / DOC-014 | COMPLETE | `include/abi/sys/v1`, `tests/abi/layout.cc`, `docs/architecture/abi/ABI_COMPATIBILITY.md`, `docs/readiness/RELEASE_AND_COMPATIBILITY_POLICY.md` | `make abi-check abi-headers-check`; certification and release builds | Native ABI v1 remains intentionally C++-namespaced; a future C binding must preserve the same wire contract |
 | PRD-013..017 | Complete | Hypervisor module boundaries | `src/kernel/include/sys/kernel/hypervisor/`, `tests/.../control_models.hh` | ARM64 certification/release; source gate | Header-only implementation remains |
 | PRD-018 | In progress | Module rules | module files below current 500-line limit | source line-count inspection | Automated dependency rule still open |
 | IPC-017..020 | In progress | Fault IPC/pager docs | scheduler, IPC, memory server | two-client pager runtime PASS | pager death/timeout/nested faults open |

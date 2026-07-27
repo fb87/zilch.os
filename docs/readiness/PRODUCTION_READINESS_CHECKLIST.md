@@ -84,9 +84,9 @@ Every completed requirement must link to:
 - [x] **PRD-007** Remove acceptance-report operations from the production ABI. Evidence: separate `sys::test_abi` in batch 0079.
 - [x] **PRD-008** Remove worker-tick and other certification operations from the production ABI. Product process/object operations remain product ABI mechanisms.
 - [x] **PRD-009** Move hypervisor self-test entry points behind test configuration. Evidence: separate certification ABI and `CONFIG_HYPERVISOR_SELFTEST` guest-object gating in batch 0079.
-- [-] **PRD-010** Version the native `sys` ABI. Headers use `sys/v1`, but compatibility/deprecation guarantees are not frozen.
-- [ ] **PRD-011** Document compatibility and deprecation rules.
-- [ ] **PRD-012** Add ABI layout checks for all public structures.
+- [x] **PRD-010** Native ABI 1.0.0 is frozen through `sys::abi::v1`, `version.hh`, 64-bit register calling conventions, and immutable published numeric values.
+- [x] **PRD-011** Compatibility, additive-minor-change, deprecation-duration, identifier-reuse, and major-version rules are documented.
+- [x] **PRD-012** `abi-check` covers every public structure plus all enum widths and selected frozen values; `abi-headers-check` independently compiles every public header.
 
 ## 1.3 Module boundaries
 
@@ -602,7 +602,7 @@ Every completed requirement must link to:
 - [ ] **DOC-011** Locking and teardown protocols documented.
 - [ ] **DOC-012** Hypervisor guest-visible architecture documented.
 - [ ] **DOC-013** Userspace server APIs documented.
-- [ ] **DOC-014** Release and compatibility policy documented.
+- [x] **DOC-014** Semantic release classes, ABI/diagnostic compatibility, deprecation, migration, and mandatory release gates are documented.
 
 ---
 

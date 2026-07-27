@@ -12,6 +12,9 @@
 #include <sys/types.hh>
 
 #include <abi/sys/v1/syscall_numbers.hh>
+#if CONFIG_SELFTEST
+#include <sys/test_abi/v1/certification.hh>
+#endif
 
 namespace sys::kernel::syscall
 {
@@ -111,7 +114,7 @@ namespace sys::kernel::syscall
         const word_t endpoint = arch::syscall::argument(frame, 0U);
         const word_t operation = arch::syscall::argument(frame, 1U);
         const word_t id = arch::syscall::argument(frame, 3U);
-        if (endpoint != abi::v1::debug_endpoint && endpoint != abi::v1::fuzz_endpoint)
+        if (endpoint != test_abi::v1::debug_endpoint && endpoint != test_abi::v1::fuzz_endpoint)
             return error_t::denied;
         if (operation != static_cast<word_t>(abi::v1::ipc_operation::call))
             return error_t::denied;
@@ -125,21 +128,22 @@ namespace sys::kernel::syscall
         ++current.fuzz_iterations;
         const u64 operations = __atomic_add_fetch(&total_fuzz_operations, 1U, __ATOMIC_RELAXED);
         error_t expected = error_t::unsupported;
-        const auto test_case = static_cast<abi::v1::fuzz_case>(arch::syscall::argument(frame, 2U));
+        const auto test_case =
+            static_cast<test_abi::v1::fuzz_case>(arch::syscall::argument(frame, 2U));
         switch (test_case) {
-            case abi::v1::fuzz_case::valid_call:
-            case abi::v1::fuzz_case::random_payload:
+            case test_abi::v1::fuzz_case::valid_call:
+            case test_abi::v1::fuzz_case::random_payload:
                 expected = error_t::success;
                 break;
-            case abi::v1::fuzz_case::invalid_capability:
-            case abi::v1::fuzz_case::invalid_operation:
-            case abi::v1::fuzz_case::boundary_capability:
+            case test_abi::v1::fuzz_case::invalid_capability:
+            case test_abi::v1::fuzz_case::invalid_operation:
+            case test_abi::v1::fuzz_case::boundary_capability:
                 expected = error_t::denied;
                 break;
-            case abi::v1::fuzz_case::wrong_thread_identity:
+            case test_abi::v1::fuzz_case::wrong_thread_identity:
                 expected = error_t::invalid_argument;
                 break;
-            case abi::v1::fuzz_case::mixed:
+            case test_abi::v1::fuzz_case::mixed:
                 expected = result;
                 break;
         }
@@ -510,7 +514,7 @@ namespace sys::kernel::syscall
         }
 
 #if CONFIG_SELFTEST
-        if (arch::syscall::argument(frame, 6U) == abi::v1::fuzz_magic) {
+        if (arch::syscall::argument(frame, 6U) == test_abi::v1::fuzz_magic) {
             /*
              * x6 is a test-only discriminator, not part of normal IPC.
              * Clear it in the saved context before returning so a caller that
