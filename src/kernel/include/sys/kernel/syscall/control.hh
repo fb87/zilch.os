@@ -277,6 +277,9 @@ namespace sys::kernel::syscall
                     case 20U:
                         name = "memory_pressure_rollback";
                         break;
+                    case 21U:
+                        name = "memory_server_protocol";
+                        break;
                     default:
                         break;
                 }

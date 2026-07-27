@@ -21,6 +21,13 @@ sys_arm64_pager_client_image_start:
 .balign 4096
 .global sys_arm64_pager_client_image_end
 sys_arm64_pager_client_image_end:
+
+.global sys_arm64_memory_client_image_start
+sys_arm64_memory_client_image_start:
+.incbin MEMORY_CLIENT_ELF_PATH
+.balign 4096
+.global sys_arm64_memory_client_image_end
+sys_arm64_memory_client_image_end:
 #else
 .section .user_text,"ax"
 .balign 4096

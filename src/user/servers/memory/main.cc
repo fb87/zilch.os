@@ -9,10 +9,20 @@ namespace
 {
     inline constexpr sys::word_t endpoint = 10U;
     inline constexpr sys::word_t notification = 14U;
-    inline constexpr sys::word_t working_frame = 12U;
-    inline constexpr sys::word_t client_count = 2U;
+    inline constexpr sys::word_t resource = 15U;
+    inline constexpr sys::word_t pager_frame = 12U;
+    inline constexpr sys::word_t service_frame_base = 16U;
+    inline constexpr sys::word_t pager_client_count = 2U;
+    inline constexpr sys::word_t pressure_client_count = 3U;
     inline constexpr sys::word_t completion_magic = 0x50414745U;
     inline constexpr sys::word_t failure_badge_base = 1U << 16U;
+
+    struct handle_state final {
+        bool allocated{};
+        sys::word_t owner{};
+    };
+
+    handle_state handles[sys::abi::v1::memory_server_max_handles]{};
 
     [[noreturn]] void fail(sys::word_t code) noexcept {
         (void)sys::control(sys::abi::v1::control_operation::notification_signal, notification,
@@ -20,12 +30,59 @@ namespace
         for (;;)
             asm volatile("" ::: "memory");
     }
+
+    [[nodiscard]] sys::word_t service_request(const sys::abi::v1::ipc_result& request,
+                                              sys::word_t& value) noexcept {
+        const auto operation = static_cast<sys::abi::v1::memory_server_operation>(request.message0);
+        const sys::word_t handle = request.message1;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t invalid = static_cast<sys::word_t>(sys::error_t::invalid_argument);
+        const sys::word_t denied = static_cast<sys::word_t>(sys::error_t::denied);
+
+        switch (operation) {
+            case sys::abi::v1::memory_server_operation::allocate_frame:
+                if (handle >= sys::abi::v1::memory_server_max_handles || handles[handle].allocated)
+                    return invalid;
+                if (sys::control(sys::abi::v1::control_operation::resource_frame_create, resource,
+                                 service_frame_base + handle) != success)
+                    return static_cast<sys::word_t>(sys::error_t::no_memory);
+                handles[handle].allocated = true;
+                handles[handle].owner = request.sender;
+                value = handle;
+                return success;
+
+            case sys::abi::v1::memory_server_operation::release_frame:
+                if (handle >= sys::abi::v1::memory_server_max_handles || !handles[handle].allocated)
+                    return invalid;
+                if (handles[handle].owner != request.sender)
+                    return denied;
+                if (sys::control(sys::abi::v1::control_operation::frame_destroy,
+                                 service_frame_base + handle) != success)
+                    return static_cast<sys::word_t>(sys::error_t::busy);
+                handles[handle] = {};
+                value = handle;
+                return success;
+
+            case sys::abi::v1::memory_server_operation::query:
+                return sys::control_result1(
+                    value, sys::abi::v1::control_operation::memory_resource_query, resource);
+
+            case sys::abi::v1::memory_server_operation::shutdown:
+                for (sys::word_t index = 0U; index < sys::abi::v1::memory_server_max_handles;
+                     ++index) {
+                    if (handles[index].allocated && handles[index].owner == request.sender)
+                        return static_cast<sys::word_t>(sys::error_t::busy);
+                }
+                return success;
+        }
+        return invalid;
+    }
 } // namespace
 
 extern "C" int main(sys::word_t, sys::word_t) noexcept {
-    for (sys::word_t index = 0U; index < client_count; ++index) {
+    for (sys::word_t index = 0U; index < pager_client_count; ++index) {
         const sys::word_t created = sys::control(
-            sys::abi::v1::control_operation::resource_frame_create, 15U, working_frame);
+            sys::abi::v1::control_operation::resource_frame_create, resource, pager_frame);
         if (created != static_cast<sys::word_t>(sys::error_t::success))
             fail(1U + index * 8U);
 
@@ -36,7 +93,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         constexpr auto read_write =
             sys::abi::v1::memory_permission::read | sys::abi::v1::memory_permission::write;
         const sys::word_t resolved =
-            sys::control(sys::abi::v1::control_operation::fault_reply_sender, working_frame,
+            sys::control(sys::abi::v1::control_operation::fault_reply_sender, pager_frame,
                          fault.message2, sys::abi::v1::encode(read_write));
         if (resolved != static_cast<sys::word_t>(sys::error_t::success))
             fail(3U + index * 8U);
@@ -47,16 +104,11 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
             fail(4U + index * 8U);
 
         const sys::word_t reclaimed =
-            sys::control(sys::abi::v1::control_operation::pager_reclaim_sender, working_frame,
+            sys::control(sys::abi::v1::control_operation::pager_reclaim_sender, pager_frame,
                          completion.message1);
         if (reclaimed != static_cast<sys::word_t>(sys::error_t::success))
             fail(5U + index * 8U);
 
-        /*
-         * Complete the client's synchronous call before publishing its badge.
-         * This prevents root from destroying/reusing the client thread while
-         * the server still holds a reply capability to the old generation.
-         */
         const sys::word_t replied = sys::ipc_reply(0U, 0U, 0U, 0U);
         if (replied != static_cast<sys::word_t>(sys::error_t::success))
             fail(6U + index * 8U);
@@ -66,6 +118,22 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
                          completion.message2);
         if (signalled != static_cast<sys::word_t>(sys::error_t::success))
             fail(7U + index * 8U);
+    }
+
+    sys::word_t completed_clients = 0U;
+    while (completed_clients < pressure_client_count) {
+        const auto request = sys::ipc_receive(endpoint);
+        if (request.status != static_cast<sys::word_t>(sys::error_t::success))
+            fail(0x40U);
+        sys::word_t value = 0U;
+        const sys::word_t status = service_request(request, value);
+        if (sys::ipc_reply(status, value, 0U, 0U) !=
+            static_cast<sys::word_t>(sys::error_t::success))
+            fail(0x41U);
+        if (static_cast<sys::abi::v1::memory_server_operation>(request.message0) ==
+                sys::abi::v1::memory_server_operation::shutdown &&
+            status == static_cast<sys::word_t>(sys::error_t::success))
+            ++completed_clients;
     }
     return 0;
 }

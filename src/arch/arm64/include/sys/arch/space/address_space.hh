@@ -29,9 +29,12 @@ namespace sys::arch::space
     extern "C" char sys_arm64_memory_server_image_end[];
     extern "C" char sys_arm64_pager_client_image_start[];
     extern "C" char sys_arm64_pager_client_image_end[];
+    extern "C" char sys_arm64_memory_client_image_start[];
+    extern "C" char sys_arm64_memory_client_image_end[];
 
     inline constexpr word_t memory_server_image_role = 0x100U;
     inline constexpr word_t pager_client_image_role_base = 0x101U;
+    inline constexpr word_t memory_client_image_role_base = 0x103U;
 
     struct image_view {
         char* start;
@@ -43,6 +46,8 @@ namespace sys::arch::space
             return {sys_arm64_memory_server_image_start, sys_arm64_memory_server_image_end};
         if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U)
             return {sys_arm64_pager_client_image_start, sys_arm64_pager_client_image_end};
+        if (role >= memory_client_image_role_base && role < memory_client_image_role_base + 3U)
+            return {sys_arm64_memory_client_image_start, sys_arm64_memory_client_image_end};
         return {sys_arm64_user_image_start, sys_arm64_user_image_end};
     }
 

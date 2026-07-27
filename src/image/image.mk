@@ -15,7 +15,7 @@ image: $(EARLYFS)
 $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(filter 1,$(CONFIG_HYPERVISOR_SELFTEST)),$(GUEST_TEST_ELF),) $(MANIFEST)
 	@mkdir -p $(dir $@)
 	@printf '  EARLYFS %s\n' '$@'
-	@$(SRCTREE)/tools/image/make_earlyfs.sh $(USER_OBJDIR)/init.elf $(USER_OBJDIR)/memory-server.elf $(USER_OBJDIR)/pager-client.elf $(MANIFEST) $@ $(if $(filter 1,$(CONFIG_HYPERVISOR_SELFTEST)),$(GUEST_TEST_ELF),-)
+	@$(SRCTREE)/tools/image/make_earlyfs.sh $(USER_OBJDIR)/init.elf $(USER_OBJDIR)/memory-server.elf $(USER_OBJDIR)/pager-client.elf $(USER_OBJDIR)/memory-client.elf $(MANIFEST) $@ $(if $(filter 1,$(CONFIG_HYPERVISOR_SELFTEST)),$(GUEST_TEST_ELF),-)
 
 ifeq ($(ARCH),arm64)
 $(BOOTSTRAP_IMAGE_OBJ): $(SRCTREE)/src/user/bootstrap/embedded_images.S $(USER_PROGRAM_ELFS)

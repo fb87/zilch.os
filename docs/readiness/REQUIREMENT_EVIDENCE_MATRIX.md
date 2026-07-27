@@ -146,3 +146,6 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 
 | TST-023 | IN PROGRESS | `src/user/init/main.cc`, `src/kernel/include/sys/kernel/memory/manager.hh` | `memory_pressure_rollback` drives 32 quota-exhaustion/reclaim cycles and 512 frame lifecycles with invariant signatures | Multi-CPU allocator pressure and full-RAM exhaustion remain open. |
 | TST-024 | IN PROGRESS | `tests/include/sys/kernel/verification/hooks.hh`, `src/kernel/include/sys/kernel/memory/manager.hh` | Certification injects an extent-node split failure and verifies complete rollback through identical before/after resource signatures | Remaining allocation and teardown stages are not yet injectable. |
+
+| USR-008 | IN PROGRESS | `include/abi/sys/v1/memory.hh`, `src/user/servers/memory/main.cc` | `memory_server_protocol` | Bounded handle protocol; no capability return yet |
+| USR-011 / TST-023 | IN PROGRESS | `src/user/tests/memory_client/main.cc` | Three PL3 clients, 768 allocation/release calls | Full-RAM and long-duration pressure open |

@@ -35,6 +35,7 @@ namespace
         memory_extent_retype = 18U,
         memory_extent_metadata = 19U,
         memory_pressure_rollback = 20U,
+        memory_server_protocol = 21U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -48,6 +49,7 @@ namespace
     inline constexpr sys::word_t memory_server_role = 0x100U;
     inline constexpr sys::word_t fault_client_role = 0x101U;
     inline constexpr sys::word_t second_fault_client_role = 0x102U;
+    inline constexpr sys::word_t memory_client_role_base = 0x103U;
 
     [[nodiscard]] bool create_service_process(sys::word_t cpu, sys::word_t role,
                                               sys::word_t thread_selector,
@@ -95,7 +97,12 @@ namespace
         return false;
     }
 
-    [[nodiscard]] bool run_userspace_pager_service() noexcept {
+    struct service_results final {
+        bool pager{};
+        bool memory_protocol{};
+    };
+
+    [[nodiscard]] service_results run_userspace_services() noexcept {
         constexpr sys::word_t server_thread = 17U;
         constexpr sys::word_t server_task = 20U;
         constexpr sys::word_t server_space = 23U;
@@ -103,28 +110,47 @@ namespace
         constexpr sys::word_t client_task = 21U;
         constexpr sys::word_t client_space = 24U;
 
+        service_results result{};
         if (!create_service_process(1U, memory_server_role, server_thread, server_task,
                                     server_space))
-            return false;
+            return result;
 
-        bool pass =
+        bool pager =
             create_service_process(2U, fault_client_role, client_thread, client_task, client_space);
-        if (pass)
-            pass = wait_for_badge(1U);
-        if (pass)
-            pass = destroy_service_process(client_thread, client_task, client_space);
+        if (pager)
+            pager = wait_for_badge(1U);
+        if (pager)
+            pager = destroy_service_process(client_thread, client_task, client_space);
 
-        if (pass)
-            pass = create_service_process(3U, second_fault_client_role, client_thread, client_task,
-                                          client_space);
-        if (pass)
-            pass = wait_for_badge(2U);
-        if (pass)
-            pass = destroy_service_process(client_thread, client_task, client_space);
+        if (pager)
+            pager = create_service_process(3U, second_fault_client_role, client_thread, client_task,
+                                           client_space);
+        if (pager)
+            pager = wait_for_badge(2U);
+        if (pager)
+            pager = destroy_service_process(client_thread, client_task, client_space);
+        result.pager = pager;
+
+        bool pressure = pager;
+        for (sys::word_t index = 0U; index < 3U && pressure; ++index) {
+            pressure = create_service_process(index + 1U, memory_client_role_base + index,
+                                              client_thread + index, client_task + index,
+                                              client_space + index);
+        }
+        for (sys::word_t index = 0U; index < 3U && pressure; ++index)
+            pressure = wait_for_badge(1U << (index + 2U));
+        for (sys::word_t index = 0U; index < 3U; ++index) {
+            pressure = destroy_service_process(client_thread + index, client_task + index,
+                                               client_space + index) &&
+                       pressure;
+        }
+        result.memory_protocol = pressure;
 
         const bool server_destroyed =
             destroy_service_process(server_thread, server_task, server_space);
-        return pass && server_destroyed;
+        result.pager = result.pager && server_destroyed;
+        result.memory_protocol = result.memory_protocol && server_destroyed;
+        return result;
     }
 
     [[nodiscard]] bool test_dynamic_ipc_objects() noexcept {
@@ -721,8 +747,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     }
     record(ledger, test_id::hypervisor_negative_fuzz, hv_fuzz_failures == 0U);
 
-    const bool pager_service_pass = run_userspace_pager_service();
-    record(ledger, test_id::userspace_pager_service, pager_service_pass);
+    const service_results services = run_userspace_services();
+    record(ledger, test_id::userspace_pager_service, services.pager);
+    record(ledger, test_id::memory_server_protocol, services.memory_protocol);
 
     const bool dynamic_ipc_pass = test_dynamic_ipc_objects();
     record(ledger, test_id::dynamic_ipc_objects, dynamic_ipc_pass);

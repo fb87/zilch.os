@@ -245,3 +245,10 @@
 - Verify failed extent splitting rolls back child creation, parent delegation, metadata, and capability state.
 - Add 32 quota-exhaustion/reclaim cycles covering 512 resource-backed frame lifecycles.
 - Require the complete invariant signature to match before and after the pressure workload.
+
+## 0114 - PL3 memory-server request protocol
+
+- Added a public memory-server request ABI and userspace IPC call wrapper.
+- Added a separately linked memory pressure client ELF.
+- Added three-CPU PL3 allocation/query/release pressure through the memory server.
+- Added owner-bound frame handles and clean shutdown validation.

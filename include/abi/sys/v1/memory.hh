@@ -11,6 +11,15 @@ namespace sys::abi::v1
         execute = 4U,
     };
 
+    enum class memory_server_operation : word_t {
+        allocate_frame = 1U,
+        release_frame = 2U,
+        query = 3U,
+        shutdown = 4U,
+    };
+
+    inline constexpr word_t memory_server_max_handles = 12U;
+
     enum class memory_type : u8 {
         normal = 0U,
         device = 1U,
