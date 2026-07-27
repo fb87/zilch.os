@@ -236,8 +236,8 @@ Every completed requirement must link to:
 ## 5.2 Scheduling contexts
 
 - [x] **SCH-007** Scheduling-context objects exist.
-- [-] **SCH-008** Bounded budget charging/throttling exists; RT stress evidence remains open.
-- [-] **SCH-009** Bounded replenishment exists; sporadic-server conformance remains open.
+- [-] **SCH-008** Bounded budget charging/throttling and validated quiescent reconfiguration exist; RT stress evidence remains open.
+- [-] **SCH-009** Bounded replenishment exists; configuration rejects zero budget, zero period, and budget greater than period, while sporadic-server conformance remains open.
 - [ ] **SCH-010** Sporadic-server semantics documented and tested.
 - [x] **SCH-011** Scheduling-context budget and effective priority donation are integrated with synchronous IPC and deterministic unwind.
 - [x] **SCH-012** Donation chains propagate budget and inherited priority and reject depth beyond eight.

@@ -20,3 +20,11 @@ so IRQ context never spins behind an interrupted IPC transition.
 The mechanism is compiled into product builds. Measured latency limits and
 multi-hour real-time stress evidence remain required before production
 certification.
+
+Public reconfiguration is permitted only after the target thread has been
+explicitly suspended and reached execution quiescence. The target must hold no
+reply authority or active donation. Priority is range checked before narrowing,
+budget and period pass the production `configure()` validator, and affinity is
+retained from the pinned CPU. Runnable or blocked targets return `busy`; this
+prevents a remote timer or scheduler pass from observing partially reset
+budget, replenishment, priority, or donation state.

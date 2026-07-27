@@ -1,3 +1,10 @@
+## 0148 - Make scheduling configuration lifecycle-safe
+
+- Replace unchecked scheduling-field writes with validated context configuration.
+- Reject priority truncation and invalid budget/period combinations.
+- Require explicit thread suspension and quiescence before scheduling-state reset.
+- Certify malformed, live-target, valid configuration, teardown, and reuse paths.
+
 ## 0147 - Contain a real PL3 undefined-instruction fault
 
 - Publish ABI v1 fault-kind and disposition values.

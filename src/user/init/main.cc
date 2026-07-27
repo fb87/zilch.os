@@ -39,6 +39,7 @@ namespace
         ipc_lifecycle_races = 22U,
         capability_transfer_revoke_race = 23U,
         object_lookup_destroy_race = 24U,
+        scheduling_configuration = 25U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -298,6 +299,39 @@ namespace
                                   notification) == success &&
                      passed;
         }
+        return passed;
+    }
+
+    [[nodiscard]] bool test_scheduling_configuration() noexcept {
+        constexpr sys::word_t thread_selector = 55U;
+        constexpr sys::word_t task_selector = 56U;
+        constexpr sys::word_t space_selector = 57U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t invalid = static_cast<sys::word_t>(sys::error_t::invalid_argument);
+        const sys::word_t busy = static_cast<sys::word_t>(sys::error_t::busy);
+
+        bool passed = sys::control(sys::abi::v1::control_operation::scheduling_configure, 2U, 128U,
+                                   5U, 10U) == busy;
+        bool created = create_service_process(1U, ipc_lifecycle_client_role_base + 2U,
+                                              thread_selector, task_selector, space_selector);
+        passed = created && passed;
+        if (passed)
+            passed = wait_for_badges(1U << 9U);
+        if (passed)
+            passed = sys::control(sys::abi::v1::control_operation::thread_suspend,
+                                  thread_selector) == success;
+        if (passed)
+            passed = sys::control(sys::abi::v1::control_operation::scheduling_configure,
+                                  thread_selector, 256U, 5U, 10U) == invalid &&
+                     sys::control(sys::abi::v1::control_operation::scheduling_configure,
+                                  thread_selector, 128U, 0U, 10U) == invalid &&
+                     sys::control(sys::abi::v1::control_operation::scheduling_configure,
+                                  thread_selector, 128U, 11U, 10U) == invalid &&
+                     sys::control(sys::abi::v1::control_operation::scheduling_configure,
+                                  thread_selector, 200U, 5U, 10U) == success;
+        if (created)
+            passed =
+                destroy_service_process(thread_selector, task_selector, space_selector) && passed;
         return passed;
     }
 
@@ -997,6 +1031,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::capability_transfer_revoke_race, capability_race_pass);
     const bool object_race_pass = test_object_lookup_destroy_race();
     record(ledger, test_id::object_lookup_destroy_race, object_race_pass);
+    const bool scheduling_configuration_pass = test_scheduling_configuration();
+    record(ledger, test_id::scheduling_configuration, scheduling_configuration_pass);
 
     const service_results services = run_userspace_services();
     record(ledger, test_id::userspace_pager_service, services.pager);

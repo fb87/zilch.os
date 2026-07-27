@@ -291,6 +291,9 @@ namespace sys::kernel::syscall
                     case 24U:
                         name = "object_lookup_destroy_race";
                         break;
+                    case 25U:
+                        name = "scheduling_configuration";
+                        break;
                     default:
                         break;
                 }
@@ -866,9 +869,28 @@ namespace sys::kernel::syscall
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);
                 if (result == error_t::success) {
-                    target->scheduling_context.priority = static_cast<u8>(a2);
-                    target->scheduling_context.budget_ticks = a3;
-                    target->scheduling_context.period_ticks = a4;
+                    if (a2 > scheduling::highest_priority ||
+                        target->pinned_cpu >= thread::maximum_cpu_count) {
+                        result = error_t::invalid_argument;
+                        break;
+                    }
+                    /*
+                     * Configuration resets budget, replenishment, and
+                     * donation state as one lifecycle transition. Requiring
+                     * explicit suspension prevents a remote scheduler tick
+                     * from observing a partially rewritten context.
+                     */
+                    thread::lock_ipc_lifecycle();
+                    if (thread::load_state(*target) != thread::state::suspended ||
+                        target->reply.valid || target->scheduling_context.donation_depth != 0U ||
+                        target->scheduling_context.donated_ticks != 0U) {
+                        result = error_t::busy;
+                    } else {
+                        result = scheduling::configure(
+                            target->scheduling_context, static_cast<u8>(a2), a3, a4,
+                            target->pinned_cpu, platform::timer::ticks(target->pinned_cpu));
+                    }
+                    thread::unlock_ipc_lifecycle();
                 }
                 break;
             }
