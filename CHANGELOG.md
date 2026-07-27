@@ -1,3 +1,10 @@
+## 0127 - Kernel stack bounds and canaries
+
+- Seed independent canary regions at every EL1 and EL2 per-CPU stack base.
+- Validate stack bounds and canaries on every ARM64 exception dispatch.
+- Retain the lowest observed stack pointer for per-CPU EL1/EL2 high-water analysis.
+- Halt with a dedicated diagnostic before continuing on detected stack corruption.
+
 ## 0126 - Object lookup/use quiescence
 
 - Add per-CPU object-table read-side sections around ARM64 exception dispatch.
