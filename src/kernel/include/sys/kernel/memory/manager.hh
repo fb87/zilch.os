@@ -4,6 +4,7 @@
 #include <sys/arch/memory.hh>
 #include <sys/kernel/boot/fdt.hh>
 #include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/lock/order.hh>
 #include <sys/kernel/memory/object.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/space/address_space.hh>
@@ -65,18 +66,22 @@ namespace sys::kernel::memory
     inline void lock_allocator() noexcept {
         while (__atomic_exchange_n(&allocator_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
             arch::cpu::relax();
+        lock_order::acquired(lock_order::rank::memory_allocator, &allocator_lock);
     }
 
     inline void unlock_allocator() noexcept {
+        lock_order::released(lock_order::rank::memory_allocator, &allocator_lock);
         __atomic_store_n(&allocator_lock, 0U, __ATOMIC_RELEASE);
     }
 
     inline void lock_mappings() noexcept {
         while (__atomic_exchange_n(&mapping_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
             arch::cpu::relax();
+        lock_order::acquired(lock_order::rank::memory_mapping, &mapping_lock);
     }
 
     inline void unlock_mappings() noexcept {
+        lock_order::released(lock_order::rank::memory_mapping, &mapping_lock);
         __atomic_store_n(&mapping_lock, 0U, __ATOMIC_RELEASE);
     }
 

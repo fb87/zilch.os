@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/kernel/capability.hh>
+#include <sys/kernel/lock/order.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/types.hh>
 
@@ -32,34 +33,36 @@ namespace sys::kernel::capability
     inline volatile u32 authority_lock{};
     inline derivation_id_t next_derivation_hint{1U};
 
-    inline void spin_lock(volatile u32& value) noexcept {
+    inline void spin_lock(volatile u32& value, lock_order::rank order) noexcept {
         while (__atomic_exchange_n(&value, 1U, __ATOMIC_ACQUIRE) != 0U) {
             while (__atomic_load_n(&value, __ATOMIC_RELAXED) != 0U) {
                 arch::cpu::relax();
             }
         }
+        lock_order::acquired(order, &value);
     }
 
-    inline void spin_unlock(volatile u32& value) noexcept {
+    inline void spin_unlock(volatile u32& value, lock_order::rank order) noexcept {
+        lock_order::released(order, &value);
         __atomic_store_n(&value, 0U, __ATOMIC_RELEASE);
     }
 
     inline void lock(cspace_t& cspace) noexcept {
-        spin_lock(cspace.lock);
+        spin_lock(cspace.lock, lock_order::rank::cspace);
     }
     inline void lock_authority() noexcept {
-        spin_lock(authority_lock);
+        spin_lock(authority_lock, lock_order::rank::capability_authority);
     }
     inline void unlock_authority() noexcept {
-        spin_unlock(authority_lock);
+        spin_unlock(authority_lock, lock_order::rank::capability_authority);
     }
     inline void unlock(cspace_t& cspace) noexcept {
-        spin_unlock(cspace.lock);
+        spin_unlock(cspace.lock, lock_order::rank::cspace);
     }
 
     [[nodiscard]] inline derivation_id_t
     allocate_derivation(derivation_id_t parent, const object::reference_t& object) noexcept {
-        spin_lock(derivation_lock);
+        spin_lock(derivation_lock, lock_order::rank::capability_derivation);
         derivation_id_t candidate = next_derivation_hint;
         for (u32 scanned = 1U; scanned < maximum_derivations; ++scanned) {
             if (candidate == 0U || candidate >= maximum_derivations)
@@ -71,12 +74,12 @@ namespace sys::kernel::capability
                 record.object = object;
                 __atomic_store_n(&record.active, 1U, __ATOMIC_RELEASE);
                 next_derivation_hint = candidate + 1U;
-                spin_unlock(derivation_lock);
+                spin_unlock(derivation_lock, lock_order::rank::capability_derivation);
                 return candidate;
             }
             ++candidate;
         }
-        spin_unlock(derivation_lock);
+        spin_unlock(derivation_lock, lock_order::rank::capability_derivation);
         return 0U;
     }
 
@@ -110,11 +113,11 @@ namespace sys::kernel::capability
     }
 
     [[nodiscard]] inline error_t register_cspace(cspace_t& cspace) noexcept {
-        spin_lock(cspace_registry_lock);
+        spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);
         for (u32 index = 0U; index < maximum_registered_cspaces; ++index) {
             if (cspace_registry[index] == &cspace) {
                 cspace.registry_index = index;
-                spin_unlock(cspace_registry_lock);
+                spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
                 return error_t::success;
             }
         }
@@ -122,11 +125,11 @@ namespace sys::kernel::capability
             if (cspace_registry[index] == nullptr) {
                 cspace_registry[index] = &cspace;
                 cspace.registry_index = index;
-                spin_unlock(cspace_registry_lock);
+                spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
                 return error_t::success;
             }
         }
-        spin_unlock(cspace_registry_lock);
+        spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
         return error_t::no_memory;
     }
 
@@ -395,7 +398,7 @@ namespace sys::kernel::capability
          */
         static u8 revoke_marks[maximum_registered_cspaces][cspace_slot_count]{};
         u32 removed = 0U;
-        spin_lock(cspace_registry_lock);
+        spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);
 
         for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
             cspace_t* cspace = cspace_registry[space_index];
@@ -433,7 +436,7 @@ namespace sys::kernel::capability
             if (cspace != nullptr)
                 unlock(*cspace);
         }
-        spin_unlock(cspace_registry_lock);
+        spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
         return removed;
     }
 
@@ -463,14 +466,14 @@ namespace sys::kernel::capability
 
     inline u32 revoke_reference_locked(const object::reference_t& reference) noexcept {
         u32 removed = 0U;
-        spin_lock(cspace_registry_lock);
+        spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);
         for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
             cspace_t* cspace = cspace_registry[space_index];
             if (cspace == nullptr)
                 continue;
             removed += revoke_in(*cspace, reference);
         }
-        spin_unlock(cspace_registry_lock);
+        spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
         return removed;
     }
 

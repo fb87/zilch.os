@@ -1,3 +1,11 @@
+## 0138 - Certify the kernel lock hierarchy
+
+- Define one global rank order for every active blocking kernel spinlock.
+- Enforce recursive-acquisition, equal-rank ordering, depth, and LIFO-release rules in certification.
+- Instrument IPC, capability, memory, and object lifecycle locks.
+- Compile checker state out of release images.
+- Document the hierarchy and certify zero violations through the full four-CPU workload.
+
 ## 0137 - Account kernel and VM resource lifecycles
 
 - Track per-object-type live, peak, created, and destroyed counts at the object table.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/arch/cpu.hh>
+#include <sys/kernel/lock/order.hh>
 #include <sys/kernel/object.hh>
 #include <sys/types.hh>
 
@@ -93,9 +94,11 @@ namespace sys::kernel::object
         while (__atomic_exchange_n(&table_lock, 1U, __ATOMIC_ACQUIRE) != 0U)
             while (__atomic_load_n(&table_lock, __ATOMIC_RELAXED) != 0U)
                 arch::cpu::relax();
+        lock_order::acquired(lock_order::rank::object_table, &table_lock);
     }
 
     inline void unlock_table() noexcept {
+        lock_order::released(lock_order::rank::object_table, &table_lock);
         __atomic_store_n(&table_lock, 0U, __ATOMIC_RELEASE);
     }
 

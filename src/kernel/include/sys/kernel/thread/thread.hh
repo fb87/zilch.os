@@ -4,6 +4,7 @@
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/context.hh>
 #include <sys/kernel/fault/fault.hh>
+#include <sys/kernel/lock/order.hh>
 #include <sys/kernel/object.hh>
 #include <sys/kernel/scheduling/context.hh>
 #include <sys/kernel/space/address_space.hh>
@@ -25,15 +26,20 @@ namespace sys::kernel::thread
             while (__atomic_load_n(&ipc_lifecycle_lock, __ATOMIC_RELAXED) != 0U)
                 arch::cpu::relax();
         }
+        lock_order::acquired(lock_order::rank::ipc_lifecycle, &ipc_lifecycle_lock);
     }
 
     [[nodiscard]] inline bool try_lock_ipc_lifecycle() noexcept {
         u32 expected = 0U;
-        return __atomic_compare_exchange_n(&ipc_lifecycle_lock, &expected, 1U, false,
-                                           __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+        const bool acquired = __atomic_compare_exchange_n(&ipc_lifecycle_lock, &expected, 1U, false,
+                                                          __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+        if (acquired)
+            lock_order::acquired(lock_order::rank::ipc_lifecycle, &ipc_lifecycle_lock);
+        return acquired;
     }
 
     inline void unlock_ipc_lifecycle() noexcept {
+        lock_order::released(lock_order::rank::ipc_lifecycle, &ipc_lifecycle_lock);
         __atomic_store_n(&ipc_lifecycle_lock, 0U, __ATOMIC_RELEASE);
     }
 

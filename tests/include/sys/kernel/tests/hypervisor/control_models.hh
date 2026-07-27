@@ -743,6 +743,17 @@ namespace sys::kernel::hypervisor::test
                       static_cast<u64>(abi::v1::guest_hypercall::shutdown)) &&
                   !arch::hypervisor::known_guest_hypercall(0xffffffffffffffffULL),
               8U);
+        volatile u32 lock_order_probe_low{};
+        volatile u32 lock_order_probe_high{};
+        lock_order::acquired(lock_order::rank::endpoint, &lock_order_probe_low);
+        check(lock_order::may_acquire(lock_order::rank::ipc_lifecycle, &lock_order_probe_high) &&
+                  !lock_order::may_acquire(lock_order::rank::endpoint, &lock_order_probe_low) &&
+                  !lock_order::may_acquire(
+                      lock_order::rank::endpoint,
+                      reinterpret_cast<volatile void*>(
+                          reinterpret_cast<uintptr_t>(&lock_order_probe_low) - 1U)),
+              118U);
+        lock_order::released(lock_order::rank::endpoint, &lock_order_probe_low);
         constexpr u64 hostile_sctlr = 0xffffffffffffffffULL;
         check(arch::hypervisor::sanitize_guest_sctlr_el1(hostile_sctlr) ==
                       (arch::hypervisor::sctlr_el1_guest_control |
@@ -877,6 +888,7 @@ namespace sys::kernel::hypervisor::test
         check(model_multivcpu_acceptance(), 57U);
         check(model_context_acceptance(), 58U);
         check(model_lane_acceptance(), 59U);
+        check(lock_order::violation_count() == 0U, 119U);
         __atomic_fetch_add(&failures_total, failures, __ATOMIC_RELAXED);
         if (failures != 0U)
             return error_t::invalid_argument;

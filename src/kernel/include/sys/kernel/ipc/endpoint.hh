@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/lock/order.hh>
 #include <sys/kernel/object.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/task/task.hh>
@@ -43,9 +44,11 @@ namespace sys::kernel::ipc
                 arch::cpu::relax();
             }
         }
+        lock_order::acquired(lock_order::rank::endpoint, &value.lock);
     }
 
     inline void unlock(endpoint& value) noexcept {
+        lock_order::released(lock_order::rank::endpoint, &value.lock);
         __atomic_store_n(&value.lock, 0U, __ATOMIC_RELEASE);
     }
 

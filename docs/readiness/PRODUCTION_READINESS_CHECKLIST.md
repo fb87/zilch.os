@@ -246,7 +246,7 @@ Every completed requirement must link to:
 
 ## 5.3 RT correctness
 
-- [ ] **SCH-015** Kernel locks have documented ordering.
+- [x] **SCH-015** Every active blocking kernel spinlock has a documented global rank; equal-rank CSpace locks use increasing address order and releases are strict LIFO.
 - [ ] **SCH-016** Maximum lock hold times measured.
 - [ ] **SCH-017** IRQ-disabled sections measured and bounded.
 - [ ] **SCH-018** Logging has RT-safe deferred path.
@@ -498,8 +498,8 @@ Every completed requirement must link to:
 
 ## 10.3 Concurrency hardening
 
-- [ ] **SEC-013** Lock hierarchy documented.
-- [ ] **SEC-014** Debug lock-order checker implemented.
+- [x] **SEC-013** Endpoint, IPC lifecycle, capability, mapping, allocator, and object-table locks follow the documented global hierarchy.
+- [x] **SEC-014** Certification builds check per-CPU acquisition rank, recursion, equal-rank address order, depth, and reverse release; the full four-CPU suite reports zero violations.
 - [-] **SEC-015** Object and VM lifecycle counters reject overflow/underflow and expose accounting faults; remaining reference-bearing subsystems require the same checked-counter audit.
 - [-] **SEC-016** ABA hazards are bounded by generation-tagged references, per-CPU thread bindings, and object-table read-side grace periods before reuse; long-duration wraparound evidence remains open.
 - [-] **SEC-017** User-thread teardown has generation-tagged return-frame quiescence and switches CPUs to the permanent kernel TTBR0 root before reclaiming user page tables; IRQ, VM/vCPU, and remaining object teardown protocols are open.
@@ -599,7 +599,7 @@ Every completed requirement must link to:
 - [ ] **DOC-008** Trust boundaries documented.
 - [ ] **DOC-009** Capability and IPC semantics documented formally enough for independent implementation.
 - [ ] **DOC-010** Memory-ordering rules documented.
-- [ ] **DOC-011** Locking and teardown protocols documented.
+- [-] **DOC-011** Kernel lock ordering and major object/user-thread/VM teardown protocols are documented; IRQ and device teardown protocols remain open.
 - [ ] **DOC-012** Hypervisor guest-visible architecture documented.
 - [ ] **DOC-013** Userspace server APIs documented.
 - [x] **DOC-014** Semantic release classes, ABI/diagnostic compatibility, deprecation, migration, and mandatory release gates are documented.
