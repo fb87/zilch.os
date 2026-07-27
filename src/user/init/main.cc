@@ -263,14 +263,33 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
                   poll == static_cast<sys::word_t>(sys::error_t::success)) &&
            pass;
 
-    const sys::word_t copy =
-        sys::control(sys::abi::v1::control_operation::capability_copy, 0U, 16U, 14U, 1U);
-    const sys::word_t remove =
-        sys::control(sys::abi::v1::control_operation::capability_delete, 0U, 16U);
-    pass = report(test_id::capability_control,
-                  copy == static_cast<sys::word_t>(sys::error_t::success) &&
-                      remove == static_cast<sys::word_t>(sys::error_t::success)) &&
-           pass;
+    constexpr sys::word_t cap_read = 1U;
+    constexpr sys::word_t cap_grant = 1U << 3U;
+    bool capability_pass = true;
+    for (sys::word_t iteration = 0U; iteration < 128U; ++iteration) {
+        const sys::word_t mint = sys::control(sys::abi::v1::control_operation::capability_mint, 0U,
+                                              16U, 14U, cap_read | cap_grant, iteration + 1U);
+        const sys::word_t copy =
+            sys::control(sys::abi::v1::control_operation::capability_copy, 0U, 17U, 16U, cap_read);
+        const sys::word_t escalate = sys::control(sys::abi::v1::control_operation::capability_mint,
+                                                  0U, 18U, 16U, cap_read | (1U << 1U));
+        const sys::word_t revoke =
+            sys::control(sys::abi::v1::control_operation::capability_revoke, 0U, 0U, 14U);
+        const sys::word_t deleted_child =
+            sys::control(sys::abi::v1::control_operation::capability_delete, 0U, 16U);
+        const sys::word_t deleted_grandchild =
+            sys::control(sys::abi::v1::control_operation::capability_delete, 0U, 17U);
+        capability_pass = capability_pass &&
+                          mint == static_cast<sys::word_t>(sys::error_t::success) &&
+                          copy == static_cast<sys::word_t>(sys::error_t::success) &&
+                          escalate == static_cast<sys::word_t>(sys::error_t::denied) &&
+                          revoke == static_cast<sys::word_t>(sys::error_t::success) &&
+                          deleted_child == static_cast<sys::word_t>(sys::error_t::not_found) &&
+                          deleted_grandchild == static_cast<sys::word_t>(sys::error_t::not_found);
+        if (!capability_pass)
+            break;
+    }
+    pass = report(test_id::capability_control, capability_pass) && pass;
 
     const sys::word_t hv_self_test =
         sys::certification::control(sys::test_abi::v1::control_operation::hypervisor_self_test);

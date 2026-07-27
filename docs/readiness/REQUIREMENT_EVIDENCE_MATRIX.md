@@ -26,3 +26,27 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | PRD-017 | Complete | same | hypervisor guest fixture and control models under `tests/` | certification build plus boundary gate | none for source ownership |
 | DOC-001..006 | In progress | `docs/README.md` | canonical `docs/` hierarchy | `tools/doc/check_layout.sh` | broader design content still requires ongoing reconciliation |
 | USR-001..004 | In progress | `src/user/bootstrap/embedded_images.md` | user-owned bootstrap payload bundle and independent service ELFs | ARM64 certification build/runtime baseline | embedded registry is temporary and not a userspace process manager |
+
+## Batch 0090 evidence
+
+| Requirement | Status | Implementation | Runtime/negative evidence | Limitation |
+|---|---|---|---|---|
+| CAP-007 | IN PROGRESS | `capability/cspace.hh` rights attenuation | `capability_control` rejects escalation | Transfer and scalable CSpace work remain |
+| CAP-008 | IN PROGRESS | bounded derivation parent records | 128 derive/revoke/reuse cycles | Bounded table, no scalable CDT |
+| CAP-009 | IN PROGRESS | `capability::copy` with parent tracking | `capability_control` | Concurrency stress incomplete |
+| CAP-010 | IN PROGRESS | `capability::mint` with reduced rights and badge | escalation rejection | Badge delivery semantics incomplete |
+| CAP-011 | IN PROGRESS | locked atomic `capability::move` | compile/integration baseline | Dedicated runtime race evidence missing |
+| CAP-012 | IN PROGRESS | single-slot delete | descendant removal negative checks | Concurrent lookup evidence missing |
+| CAP-013 | IN PROGRESS | global descendant revoke | child/grandchild become absent | Scalable/restartable revoke missing |
+| CAP-016 | IN PROGRESS | generations plus reusable derivations | repeated reuse loop | Long soak missing |
+| CAP-017 | IN PROGRESS | one-cap IPC mint transfer | pager/IPC integration | Dedicated cross-CSpace runtime test missing |
+| CAP-019 | IN PROGRESS | direct-transfer failure restores receiver | build and code-path review | Fault injection matrix missing |
+| IPC-003 | IN PROGRESS | generation-checked single-use reply authority | pager two-client lifecycle | Not first-class reply object |
+| IPC-004 | IN PROGRESS | reply-receive path | pager service integration | Atomicity stress incomplete |
+| IPC-005 | IN PROGRESS | endpoint/thread cancellation paths | existing lifecycle suite | Race fuzz incomplete |
+| IPC-009 | IN PROGRESS | one-cap transfer descriptor | direct/queued transfer paths | Multi-cap and receive windows absent |
+
+| CAP-008..013 | IN PROGRESS | bounded CDT, copy/mint/move/delete/revoke in `capability/cspace.hh` | 128 derive/revoke/reuse cycles and attenuation negatives | fixed storage; concurrency and restartable revoke open |
+| CAP-016 | IN PROGRESS | generation checks plus reusable derivation records | destroy/reuse and capability-control runtime suites | long soak and concurrent ABA proof open |
+| CAP-017, CAP-019 | IN PROGRESS | single-cap IPC transfer and direct-rendezvous rollback in `syscall/ipc.hh` | pager and IPC integration; destination-occupied negative path | multi-cap receive windows and fault-injection matrix open |
+| IPC-007, IPC-013, IPC-014 | IN PROGRESS | bounded timeout/donation cleanup and receiver-CPU wakeup paths | certification integration baseline | timeout ABI, race fuzz, and fully targeted teardown IPIs open |

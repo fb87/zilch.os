@@ -138,7 +138,22 @@ namespace sys::arch::space
         const u64 root = reinterpret_cast<u64>(&value.l0) & 0x0000ffffffffffffULL;
         const u64 ttbr = root | (static_cast<u64>(value.asid) << 48U);
         __atomic_fetch_or(&value.active_cpu_mask, 1U << arch::cpu::current_id(), __ATOMIC_RELEASE);
-        __asm__ volatile("dsb ishst\n\tmsr ttbr0_el1, %0\n\tisb" : : "r"(ttbr) : "memory");
+        /*
+         * Address-space slots and ASIDs are reused by the bounded bootstrap
+         * process pool.  Invalidate every cached stage-1 translation for the
+         * ASID before installing the replacement root; otherwise a secondary
+         * CPU may execute through a stale translation even though the new
+         * page tables and image bytes are globally visible.
+         */
+        const u64 asid_operand = static_cast<u64>(value.asid) << 48U;
+        __asm__ volatile("dsb ishst\n\t"
+                         "tlbi aside1is, %1\n\t"
+                         "dsb ish\n\t"
+                         "msr ttbr0_el1, %0\n\t"
+                         "isb"
+                         :
+                         : "r"(ttbr), "r"(asid_operand)
+                         : "memory");
         /*
          * A bootstrap address-space slot can be destroyed, reloaded with a
          * different ELF, and then scheduled on a CPU that previously executed

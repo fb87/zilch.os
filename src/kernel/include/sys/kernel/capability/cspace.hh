@@ -28,7 +28,8 @@ namespace sys::kernel::capability
     inline cspace_t* cspace_registry[maximum_registered_cspaces]{};
     inline volatile u32 cspace_registry_lock{};
     inline derivation_record_t derivations[maximum_derivations]{};
-    inline volatile derivation_id_t next_derivation{1U};
+    inline volatile u32 derivation_lock{};
+    inline derivation_id_t next_derivation_hint{1U};
 
     inline void spin_lock(volatile u32& value) noexcept {
         while (__atomic_exchange_n(&value, 1U, __ATOMIC_ACQUIRE) != 0U) {
@@ -51,15 +52,35 @@ namespace sys::kernel::capability
 
     [[nodiscard]] inline derivation_id_t
     allocate_derivation(derivation_id_t parent, const object::reference_t& object) noexcept {
-        const derivation_id_t id = __atomic_fetch_add(&next_derivation, 1U, __ATOMIC_ACQ_REL);
+        spin_lock(derivation_lock);
+        derivation_id_t candidate = next_derivation_hint;
+        for (u32 scanned = 1U; scanned < maximum_derivations; ++scanned) {
+            if (candidate == 0U || candidate >= maximum_derivations)
+                candidate = 1U;
+            derivation_record_t& record = derivations[candidate];
+            if (__atomic_load_n(&record.active, __ATOMIC_ACQUIRE) == 0U) {
+                record.id = candidate;
+                record.parent = parent;
+                record.object = object;
+                __atomic_store_n(&record.active, 1U, __ATOMIC_RELEASE);
+                next_derivation_hint = candidate + 1U;
+                spin_unlock(derivation_lock);
+                return candidate;
+            }
+            ++candidate;
+        }
+        spin_unlock(derivation_lock);
+        return 0U;
+    }
+
+    [[nodiscard]] inline bool derivation_valid(derivation_id_t id,
+                                               const object::reference_t& object) noexcept {
         if (id == 0U || id >= maximum_derivations)
-            return 0U;
-        derivation_record_t& record = derivations[id];
-        record.id = id;
-        record.parent = parent;
-        record.object = object;
-        __atomic_store_n(&record.active, 1U, __ATOMIC_RELEASE);
-        return id;
+            return false;
+        const derivation_record_t& record = derivations[id];
+        return __atomic_load_n(&record.active, __ATOMIC_ACQUIRE) != 0U && record.id == id &&
+               record.object.id == object.id && record.object.generation == object.generation &&
+               record.object.type == object.type;
     }
 
     [[nodiscard]] inline bool descendant_of(derivation_id_t candidate,
@@ -70,7 +91,7 @@ namespace sys::kernel::capability
             if (candidate >= maximum_derivations)
                 return false;
             const derivation_record_t& record = derivations[candidate];
-            if (record.id != candidate)
+            if (record.id != candidate || __atomic_load_n(&record.active, __ATOMIC_ACQUIRE) == 0U)
                 return false;
             if (record.parent == ancestor)
                 return true;
@@ -164,6 +185,8 @@ namespace sys::kernel::capability
         const slot_t& slot = cspace.slots[selector];
         if (slot.object.type != expected_type)
             return error_t::denied;
+        if (!derivation_valid(slot.derivation, slot.object))
+            return error_t::not_found;
         const error_t rights_result = validate(slot, required);
         if (rights_result != error_t::success)
             return rights_result;

@@ -113,21 +113,21 @@ Every completed requirement must link to:
 
 ## 2.2 Derivation and revocation
 
-- [ ] **CAP-008** Capability derivation tree implemented.
-- [-] **CAP-009** Copy operation implemented with parent tracking. Bounded derivation tracking exists; production revoke races remain open.
-- [-] **CAP-010** Mint operation implemented with reduced rights and badge. Bounded implementation exists.
-- [-] **CAP-011** Move operation implemented atomically. Bounded implementation exists; concurrent stress remains open.
-- [-] **CAP-012** Delete operation removes one capability safely. Runtime lifecycle tests exist.
-- [-] **CAP-013** Recursive revoke removes bounded descendants. Concurrent revoke/quiescence evidence remains open.
+- [-] **CAP-008** Bounded capability derivation tree implemented. Parent/child records and recursive traversal exist; storage is fixed-size and revoke is not yet scalable or restartable.
+- [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
+- [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation is rejected; guarded CSpace and complete badge-delivery semantics remain open.
+- [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
+- [-] **CAP-012** Single-capability delete exists. Concurrent lookup and teardown-race evidence remains open.
+- [-] **CAP-013** Recursive descendant revoke exists across registered CSpaces. It remains bounded, globally scanned, and not restartable.
 - [ ] **CAP-014** Revocation is safe under concurrent lookup and IPC.
 - [ ] **CAP-015** Object destruction waits for capability/reference quiescence.
-- [x] **CAP-016** Capability slot reuse cannot resurrect stale references. Generation-reuse tests pass.
+- [-] **CAP-016** Generation checks and reusable derivation records prevent bounded stale-reference reuse. Long-duration and concurrent ABA evidence remains open.
 
 ## 2.3 Capability transfer
 
-- [ ] **CAP-017** IPC capability transfer implemented.
+- [-] **CAP-017** Single-capability IPC transfer implemented for queued and direct rendezvous paths. Multi-capability transfer remains open.
 - [ ] **CAP-018** Receiver-controlled destination slots implemented.
-- [ ] **CAP-019** Transfer rollback is atomic on partial failure.
+- [-] **CAP-019** Direct-transfer failure restores the waiting receiver and avoids caller blocking. Multi-capability partial-failure rollback and fault injection remain open.
 - [ ] **CAP-020** Cross-CSpace transfer fuzz test passes.
 - [ ] **CAP-021** Concurrent revoke-versus-transfer race test passes.
 
@@ -147,7 +147,7 @@ Every completed requirement must link to:
 - [-] **IPC-004** Reply-receive and reply-only operations exist; complete atomicity/race evidence remains open.
 - [-] **IPC-005** Bounded endpoint cancellation exists; forced race certification remains open.
 - [-] **IPC-006** Teardown cancellation exists; concurrency/quiescence proof remains open.
-- [ ] **IPC-007** Timeouts implemented.
+- [-] **IPC-007** Bounded IPC timeout expiration exists. Complete timeout ABI, race stress, and donation rollback remain open.
 - [-] **IPC-008** Basic notification signal/wait and dynamic lifecycle exist; full binding policy remains open.
 - [-] **IPC-009** Single-capability transfer exists; multi-capability atomic transfer remains open.
 - [ ] **IPC-010** Bounded out-of-line message strategy implemented.
@@ -156,8 +156,8 @@ Every completed requirement must link to:
 
 - [ ] **IPC-011** Scheduling-context donation implemented.
 - [-] **IPC-012** Bounded priority donation/inheritance exists; chain and RT evidence remain open.
-- [ ] **IPC-013** Donation rollback on timeout/cancel implemented.
-- [ ] **IPC-014** Cross-CPU wakeup uses targeted reschedule IPI.
+- [-] **IPC-013** Bounded donation cleanup paths exist with timeout/cancel foundations; chain and race verification remain open.
+- [-] **IPC-014** IPC wakeup targets the receiver CPU where available; teardown still uses broader reschedule signaling and full targeted-IPI evidence remains open.
 - [ ] **IPC-015** IPC fast-path instruction count measured.
 - [ ] **IPC-016** IPC latency limits defined and met.
 

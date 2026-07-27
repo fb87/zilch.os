@@ -119,11 +119,10 @@ namespace sys::kernel::syscall
         return error_t::success;
     }
 
-    [[nodiscard]] inline error_t
-    dispatch_capability_operation(thread::thread& current, abi::v1::control_operation operation,
-                                  capability_id_t destination_task_selector,
-                                  capability_id_t destination_selector,
-                                  capability_id_t source_selector, u32 rights) noexcept {
+    [[nodiscard]] inline error_t dispatch_capability_operation(
+        thread::thread& current, abi::v1::control_operation operation,
+        capability_id_t destination_task_selector, capability_id_t destination_selector,
+        capability_id_t source_selector, u32 rights, capability::badge_t badge) noexcept {
         if (current.owner == nullptr)
             return error_t::denied;
         task::task* destination_task = current.owner;
@@ -138,10 +137,8 @@ namespace sys::kernel::syscall
                 return capability::copy(destination_task->cspace, destination_selector,
                                         current.owner->cspace, source_selector, {rights});
             case abi::v1::control_operation::capability_mint:
-                return capability::mint(
-                    destination_task->cspace, destination_selector, current.owner->cspace,
-                    source_selector, {rights},
-                    static_cast<capability::badge_t>(destination_task_selector));
+                return capability::mint(destination_task->cspace, destination_selector,
+                                        current.owner->cspace, source_selector, {rights}, badge);
             case abi::v1::control_operation::capability_move:
                 return capability::move(destination_task->cspace, destination_selector,
                                         current.owner->cspace, source_selector);
@@ -151,11 +148,16 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::capability_revoke: {
                 if (source_selector >= capability::cspace_slot_count)
                     return error_t::invalid_argument;
-                const object::reference_t reference =
-                    current.owner->cspace.slots[source_selector].object;
-                if (reference.type == object::type_t::none)
+                capability::lock(current.owner->cspace);
+                const capability::slot_t source_slot = current.owner->cspace.slots[source_selector];
+                capability::unlock(current.owner->cspace);
+                if (source_slot.object.type == object::type_t::none ||
+                    !capability::derivation_valid(source_slot.derivation, source_slot.object))
                     return error_t::not_found;
-                capability::revoke_in(destination_task->cspace, reference);
+                if (!source_slot.rights.contains(capability::right_t::grant) &&
+                    !source_slot.rights.contains(capability::right_t::manage))
+                    return error_t::denied;
+                (void)capability::revoke_descendants(source_slot.derivation);
                 return error_t::success;
             }
             default:
@@ -306,7 +308,8 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::capability_delete:
             case abi::v1::control_operation::capability_revoke:
                 result = dispatch_capability_operation(current, operation, a1, a2, a3,
-                                                       static_cast<u32>(a4));
+                                                       static_cast<u32>(a4),
+                                                       static_cast<capability::badge_t>(a5));
                 break;
             case abi::v1::control_operation::thread_start:
             case abi::v1::control_operation::thread_resume: {

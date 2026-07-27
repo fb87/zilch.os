@@ -1,4 +1,11 @@
 
+## 0091 - ASID reuse barrier and readiness reconciliation
+
+- Invalidate reused ARM64 ASIDs before installing replacement TTBR0 roots.
+- Retain the per-CPU instruction-cache invalidation before PL3 return.
+- Reconcile CAP-008..013, CAP-016..019, and IPC timeout/wakeup progress in the authoritative readiness checklist.
+- Expand the requirement evidence matrix without promoting incomplete production gates.
+
 ## 0087 — Quiescent teardown and `.mk` normalization
 
 - Added an explicit remote-CPU quiescence handshake before thread/process teardown and address-space image reuse.
@@ -59,3 +66,12 @@
 - A thread now remains non-quiescent while a syscall or fault handler may return to it.
 - Quiescence is published only at explicit hand-off points such as blocking or scheduler deschedule.
 - Preserves remote-CPU teardown safety without allowing address-space reclamation during active kernel handling.
+
+## 0090 - Capability and IPC lifecycle hardening
+
+- Reuse bounded capability derivation records safely.
+- Validate active derivations during capability lookup.
+- Make capability revoke descendant-based and authority-checked.
+- Pass mint badges through the explicit control ABI argument.
+- Fix duplicate capability transfer on direct IPC rendezvous.
+- Add repeated derivation/revoke/reuse and rights-attenuation certification coverage.

@@ -352,12 +352,17 @@ namespace sys::kernel::syscall
                  */
                 const error_t transfer_result = transfer_capability(current, receiver);
                 if (transfer_result != error_t::success) {
+                    endpoint->receiver = receiver_reference;
                     ipc::unlock(*endpoint);
                     set_error(frame, transfer_result);
                     return true;
                 }
                 thread::prepare_block(frame, thread::state::blocked_reply);
-                (void)deliver_to_receiver(receiver, current);
+                install_reply(receiver, current);
+                thread::publish_pending(receiver, thread::pending_ipc::incoming_call, current.id,
+                                        current.object.generation, current.message);
+                thread::wake(receiver);
+                ipc::remote_reschedule(receiver.pinned_cpu, arch::cpu::current_id());
                 __atomic_add_fetch(&total_ipc_rendezvous, 1U, __ATOMIC_RELAXED);
                 ipc::unlock(*endpoint);
                 thread::schedule_prepared(frame);
