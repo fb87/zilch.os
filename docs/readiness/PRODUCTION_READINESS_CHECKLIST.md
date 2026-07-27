@@ -119,7 +119,7 @@ Every completed requirement must link to:
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
 - [-] **CAP-012** Single-capability delete and atomic locked lookup snapshots exist; controlled lookup/delete interleaving and complete object-use quiescence evidence remain open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
-- [-] **CAP-014** Capability mutation, IPC transfer, object-reference/descendant revoke, and map/unmap authority use share one authority transaction; scalable locking and complete concurrent mutation stress remain open.
+- [-] **CAP-014** Public capability mutation/revoke APIs acquire the authority lock by construction; control, IPC transfer, and map/unmap use explicit locked transaction primitives. Scalable locking and complete concurrent mutation stress remain open.
 - [-] **CAP-015** Frame destruction waits for mapping quiescence and capability revoke removes descendant-authorized mappings; generalized object-reference quiescence remains open.
 - [-] **CAP-016** Generation checks and reusable derivation records prevent bounded stale-reference reuse. Long-duration and concurrent ABA evidence remains open.
 

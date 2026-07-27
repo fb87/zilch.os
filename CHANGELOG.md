@@ -1,3 +1,9 @@
+## 0125 - Authority-safe capability mutation API
+
+- Make public install, derive, copy, mint, move, remove, and delete operations acquire the authority lock.
+- Add explicit `_locked` mutation primitives for callers already inside an authority transaction.
+- Route control-path and IPC transactions through those locked primitives to avoid recursive locking.
+
 ## 0124 - Atomic capability lookup snapshots
 
 - Lock CSpaces while reading capability slots.

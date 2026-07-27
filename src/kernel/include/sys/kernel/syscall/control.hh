@@ -137,17 +137,18 @@ namespace sys::kernel::syscall
         switch (operation) {
             case abi::v1::control_operation::capability_copy:
                 authority_result =
-                    capability::copy(destination_task->cspace, destination_selector,
-                                     current.owner->cspace, source_selector, {rights});
+                    capability::copy_locked(destination_task->cspace, destination_selector,
+                                            current.owner->cspace, source_selector, {rights});
                 break;
             case abi::v1::control_operation::capability_mint:
                 authority_result =
-                    capability::mint(destination_task->cspace, destination_selector,
-                                     current.owner->cspace, source_selector, {rights}, badge);
+                    capability::mint_locked(destination_task->cspace, destination_selector,
+                                            current.owner->cspace, source_selector, {rights}, badge);
                 break;
             case abi::v1::control_operation::capability_move:
-                authority_result = capability::move(destination_task->cspace, destination_selector,
-                                                    current.owner->cspace, source_selector);
+                authority_result =
+                    capability::move_locked(destination_task->cspace, destination_selector,
+                                            current.owner->cspace, source_selector);
                 break;
             case abi::v1::control_operation::capability_delete: {
                 if (destination_selector >= capability::cspace_slot_count) {
@@ -162,7 +163,8 @@ namespace sys::kernel::syscall
                     capability::derivation_valid(deleted.derivation, deleted.object))
                     (void)memory::unmap_authority(deleted.derivation, false);
                 authority_result =
-                    capability::delete_capability(destination_task->cspace, destination_selector);
+                    capability::delete_capability_locked(destination_task->cspace,
+                                                         destination_selector);
                 break;
             }
             case abi::v1::control_operation::capability_revoke: {

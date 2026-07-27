@@ -138,9 +138,9 @@ namespace sys::kernel::capability
         (void)register_cspace(cspace);
     }
 
-    [[nodiscard]] inline error_t install(cspace_t& cspace, capability_id_t selector,
-                                         const object::reference_t& object,
-                                         rights_t granted_rights) noexcept {
+    [[nodiscard]] inline error_t install_locked(cspace_t& cspace, capability_id_t selector,
+                                                const object::reference_t& object,
+                                                rights_t granted_rights) noexcept {
         if (selector >= cspace_slot_count || object.type == object::type_t::none ||
             object::resolve(object) == nullptr || granted_rights.bits == 0U) {
             return error_t::invalid_argument;
@@ -166,6 +166,15 @@ namespace sys::kernel::capability
         return error_t::success;
     }
 
+    [[nodiscard]] inline error_t install(cspace_t& cspace, capability_id_t selector,
+                                         const object::reference_t& object,
+                                         rights_t granted_rights) noexcept {
+        lock_authority();
+        const error_t result = install_locked(cspace, selector, object, granted_rights);
+        unlock_authority();
+        return result;
+    }
+
     [[nodiscard]] inline error_t remove_locked(cspace_t& cspace,
                                                capability_id_t selector) noexcept {
         if (selector >= cspace_slot_count)
@@ -180,7 +189,12 @@ namespace sys::kernel::capability
     }
 
     [[nodiscard]] inline error_t remove(cspace_t& cspace, capability_id_t selector) noexcept {
-        return remove_locked(cspace, selector);
+        lock_authority();
+        lock(cspace);
+        const error_t result = remove_locked(cspace, selector);
+        unlock(cspace);
+        unlock_authority();
+        return result;
     }
 
     [[nodiscard]] inline error_t lookup(const cspace_t& cspace, capability_id_t selector,
@@ -231,9 +245,10 @@ namespace sys::kernel::capability
         unlock(mutable_cspace);
         return lookup_result;
     }
-    [[nodiscard]] inline error_t derive(cspace_t& destination, capability_id_t destination_selector,
-                                        const cspace_t& source, capability_id_t source_selector,
-                                        rights_t rights_mask, badge_t badge) noexcept {
+    [[nodiscard]] inline error_t
+    derive_locked(cspace_t& destination, capability_id_t destination_selector,
+                  const cspace_t& source, capability_id_t source_selector, rights_t rights_mask,
+                  badge_t badge) noexcept {
         if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
             return error_t::invalid_argument;
         cspace_t& mutable_source = const_cast<cspace_t&>(source);
@@ -275,10 +290,34 @@ namespace sys::kernel::capability
         return result;
     }
 
+    [[nodiscard]] inline error_t derive(cspace_t& destination, capability_id_t destination_selector,
+                                        const cspace_t& source, capability_id_t source_selector,
+                                        rights_t rights_mask, badge_t badge) noexcept {
+        lock_authority();
+        const error_t result = derive_locked(destination, destination_selector, source,
+                                             source_selector, rights_mask, badge);
+        unlock_authority();
+        return result;
+    }
+
+    [[nodiscard]] inline error_t
+    copy_locked(cspace_t& destination, capability_id_t destination_selector, const cspace_t& source,
+                capability_id_t source_selector, rights_t rights_mask) noexcept {
+        return derive_locked(destination, destination_selector, source, source_selector,
+                             rights_mask, 0U);
+    }
+
     [[nodiscard]] inline error_t copy(cspace_t& destination, capability_id_t destination_selector,
                                       const cspace_t& source, capability_id_t source_selector,
                                       rights_t rights_mask) noexcept {
         return derive(destination, destination_selector, source, source_selector, rights_mask, 0U);
+    }
+
+    [[nodiscard]] inline error_t
+    mint_locked(cspace_t& destination, capability_id_t destination_selector, const cspace_t& source,
+                capability_id_t source_selector, rights_t rights_mask, badge_t badge) noexcept {
+        return derive_locked(destination, destination_selector, source, source_selector,
+                             rights_mask, badge);
     }
 
     [[nodiscard]] inline error_t mint(cspace_t& destination, capability_id_t destination_selector,
@@ -288,8 +327,9 @@ namespace sys::kernel::capability
                       badge);
     }
 
-    [[nodiscard]] inline error_t move(cspace_t& destination, capability_id_t destination_selector,
-                                      cspace_t& source, capability_id_t source_selector) noexcept {
+    [[nodiscard]] inline error_t
+    move_locked(cspace_t& destination, capability_id_t destination_selector, cspace_t& source,
+                capability_id_t source_selector) noexcept {
         if (&destination == &source && destination_selector == source_selector)
             return error_t::success;
         if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
@@ -316,11 +356,28 @@ namespace sys::kernel::capability
         return result;
     }
 
-    [[nodiscard]] inline error_t delete_capability(cspace_t& cspace,
-                                                   capability_id_t selector) noexcept {
+    [[nodiscard]] inline error_t move(cspace_t& destination, capability_id_t destination_selector,
+                                      cspace_t& source, capability_id_t source_selector) noexcept {
+        lock_authority();
+        const error_t result =
+            move_locked(destination, destination_selector, source, source_selector);
+        unlock_authority();
+        return result;
+    }
+
+    [[nodiscard]] inline error_t delete_capability_locked(cspace_t& cspace,
+                                                          capability_id_t selector) noexcept {
         lock(cspace);
         const error_t result = remove_locked(cspace, selector);
         unlock(cspace);
+        return result;
+    }
+
+    [[nodiscard]] inline error_t delete_capability(cspace_t& cspace,
+                                                   capability_id_t selector) noexcept {
+        lock_authority();
+        const error_t result = delete_capability_locked(cspace, selector);
+        unlock_authority();
         return result;
     }
 
