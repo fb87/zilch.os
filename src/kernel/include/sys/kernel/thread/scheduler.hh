@@ -46,9 +46,10 @@ namespace sys::kernel::thread
 
         for (u32 index = 0U; index < ipc::endpoint_count; ++index) {
             ipc::initialize(ipc::endpoints[index]);
-            const error_t result = object::register_object(ipc::endpoints[index].object,
-                                                           static_cast<object_id_t>(32U + index),
-                                                           object::type_t::endpoint);
+            const error_t result = object::register_object(
+                ipc::endpoints[index].object,
+                static_cast<object_id_t>(object::bootstrap_id::endpoint_base + index),
+                object::type_t::endpoint);
             if (result != error_t::success)
                 return result;
         }
@@ -56,7 +57,9 @@ namespace sys::kernel::thread
         for (u32 id = 0U; id < active_user_thread_count; ++id) {
             task::initialize(user_tasks[id], static_cast<space_id_t>(id));
             error_t result = object::register_object(
-                user_tasks[id].object, static_cast<object_id_t>(16U + id), object::type_t::task);
+                user_tasks[id].object,
+                static_cast<object_id_t>(object::bootstrap_id::task_base + id),
+                object::type_t::task);
             if (result != error_t::success)
                 return result;
 
@@ -67,19 +70,23 @@ namespace sys::kernel::thread
                                                   : static_cast<word_t>(initial_fuzz_seed(id)));
             user_threads[id].owner = &user_tasks[id];
             user_tasks[id].fault_endpoint = 10U;
-            result = object::register_object(user_threads[id].object, static_cast<object_id_t>(id),
-                                             object::type_t::thread);
+            result = object::register_object(
+                user_threads[id].object,
+                static_cast<object_id_t>(object::bootstrap_id::thread_base + id),
+                object::type_t::thread);
             if (result != error_t::success)
                 return result;
 
-            result = object::register_object(user_threads[id].address_space.object,
-                                             static_cast<object_id_t>(60U + id),
-                                             object::type_t::address_space);
+            result = object::register_object(
+                user_threads[id].address_space.object,
+                static_cast<object_id_t>(object::bootstrap_id::address_space_base + id),
+                object::type_t::address_space);
             if (result != error_t::success)
                 return result;
-            result = object::register_object(user_threads[id].scheduling_context.object,
-                                             static_cast<object_id_t>(50U + id),
-                                             object::type_t::scheduling_context);
+            result = object::register_object(
+                user_threads[id].scheduling_context.object,
+                static_cast<object_id_t>(object::bootstrap_id::scheduling_context_base + id),
+                object::type_t::scheduling_context);
             if (result != error_t::success)
                 return result;
 
@@ -141,12 +148,16 @@ namespace sys::kernel::thread
             store_state(user_threads[id], state::ready);
         }
         task::task& root_task = user_tasks[0];
+        error_t root_result =
+            memory::create_resource(root_task, 32U, memory::managed_pages, {}, true);
+        if (root_result != error_t::success)
+            return root_result;
         const capability::rights_t root_memory_rights{
             static_cast<u32>(capability::right_t::read) |
             static_cast<u32>(capability::right_t::write) |
             static_cast<u32>(capability::right_t::grant) |
             static_cast<u32>(capability::right_t::control)};
-        error_t root_result = capability::install(
+        root_result = capability::install(
             root_task.cspace, 12U, object::reference(memory::frames[0].object), root_memory_rights);
         if (root_result != error_t::success)
             return root_result;
@@ -192,8 +203,8 @@ namespace sys::kernel::thread
         boot::root_bootinfo.root_thread = 2U;
         boot::root_bootinfo.root_space = 3U;
         boot::root_bootinfo.root_fault_endpoint = 10U;
-        boot::root_bootinfo.capability_count = arch::hypervisor::active ? 10U : 8U;
-        const capability_id_t selectors[10]{1U, 2U, 3U, 4U, 10U, 12U, 14U, 15U, 28U, 29U};
+        boot::root_bootinfo.capability_count = arch::hypervisor::active ? 11U : 9U;
+        const capability_id_t selectors[11]{1U, 2U, 3U, 4U, 10U, 12U, 14U, 15U, 32U, 28U, 29U};
         for (u32 index = 0U; index < boot::root_bootinfo.capability_count; ++index) {
             const capability::slot_t& slot = root_task.cspace.slots[selectors[index]];
             boot::root_bootinfo.capabilities[index] = {selectors[index], slot.object,
@@ -344,6 +355,9 @@ namespace sys::kernel::thread
             result = capability::install(
                 owner.cspace, 3U, object::reference(target.address_space.object), control_rights);
         if (result == error_t::success)
+            result = memory::delegate_resource(root, memory::resources[0], owner, 15U,
+                                               owner.memory_quota_pages);
+        if (result == error_t::success)
             result = capability::install(owner.cspace, 4U,
                                          object::reference(target.scheduling_context.object),
                                          control_rights);
@@ -361,6 +375,8 @@ namespace sys::kernel::thread
                                          capability::rights(capability::right_t::write));
 
         if (result != error_t::success) {
+            if (owner.cspace.slots[15U].object.type == object::type_t::memory_resource)
+                (void)memory::destroy_resource(owner, 15U);
             (void)capability::delete_capability(root.cspace, thread_selector);
             (void)capability::delete_capability(root.cspace, task_selector);
             (void)capability::delete_capability(root.cspace, space_selector);
@@ -438,6 +454,7 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
         auto& target = *reinterpret_cast<thread*>(header);
+        task::task* owner = target.owner;
         if (target.id == 0U || target.id >= user_thread_count)
             return error_t::denied;
         result = quiesce_user_thread(target);
@@ -454,9 +471,13 @@ namespace sys::kernel::thread
         (void)capability::delete_capability(root.cspace, space_selector);
 
         memory::unmap_all(target.address_space);
+        if (owner->cspace.slots[15U].object.type == object::type_t::memory_resource) {
+            result = memory::destroy_resource(*owner, 15U);
+            if (result != error_t::success)
+                return result;
+        }
         (void)object::unregister_object(object::reference(target.scheduling_context.object));
         (void)object::unregister_object(object::reference(target.address_space.object));
-        task::task* owner = target.owner;
         (void)object::unregister_object(object::reference(target.object));
         (void)object::unregister_object(object::reference(owner->object));
         clear_user_bundle(target, *owner);

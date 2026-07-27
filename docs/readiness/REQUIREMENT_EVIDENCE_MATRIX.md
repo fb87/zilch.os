@@ -117,3 +117,12 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | MEM-017 | Public mapping attributes and architecture descriptor selection validate normal-inner and device mappings. | `[TEST] name=memory_attributes_pressure result=PASS`. | In progress: additional cache policies and cross-platform validation remain open. |
 | MEM-018 | Root-only device-frame creation is restricted by the platform MMIO allowlist; device mappings are non-executable. | `[TEST] name=memory_attributes_pressure result=PASS`. | In progress: capability-based device database and driver delegation remain open. |
 | TST-024 | Invalid attribute combinations and failed maps leave frame accounting balanced. | `[TEST] name=memory_attributes_pressure result=PASS`. | In progress: systematic allocation-stage fault injection remains open. |
+
+
+## Batch 0109 — userspace memory-resource delegation
+
+| Requirement | Implementation | Evidence | Status / limitations |
+|---|---|---|---|
+| MEM-005, MEM-006, MEM-009 | `memory::resource`, root selector 32, per-task selector 15, parent/child quota delegation | `memory_resource_delegation` certification test | Bounded resource objects; no physical extent retyping |
+| MEM-007, MEM-008, MEM-010 | resource-backed frame/page-table creation and atomic used-page accounting | quota-two allocation/exhaustion/release cycle | Fixed object pools and simple quota policy |
+| USR-006, USR-008, USR-011, USR-012 | PL3 memory server uses `resource_frame_create` through delegated selector 15 | userspace pager service plus resource exhaustion test | General allocation protocol and pressure policy remain open |

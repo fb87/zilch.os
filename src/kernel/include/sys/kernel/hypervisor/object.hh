@@ -131,8 +131,8 @@ namespace sys::kernel::hypervisor
 
     inline virtual_machine_t bootstrap_vm{};
     inline virtual_cpu_t bootstrap_vcpu{};
-    inline constexpr object_id_t vm_object_id = 80U;
-    inline constexpr object_id_t vcpu_object_id = 81U;
+    inline constexpr object_id_t vm_object_id = object::bootstrap_id::virtual_machine;
+    inline constexpr object_id_t vcpu_object_id = object::bootstrap_id::virtual_cpu;
     static_assert(vm_object_id < object::table_capacity);
     static_assert(vcpu_object_id < object::table_capacity);
     static_assert(vm_object_id != vcpu_object_id);

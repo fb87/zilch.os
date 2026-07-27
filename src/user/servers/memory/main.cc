@@ -24,8 +24,8 @@ namespace
 
 extern "C" int main(sys::word_t, sys::word_t) noexcept {
     for (sys::word_t index = 0U; index < client_count; ++index) {
-        const sys::word_t created =
-            sys::control(sys::abi::v1::control_operation::frame_create, 0U, working_frame);
+        const sys::word_t created = sys::control(
+            sys::abi::v1::control_operation::resource_frame_create, 15U, working_frame);
         if (created != static_cast<sys::word_t>(sys::error_t::success))
             fail(1U + index * 8U);
 

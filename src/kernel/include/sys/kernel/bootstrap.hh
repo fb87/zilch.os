@@ -19,13 +19,15 @@ namespace sys::kernel::bootstrap
             return result;
         notification::initialize(root_notification);
         result =
-            object::register_object(root_notification.object, 48U, object::type_t::notification);
+            object::register_object(root_notification.object, object::bootstrap_id::notification,
+                                    object::type_t::notification);
         if (result != error_t::success)
             return result;
         root_timer_interrupt.irq = 27U;
         root_timer_interrupt.notification = object::reference(root_notification.object);
-        result =
-            object::register_object(root_timer_interrupt.object, 49U, object::type_t::interrupt);
+        result = object::register_object(root_timer_interrupt.object,
+                                         object::bootstrap_id::timer_interrupt,
+                                         object::type_t::interrupt);
         if (result != error_t::success)
             return result;
         result = hypervisor::initialize();

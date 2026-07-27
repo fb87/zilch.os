@@ -13,6 +13,7 @@ namespace sys::kernel::object
         notification,
         frame,
         page_table,
+        memory_resource,
         interrupt,
         scheduling_context,
         virtual_machine,

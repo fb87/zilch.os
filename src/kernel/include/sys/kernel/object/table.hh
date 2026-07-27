@@ -9,6 +9,33 @@ namespace sys::kernel::object
     inline constexpr u32 table_capacity = 512U;
     inline constexpr object_id_t dynamic_id_base = 96U;
 
+    namespace bootstrap_id
+    {
+        inline constexpr object_id_t thread_base = 0U;
+        inline constexpr object_id_t task_base = 16U;
+        inline constexpr object_id_t endpoint_base = 32U;
+        inline constexpr object_id_t frame_base = 40U;
+        inline constexpr object_id_t page_table_base = 44U;
+        inline constexpr object_id_t notification = 48U;
+        inline constexpr object_id_t timer_interrupt = 49U;
+        inline constexpr object_id_t scheduling_context_base = 50U;
+        inline constexpr object_id_t address_space_base = 60U;
+        inline constexpr object_id_t virtual_machine = 80U;
+        inline constexpr object_id_t virtual_cpu = 81U;
+        inline constexpr object_id_t root_memory_resource = 82U;
+
+        static_assert(thread_base + 10U <= task_base);
+        static_assert(task_base + 10U <= endpoint_base);
+        static_assert(endpoint_base + 2U <= frame_base);
+        static_assert(frame_base + 4U <= page_table_base);
+        static_assert(page_table_base + 4U <= notification);
+        static_assert(timer_interrupt < scheduling_context_base);
+        static_assert(scheduling_context_base + 10U <= address_space_base);
+        static_assert(address_space_base + 10U <= virtual_machine);
+        static_assert(virtual_cpu < root_memory_resource);
+        static_assert(root_memory_resource < dynamic_id_base);
+    } // namespace bootstrap_id
+
     struct reference_t {
         object_id_t id{};
         u32 generation{};

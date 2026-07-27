@@ -31,6 +31,7 @@ namespace
         memory_mapping_database = 14U,
         memory_authority_revoke = 15U,
         memory_attributes_pressure = 16U,
+        memory_resource_delegation = 17U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -159,6 +160,49 @@ namespace
                notification_signalled == success && notification_polled == success &&
                badges == 0x55U && notification_destroyed == success &&
                notification_recreated == success && notification_redestroyed == success;
+    }
+
+    [[nodiscard]] bool test_memory_resource_delegation() noexcept {
+        constexpr sys::word_t root_task_selector = 1U;
+        constexpr sys::word_t root_resource_selector = 32U;
+        constexpr sys::word_t child_resource_selector = 33U;
+        constexpr sys::word_t first_frame = 34U;
+        constexpr sys::word_t second_frame = 35U;
+        constexpr sys::word_t third_frame = 36U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t no_memory = static_cast<sys::word_t>(sys::error_t::no_memory);
+
+        if (sys::control(sys::abi::v1::control_operation::memory_resource_delegate,
+                         root_task_selector, root_resource_selector, child_resource_selector,
+                         2U) != success)
+            return false;
+        sys::word_t used = 0U;
+        if (sys::control_result1(used, sys::abi::v1::control_operation::memory_resource_query,
+                                 child_resource_selector) != success ||
+            used != 0U)
+            return false;
+        bool passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                                   child_resource_selector, first_frame) == success;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              child_resource_selector, second_frame) == success &&
+                 passed;
+        passed = sys::control(sys::abi::v1::control_operation::resource_frame_create,
+                              child_resource_selector, third_frame) == no_memory &&
+                 passed;
+        if (sys::control_result1(used, sys::abi::v1::control_operation::memory_resource_query,
+                                 child_resource_selector) != success ||
+            used != 2U)
+            passed = false;
+        passed =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, first_frame) == success &&
+            passed;
+        passed =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, second_frame) == success &&
+            passed;
+        passed = sys::control(sys::abi::v1::control_operation::memory_resource_destroy,
+                              child_resource_selector) == success &&
+                 passed;
+        return passed;
     }
 
     [[nodiscard]] bool test_memory_resource_lifecycle() noexcept {
@@ -514,6 +558,8 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::memory_authority_revoke, authority_revoke_pass);
     const bool attributes_pressure_pass = test_memory_attributes_pressure();
     record(ledger, test_id::memory_attributes_pressure, attributes_pressure_pass);
+    const bool resource_delegation_pass = test_memory_resource_delegation();
+    record(ledger, test_id::memory_resource_delegation, resource_delegation_pass);
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

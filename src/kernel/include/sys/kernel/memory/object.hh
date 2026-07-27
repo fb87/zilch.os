@@ -32,6 +32,7 @@ namespace sys::kernel::memory
         paddr_t physical_address{};
         space_id_t owner{};
         object::reference_t owner_task{};
+        object::reference_t resource_authority{};
         u32 mapping_count{};
         bool allocated{};
         bool device{};
@@ -39,11 +40,23 @@ namespace sys::kernel::memory
         mapping_record mappings[maximum_mappings_per_frame]{};
     };
 
+    struct resource {
+        object::header_t object{};
+        object::reference_t owner_task{};
+        object::reference_t parent{};
+        u32 quota_pages{};
+        volatile u32 used_pages{};
+        volatile u32 delegated_pages{};
+        bool root{};
+        bool in_use{};
+    };
+
     struct page_table {
         object::header_t object{};
         paddr_t physical_address{};
         space_id_t owner{};
         object::reference_t owner_task{};
+        object::reference_t resource_authority{};
         u8 level{};
         bool allocated{};
         bool in_use{};

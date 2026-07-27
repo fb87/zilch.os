@@ -17,6 +17,7 @@ namespace sys::kernel::memory
     inline constexpr u32 bootstrap_page_table_count = 4U;
     inline constexpr u32 frame_count = 64U;
     inline constexpr u32 page_table_count = 32U;
+    inline constexpr u32 resource_count = 32U;
     inline constexpr u64 page_size = arch::memory::page_size;
     inline constexpr u32 maximum_physical_pages =
         static_cast<u32>(platform::memory::ram_size / page_size);
@@ -24,6 +25,7 @@ namespace sys::kernel::memory
 
     inline frame frames[frame_count]{};
     inline page_table page_tables[page_table_count]{};
+    inline resource resources[resource_count]{};
     inline u64 allocation_bitmap[bitmap_words]{};
     inline paddr_t managed_base{};
     inline u32 managed_pages{};
@@ -314,6 +316,134 @@ namespace sys::kernel::memory
         return error_t::success;
     }
 
+    [[nodiscard]] inline error_t create_resource(task::task& owner, capability_id_t destination,
+                                                 u32 quota_pages, object::reference_t parent = {},
+                                                 bool root_resource = false) noexcept {
+        if (destination >= capability::cspace_slot_count || quota_pages == 0U)
+            return error_t::invalid_argument;
+        resource* target = nullptr;
+        for (u32 index = 0U; index < resource_count; ++index) {
+            bool expected = false;
+            if (__atomic_compare_exchange_n(&resources[index].in_use, &expected, true, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                target = &resources[index];
+                break;
+            }
+        }
+        if (target == nullptr)
+            return error_t::no_memory;
+        error_t result =
+            root_resource
+                ? object::register_object(target->object,
+                                          object::bootstrap_id::root_memory_resource,
+                                          object::type_t::memory_resource)
+                : object::register_dynamic_object(target->object, object::type_t::memory_resource);
+        if (result == error_t::success) {
+            target->owner_task = object::reference(owner.object);
+            target->parent = parent;
+            target->quota_pages = quota_pages;
+            target->used_pages = 0U;
+            target->delegated_pages = 0U;
+            target->root = root_resource;
+            const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
+                                              static_cast<u32>(capability::right_t::write) |
+                                              static_cast<u32>(capability::right_t::grant) |
+                                              static_cast<u32>(capability::right_t::control)};
+            result = capability::install(owner.cspace, destination,
+                                         object::reference(target->object), rights);
+        }
+        if (result != error_t::success) {
+            if (target->object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target->object));
+            *target = {};
+        }
+        return result;
+    }
+
+    [[nodiscard]] inline error_t charge_resource(resource& value) noexcept {
+        u32 used = __atomic_load_n(&value.used_pages, __ATOMIC_ACQUIRE);
+        for (;;) {
+            if (used >= value.quota_pages)
+                return error_t::no_memory;
+            if (__atomic_compare_exchange_n(&value.used_pages, &used, used + 1U, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                return error_t::success;
+        }
+    }
+
+    inline void uncharge_resource(resource& value) noexcept {
+        const u32 used = __atomic_load_n(&value.used_pages, __ATOMIC_ACQUIRE);
+        if (used != 0U)
+            __atomic_fetch_sub(&value.used_pages, 1U, __ATOMIC_ACQ_REL);
+    }
+
+    [[nodiscard]] inline error_t resolve_resource(task::task& owner, capability_id_t selector,
+                                                  resource*& result) noexcept {
+        result = nullptr;
+        object::header_t* header = nullptr;
+        const error_t lookup =
+            capability::lookup(owner.cspace, selector, object::type_t::memory_resource,
+                               capability::right_t::write, header);
+        if (lookup != error_t::success)
+            return lookup;
+        result = reinterpret_cast<resource*>(header);
+        if (!same_reference(result->owner_task, object::reference(owner.object)))
+            return error_t::denied;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t delegate_resource(task::task& source_owner, resource& parent,
+                                                   task::task& target_owner,
+                                                   capability_id_t destination,
+                                                   u32 quota_pages) noexcept {
+        if (!source_owner.root &&
+            !same_reference(parent.owner_task, object::reference(source_owner.object)))
+            return error_t::denied;
+        u32 delegated = __atomic_load_n(&parent.delegated_pages, __ATOMIC_ACQUIRE);
+        for (;;) {
+            const u32 used = __atomic_load_n(&parent.used_pages, __ATOMIC_ACQUIRE);
+            if (quota_pages == 0U || used + delegated + quota_pages > parent.quota_pages)
+                return error_t::no_memory;
+            if (__atomic_compare_exchange_n(&parent.delegated_pages, &delegated,
+                                            delegated + quota_pages, false, __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE))
+                break;
+        }
+        const error_t result = create_resource(target_owner, destination, quota_pages,
+                                               object::reference(parent.object), false);
+        if (result != error_t::success)
+            __atomic_fetch_sub(&parent.delegated_pages, quota_pages, __ATOMIC_ACQ_REL);
+        return result;
+    }
+
+    [[nodiscard]] inline error_t destroy_resource(task::task& owner,
+                                                  capability_id_t selector) noexcept {
+        object::header_t* header = nullptr;
+        error_t result = capability::lookup(owner.cspace, selector, object::type_t::memory_resource,
+                                            capability::right_t::control, header);
+        if (result != error_t::success)
+            return result;
+        auto& target = *reinterpret_cast<resource*>(header);
+        if (target.root || !same_reference(target.owner_task, object::reference(owner.object)))
+            return error_t::denied;
+        if (__atomic_load_n(&target.used_pages, __ATOMIC_ACQUIRE) != 0U ||
+            __atomic_load_n(&target.delegated_pages, __ATOMIC_ACQUIRE) != 0U)
+            return error_t::busy;
+        if (valid_reference(target.parent)) {
+            auto* parent = reinterpret_cast<resource*>(object::resolve(target.parent));
+            if (parent != nullptr)
+                __atomic_fetch_sub(&parent->delegated_pages, target.quota_pages, __ATOMIC_ACQ_REL);
+        }
+        const object::reference_t reference = object::reference(target.object);
+        capability::revoke_reference(reference);
+        (void)capability::delete_capability(owner.cspace, selector);
+        result = object::unregister_object(reference);
+        if (result != error_t::success)
+            return result;
+        target = {};
+        return error_t::success;
+    }
+
     inline error_t initialize_objects() noexcept {
         error_t result = initialize_physical_allocator();
         if (result != error_t::success)
@@ -321,7 +451,9 @@ namespace sys::kernel::memory
         for (u32 index = 0U; index < bootstrap_frame_count; ++index) {
             frames[index].in_use = true;
             result = object::register_object(
-                frames[index].object, static_cast<object_id_t>(40U + index), object::type_t::frame);
+                frames[index].object,
+                static_cast<object_id_t>(object::bootstrap_id::frame_base + index),
+                object::type_t::frame);
             if (result != error_t::success)
                 return result;
             result = assign_frame(frames[index], 0U);
@@ -331,9 +463,10 @@ namespace sys::kernel::memory
         for (u32 index = 0U; index < bootstrap_page_table_count; ++index) {
             page_tables[index].level = 3U;
             page_tables[index].in_use = true;
-            result = object::register_object(page_tables[index].object,
-                                             static_cast<object_id_t>(44U + index),
-                                             object::type_t::page_table);
+            result = object::register_object(
+                page_tables[index].object,
+                static_cast<object_id_t>(object::bootstrap_id::page_table_base + index),
+                object::type_t::page_table);
             if (result != error_t::success)
                 return result;
             result = allocate_physical_page(page_tables[index].physical_address);
@@ -396,6 +529,27 @@ namespace sys::kernel::memory
             uncharge_page(owner);
         }
         return result;
+    }
+
+    [[nodiscard]] inline error_t create_frame_from_resource(task::task& owner, resource& authority,
+                                                            capability_id_t destination) noexcept {
+        error_t result = charge_resource(authority);
+        if (result != error_t::success)
+            return result;
+        result = create_frame(owner, destination);
+        if (result != error_t::success) {
+            uncharge_resource(authority);
+            return result;
+        }
+        object::header_t* header = nullptr;
+        result = capability::lookup(owner.cspace, destination, object::type_t::frame,
+                                    capability::right_t::control, header);
+        if (result != error_t::success) {
+            uncharge_resource(authority);
+            return result;
+        }
+        reinterpret_cast<frame*>(header)->resource_authority = object::reference(authority.object);
+        return error_t::success;
     }
 
     [[nodiscard]] inline error_t create_device_frame(task::task& owner, capability_id_t destination,
@@ -461,6 +615,10 @@ namespace sys::kernel::memory
         if (target.owner != owner.address_space_id && !owner.root)
             return error_t::denied;
         const bool was_device = target.device;
+        resource* charged_resource = nullptr;
+        if (valid_reference(target.resource_authority))
+            charged_resource =
+                reinterpret_cast<resource*>(object::resolve(target.resource_authority));
         result = release_frame(target);
         if (result != error_t::success)
             return result;
@@ -474,6 +632,8 @@ namespace sys::kernel::memory
         __atomic_store_n(&target.in_use, false, __ATOMIC_RELEASE);
         if (!was_device)
             uncharge_page(owner);
+        if (charged_resource != nullptr)
+            uncharge_resource(*charged_resource);
         return error_t::success;
     }
 
@@ -523,6 +683,30 @@ namespace sys::kernel::memory
         return result;
     }
 
+    [[nodiscard]] inline error_t create_page_table_from_resource(task::task& owner,
+                                                                 resource& authority,
+                                                                 capability_id_t destination,
+                                                                 u8 level) noexcept {
+        error_t result = charge_resource(authority);
+        if (result != error_t::success)
+            return result;
+        result = create_page_table(owner, destination, level);
+        if (result != error_t::success) {
+            uncharge_resource(authority);
+            return result;
+        }
+        object::header_t* header = nullptr;
+        result = capability::lookup(owner.cspace, destination, object::type_t::page_table,
+                                    capability::right_t::control, header);
+        if (result != error_t::success) {
+            uncharge_resource(authority);
+            return result;
+        }
+        reinterpret_cast<page_table*>(header)->resource_authority =
+            object::reference(authority.object);
+        return error_t::success;
+    }
+
     [[nodiscard]] inline error_t destroy_page_table(task::task& owner,
                                                     capability_id_t selector) noexcept {
         object::header_t* header = nullptr;
@@ -531,6 +715,10 @@ namespace sys::kernel::memory
         if (result != error_t::success)
             return result;
         page_table& target = *reinterpret_cast<page_table*>(header);
+        resource* charged_resource = nullptr;
+        if (valid_reference(target.resource_authority))
+            charged_resource =
+                reinterpret_cast<resource*>(object::resolve(target.resource_authority));
         if (target.object.id < object::dynamic_id_base)
             return error_t::denied;
         if (target.owner != owner.address_space_id && !owner.root)
@@ -547,6 +735,8 @@ namespace sys::kernel::memory
             return result;
         target = {};
         uncharge_page(owner);
+        if (charged_resource != nullptr)
+            uncharge_resource(*charged_resource);
         return error_t::success;
     }
 

@@ -265,6 +265,9 @@ namespace sys::kernel::syscall
                     case 16U:
                         name = "memory_attributes_pressure";
                         break;
+                    case 17U:
+                        name = "memory_resource_delegation";
+                        break;
                     default:
                         break;
                 }
@@ -425,6 +428,72 @@ namespace sys::kernel::syscall
                     result = memory::create_device_frame(*current.owner,
                                                          static_cast<capability_id_t>(a1), a2);
                 break;
+            case abi::v1::control_operation::memory_resource_delegate: {
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                task::task* target_task = nullptr;
+                result = resolve_task(current, a1, capability::right_t::control, target_task);
+                memory::resource* parent = nullptr;
+                if (result == error_t::success)
+                    result = memory::resolve_resource(*current.owner,
+                                                      static_cast<capability_id_t>(a2), parent);
+                if (result == error_t::success)
+                    result = memory::delegate_resource(*current.owner, *parent, *target_task,
+                                                       static_cast<capability_id_t>(a3),
+                                                       static_cast<u32>(a4));
+                break;
+            }
+            case abi::v1::control_operation::resource_frame_create: {
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                memory::resource* authority = nullptr;
+                result = memory::resolve_resource(*current.owner, static_cast<capability_id_t>(a1),
+                                                  authority);
+                if (result == error_t::success)
+                    result = memory::create_frame_from_resource(*current.owner, *authority,
+                                                                static_cast<capability_id_t>(a2));
+                break;
+            }
+            case abi::v1::control_operation::resource_page_table_create: {
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                memory::resource* authority = nullptr;
+                result = memory::resolve_resource(*current.owner, static_cast<capability_id_t>(a1),
+                                                  authority);
+                if (result == error_t::success)
+                    result = memory::create_page_table_from_resource(
+                        *current.owner, *authority, static_cast<capability_id_t>(a2),
+                        static_cast<u8>(a3));
+                break;
+            }
+            case abi::v1::control_operation::memory_resource_destroy:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result =
+                        memory::destroy_resource(*current.owner, static_cast<capability_id_t>(a1));
+                break;
+            case abi::v1::control_operation::memory_resource_query: {
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                memory::resource* authority = nullptr;
+                result = memory::resolve_resource(*current.owner, static_cast<capability_id_t>(a1),
+                                                  authority);
+                if (result == error_t::success) {
+                    frame.x[1] = __atomic_load_n(&authority->used_pages, __ATOMIC_ACQUIRE);
+                    frame.x[2] = authority->quota_pages;
+                    frame.x[3] = __atomic_load_n(&authority->delegated_pages, __ATOMIC_ACQUIRE);
+                }
+                break;
+            }
             case abi::v1::control_operation::frame_destroy:
                 if (current.owner == nullptr)
                     result = error_t::denied;

@@ -184,15 +184,15 @@ Every completed requirement must link to:
 - [-] **MEM-002** Kernel image, DTB blob, FDT reservation-map entries, and `/reserved-memory` ranges are excluded before allocator publication; full platform-reservation coverage remains open.
 - [-] **MEM-003** DTB bounds, cell geometry, overflow, tuple shape, and post-subtraction region overlap are validated; broader malformed-map fuzz remains open.
 - [-] **MEM-004** The bounded physical allocator supports up to sixteen discontiguous allocatable regions; scalable metadata and real discontiguous-hardware evidence remain open.
-- [-] **MEM-005** Bootinfo v2 exports allocatable region metadata, total pages, and free pages to root; resource capabilities and userspace allocation ownership remain open.
+- [-] **MEM-005** Bootinfo v2 exports allocatable regions and root now receives an explicit memory-resource capability; scalable region-by-region delegation remains open.
 
 ## 4.2 Resource objects
 
-- [-] **MEM-006** Allocator-backed dynamic frame/page-table pools exist, but root delegation is bounded and not yet a complete untyped resource model.
-- [-] **MEM-007** Concurrent frame allocation, owner identity, zero-on-allocation/reuse, and accounting exist; full root-resource delegation remains open.
-- [-] **MEM-008** Concurrent allocator-backed page-table objects carry owner identity and accounting; scalable hierarchy and delegation remain open.
-- [ ] **MEM-009** Implement untyped/resource retyping or equivalent safe delegation.
-- [-] **MEM-010** Bounded per-task quotas/accounting are now exercised across frame and page-table create/destroy cycles; policy and pressure exhaustion remain open.
+- [-] **MEM-006** Allocator-backed frame/page-table pools are now charged through bounded memory-resource capabilities; fixed metadata pools and non-retype semantics remain open.
+- [-] **MEM-007** Frame allocation is capability-authorized through per-task delegated memory resources with quota accounting; scalable physical extents remain open.
+- [-] **MEM-008** Page-table allocation supports the same delegated resource authority and accounting; scalable hierarchy remains open.
+- [-] **MEM-009** Bounded memory-resource objects support parent/child quota delegation and resource-backed frame/page-table creation; physical extent subdivision/retyping remains open.
+- [-] **MEM-010** Per-resource and per-task quotas/accounting are enforced; certification proves quota exhaustion and balanced release, while policy remains basic.
 - [x] **MEM-011** Zero memory before delegation and reuse.
 - [-] **MEM-012** Basic generation/ownership checks exist; exhaustive fault injection remains open.
 
@@ -317,13 +317,13 @@ Every completed requirement must link to:
 
 ## 7.2 Memory server and pager
 
-- [-] **USR-006** Independently linked userspace memory-server test service exists; production resource-server API/policy remains open.
+- [-] **USR-006** The independently linked PL3 memory server now allocates frames through its delegated memory-resource capability; production inventory/policy APIs remain open.
 - [-] **USR-007** Root bootinfo carries the physical memory inventory; the userspace memory server does not yet import and manage it.
-- [-] **USR-008** Capability-authorized frame creation is exercised by the pager; general service API remains open.
+- [-] **USR-008** The pager memory server uses resource-backed frame creation and quota enforcement; general client allocation API remains open.
 - [-] **USR-009** Independent pager service handles two sequential clients; concurrency, death, and pressure policies remain open.
 - [ ] **USR-010** Demand paging implemented where configured.
-- [ ] **USR-011** Memory pressure and allocation-failure policy implemented.
-- [ ] **USR-012** Per-domain quotas implemented.
+- [-] **USR-011** Resource quota exhaustion returns deterministic `no_memory`; reclamation/pressure policy remains open.
+- [-] **USR-012** Bounded per-task memory-resource quotas are created at process construction and enforced for resource-backed objects; configurable domain policy remains open.
 
 ## 7.3 Process and ELF loader
 
@@ -563,7 +563,7 @@ Every completed requirement must link to:
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
 - [ ] **TST-021** VM lifecycle and VMID rollover fuzz implemented.
 - [ ] **TST-022** Virtual interrupt storm test implemented.
-- [-] **TST-023** Certification exercises bounded allocation/accounting, multi-map cleanup, attribute rejection, MMIO lifecycle, and rollback accounting; full allocator exhaustion and sustained pressure remain open.
+- [-] **TST-023** Certification exercises allocation/accounting, resource quota exhaustion, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion remains open.
 - [-] **TST-024** Attribute and mapping rejection paths verify cleanup/accounting rollback; systematic per-stage allocation fault injection remains open.
 
 ## 12.4 Long-duration certification

@@ -1,3 +1,10 @@
+## 0109 — Userspace memory-resource delegation
+
+- Add bounded parent/child memory-resource capability objects.
+- Give root an explicit resource capability and each PL3 task a delegated quota.
+- Route the userspace memory server through resource-backed frame creation.
+- Add quota exhaustion, accounting, release, and resource destruction certification.
+
 ## 0.8.0 — Batch 0107
 
 - Preserve the ARM64 firmware DTB pointer through early assembly startup.
@@ -201,3 +208,12 @@
   `not_found`.
 - Report the selected inventory source in the memory boot log.
 - Keep the fallback freestanding without implicit `memcpy` dependencies.
+
+## 0110 - Bootstrap object ID allocation map
+
+- Fix the root memory-resource object ID collision with the root notification.
+- Centralize every fixed bootstrap object ID in `object::bootstrap_id`.
+- Reserve non-overlapping ranges for threads, tasks, endpoints, frames, page
+  tables, notifications, interrupts, scheduling contexts, address spaces,
+  hypervisor objects, and the root memory resource.
+- Add compile-time range and uniqueness checks below the dynamic object ID base.

@@ -41,5 +41,10 @@ namespace sys::abi::v1
         notification_create = 34U,
         notification_destroy = 35U,
         device_frame_create = 36U,
+        memory_resource_delegate = 37U,
+        resource_frame_create = 38U,
+        resource_page_table_create = 39U,
+        memory_resource_query = 40U,
+        memory_resource_destroy = 41U,
     };
 } // namespace sys::abi::v1
