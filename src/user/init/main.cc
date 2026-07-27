@@ -5,6 +5,7 @@
 #if CONFIG_SELFTEST
 #include <sys/control.hh>
 #include <sys/hypervisor.hh>
+#include <sys/ipc.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/control.hh>
@@ -22,6 +23,8 @@ namespace
         hypervisor_profile_0_2 = 8U,
         hypervisor_negative_fuzz = 9U,
         hypervisor_profile_0_4 = 10U,
+        userspace_pager_service = 11U,
+        dynamic_ipc_objects = 12U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -31,6 +34,174 @@ namespace
     inline constexpr sys::word_t hypervisor_vm_selector = 28U;
 
     static_assert(worker_space_selector_base + 3U < hypervisor_vm_selector);
+
+    inline constexpr sys::word_t memory_server_role = 0x100U;
+    inline constexpr sys::word_t fault_client_role = 0x101U;
+    inline constexpr sys::word_t service_fault_address = 0x20004000U;
+    inline constexpr sys::word_t service_done_badge = 1U;
+
+    [[noreturn]] void memory_server() noexcept {
+        const sys::word_t created =
+            sys::control(sys::abi::v1::control_operation::frame_create, 0U, 12U);
+        if (created != static_cast<sys::word_t>(sys::error_t::success)) {
+            for (;;)
+                asm volatile("wfe");
+        }
+
+        const auto fault = sys::ipc_receive(10U);
+        if (fault.status != static_cast<sys::word_t>(sys::error_t::success)) {
+            for (;;)
+                asm volatile("wfe");
+        }
+        const sys::word_t resolved = sys::control(
+            sys::abi::v1::control_operation::fault_reply_sender, 12U, fault.message2, 2U);
+        if (resolved != static_cast<sys::word_t>(sys::error_t::success)) {
+            for (;;)
+                asm volatile("wfe");
+        }
+
+        const auto completion = sys::ipc_receive(10U);
+        if (completion.status != static_cast<sys::word_t>(sys::error_t::success) ||
+            completion.message0 != 0x50414745U) {
+            for (;;)
+                asm volatile("wfe");
+        }
+        const sys::word_t reclaimed = sys::control(
+            sys::abi::v1::control_operation::pager_reclaim_sender, 12U, service_fault_address);
+        if (reclaimed != static_cast<sys::word_t>(sys::error_t::success)) {
+            for (;;)
+                asm volatile("wfe");
+        }
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal, 14U,
+                           service_done_badge);
+        (void)sys::ipc_reply_receive(10U, 0U, 0U, 0U, 0U);
+        for (;;)
+            asm volatile("wfe");
+    }
+
+    [[noreturn]] void fault_client() noexcept {
+        volatile sys::word_t* page = reinterpret_cast<volatile sys::word_t*>(service_fault_address);
+        *page = 0x5a494c4348504147ULL;
+        if (*page != 0x5a494c4348504147ULL) {
+            for (;;)
+                asm volatile("wfe");
+        }
+        const sys::word_t call =
+            sys_ipc_invoke_raw(10U, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::call),
+                               0x50414745U, 0U, 0U, 0U, 0U, 0U);
+        if (call != static_cast<sys::word_t>(sys::error_t::success)) {
+            for (;;)
+                asm volatile("wfe");
+        }
+        for (;;)
+            asm volatile("wfe");
+    }
+
+    [[nodiscard]] bool create_service_process(sys::word_t cpu, sys::word_t role,
+                                              sys::word_t thread_selector,
+                                              sys::word_t task_selector,
+                                              sys::word_t space_selector) noexcept {
+        return sys::control(sys::abi::v1::control_operation::process_create, cpu, role,
+                            thread_selector, task_selector,
+                            space_selector) == static_cast<sys::word_t>(sys::error_t::success);
+    }
+
+    [[nodiscard]] bool destroy_service_process(sys::word_t thread_selector,
+                                               sys::word_t task_selector,
+                                               sys::word_t space_selector) noexcept {
+        const sys::word_t suspend =
+            sys::control(sys::abi::v1::control_operation::thread_suspend, thread_selector);
+        if (suspend != static_cast<sys::word_t>(sys::error_t::success)) {
+            return false;
+        }
+        for (sys::word_t attempt = 0U; attempt < 100000U; ++attempt) {
+            const sys::word_t result =
+                sys::control(sys::abi::v1::control_operation::process_destroy, thread_selector,
+                             task_selector, space_selector);
+            if (result == static_cast<sys::word_t>(sys::error_t::success)) {
+                return true;
+            }
+            if (result != static_cast<sys::word_t>(sys::error_t::busy)) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool run_userspace_pager_service() noexcept {
+        constexpr sys::word_t server_thread = 17U;
+        constexpr sys::word_t server_task = 20U;
+        constexpr sys::word_t server_space = 23U;
+        constexpr sys::word_t client_thread = 18U;
+        constexpr sys::word_t client_task = 21U;
+        constexpr sys::word_t client_space = 24U;
+
+        if (!create_service_process(1U, memory_server_role, server_thread, server_task,
+                                    server_space)) {
+            return false;
+        }
+        if (!create_service_process(2U, fault_client_role, client_thread, client_task,
+                                    client_space)) {
+            (void)destroy_service_process(server_thread, server_task, server_space);
+            return false;
+        }
+
+        bool completed = false;
+        for (sys::word_t spin = 0U; spin < 10000000U; ++spin) {
+            sys::word_t badges = 0U;
+            const sys::word_t status = sys::control_result1(
+                badges, sys::abi::v1::control_operation::notification_poll, 14U);
+            if (status == static_cast<sys::word_t>(sys::error_t::success) &&
+                (badges & service_done_badge) != 0U) {
+                completed = true;
+                break;
+            }
+        }
+
+        const bool client_destroyed =
+            destroy_service_process(client_thread, client_task, client_space);
+        const bool server_destroyed =
+            destroy_service_process(server_thread, server_task, server_space);
+        return completed && client_destroyed && server_destroyed;
+    }
+
+    [[nodiscard]] bool test_dynamic_ipc_objects() noexcept {
+        constexpr sys::word_t endpoint_selector = 30U;
+        constexpr sys::word_t notification_selector = 31U;
+        const sys::word_t endpoint_created =
+            sys::control(sys::abi::v1::control_operation::endpoint_create, endpoint_selector);
+        const sys::word_t endpoint_busy =
+            sys::control(sys::abi::v1::control_operation::endpoint_create, endpoint_selector);
+        const sys::word_t endpoint_destroyed =
+            sys::control(sys::abi::v1::control_operation::endpoint_destroy, endpoint_selector);
+        const sys::word_t endpoint_recreated =
+            sys::control(sys::abi::v1::control_operation::endpoint_create, endpoint_selector);
+        const sys::word_t endpoint_redestroyed =
+            sys::control(sys::abi::v1::control_operation::endpoint_destroy, endpoint_selector);
+
+        const sys::word_t notification_created = sys::control(
+            sys::abi::v1::control_operation::notification_create, notification_selector);
+        const sys::word_t notification_signalled = sys::control(
+            sys::abi::v1::control_operation::notification_signal, notification_selector, 0x55U);
+        sys::word_t badges = 0U;
+        const sys::word_t notification_polled = sys::control_result1(
+            badges, sys::abi::v1::control_operation::notification_poll, notification_selector);
+        const sys::word_t notification_destroyed = sys::control(
+            sys::abi::v1::control_operation::notification_destroy, notification_selector);
+        const sys::word_t notification_recreated = sys::control(
+            sys::abi::v1::control_operation::notification_create, notification_selector);
+        const sys::word_t notification_redestroyed = sys::control(
+            sys::abi::v1::control_operation::notification_destroy, notification_selector);
+
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        return endpoint_created == success &&
+               endpoint_busy == static_cast<sys::word_t>(sys::error_t::busy) &&
+               endpoint_destroyed == success && endpoint_recreated == success &&
+               endpoint_redestroyed == success && notification_created == success &&
+               notification_signalled == success && notification_polled == success &&
+               badges == 0x55U && notification_destroyed == success &&
+               notification_recreated == success && notification_redestroyed == success;
+    }
 
     [[nodiscard]] bool report(test_id id, bool pass) noexcept {
         return sys::control(sys::abi::v1::control_operation::acceptance_report,
@@ -126,6 +297,10 @@ namespace
 } // namespace
 
 extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
+    if (argument0 == memory_server_role)
+        memory_server();
+    if (argument0 == fault_client_role)
+        fault_client();
     if (argument0 != 0U)
         worker(argument0, argument1);
 
@@ -160,6 +335,12 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
             ++hv_fuzz_failures;
     }
     pass = report(test_id::hypervisor_negative_fuzz, hv_fuzz_failures == 0U) && pass;
+
+    const bool pager_service_pass = run_userspace_pager_service();
+    pass = report(test_id::userspace_pager_service, pager_service_pass) && pass;
+
+    const bool dynamic_ipc_pass = test_dynamic_ipc_objects();
+    pass = report(test_id::dynamic_ipc_objects, dynamic_ipc_pass) && pass;
 
     bool created = true;
     for (sys::word_t cpu = 1U; cpu < 4U; ++cpu) {

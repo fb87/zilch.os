@@ -23,6 +23,19 @@ namespace sys::arch::space
     static_assert(user_stack_base < kernel_identity_base);
 
     extern "C" char sys_arm64_user_image_start[];
+    extern "C" char sys_arm64_user_image_end[];
+
+    [[nodiscard]] inline usize_t user_image_size() noexcept {
+        return static_cast<usize_t>(sys_arm64_user_image_end - sys_arm64_user_image_start);
+    }
+
+    [[nodiscard]] inline usize_t user_image_pages() noexcept {
+        return (user_image_size() + memory::page_size - 1U) / memory::page_size;
+    }
+
+    [[nodiscard]] inline vaddr_t user_image_end() noexcept {
+        return user_code + static_cast<vaddr_t>(user_image_pages()) * memory::page_size;
+    }
 
     struct address_space {
         memory::table_t l0{};
@@ -41,10 +54,18 @@ namespace sys::arch::space
         const usize_t code_l2 = static_cast<usize_t>((user_code >> 21U) & 0x1ffU);
         value.l2.entry[code_l2] = memory::table_descriptor(value.l3);
 
-        const u64 code_phys = reinterpret_cast<u64>(sys_arm64_user_image_start) & ~0xfffULL;
-        value.l3.entry[(user_code >> 12U) & 0x1ffU] =
-            code_phys | memory::descriptor_page | memory::access_flag | memory::inner_shareable |
-            memory::attr_normal | memory::ap_el0_ro;
+        const u64 image_phys = reinterpret_cast<u64>(sys_arm64_user_image_start) & ~0xfffULL;
+        const usize_t image_pages = user_image_pages();
+        const usize_t first_index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
+        for (usize_t page = 0U; page < image_pages; ++page) {
+            const usize_t index = first_index + page;
+            if (index >= 512U)
+                break;
+            value.l3.entry[index] = (image_phys + page * memory::page_size) |
+                                    memory::descriptor_page | memory::access_flag |
+                                    memory::inner_shareable | memory::attr_normal |
+                                    memory::ap_el0_ro;
+        }
 
         const u64 stack_phys = reinterpret_cast<u64>(value.stack) & ~0xfffULL;
         value.l3.entry[(user_stack_base >> 12U) & 0x1ffU] =

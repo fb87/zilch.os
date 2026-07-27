@@ -286,21 +286,63 @@ namespace sys::kernel::syscall
                 if (result == error_t::success)
                     result = resolve_frame(current, a2, capability::right_t::write, source);
                 if (result == error_t::success) {
-                    if (thread::load_state(*target) != thread::state::blocked_fault ||
-                        target->fault_disposition != fault::disposition::pending) {
-                        result = error_t::invalid_argument;
-                    } else {
-                        const vaddr_t page_address = a3 & ~(memory::page_size - 1U);
-                        result = memory::map(target->address_space, *source, page_address,
-                                             static_cast<memory::permission>(a4));
-                        if (result == error_t::success) {
-                            target->fault_disposition = fault::disposition::resume;
-                            target->last_fault = {};
-                            target->waiting_endpoint = 0U;
-                            thread::wake(*target);
-                            ipc::remote_reschedule(target->pinned_cpu, arch::cpu::current_id());
-                        }
-                    }
+                    result = thread::resolve_fault_with_frame(current, *target, *source, a3,
+                                                              static_cast<memory::permission>(a4));
+                }
+                break;
+            }
+            case abi::v1::control_operation::fault_reply_sender: {
+                memory::frame* source = nullptr;
+                result = resolve_frame(current, a1, capability::right_t::write, source);
+                if (result != error_t::success)
+                    break;
+                if (!current.reply.valid) {
+                    result = error_t::invalid_argument;
+                    break;
+                }
+                if (current.reply.caller >= thread::user_thread_count) {
+                    current.reply = {};
+                    result = error_t::not_found;
+                    break;
+                }
+                auto& caller = thread::user_threads[current.reply.caller];
+                if (caller.object.type != object::type_t::thread ||
+                    caller.object.generation != current.reply.generation) {
+                    current.reply = {};
+                    result = error_t::not_found;
+                    break;
+                }
+                result = thread::resolve_fault_with_frame(current, caller, *source, a2,
+                                                          static_cast<memory::permission>(a3));
+                if (result == error_t::success)
+                    current.reply = {};
+                break;
+            }
+            case abi::v1::control_operation::pager_reclaim_sender: {
+                memory::frame* source = nullptr;
+                result = resolve_frame(current, a1, capability::right_t::write, source);
+                if (result != error_t::success)
+                    break;
+                if (!current.reply.valid) {
+                    result = error_t::invalid_argument;
+                    break;
+                }
+                if (current.reply.caller >= thread::user_thread_count) {
+                    current.reply = {};
+                    result = error_t::not_found;
+                    break;
+                }
+                auto& caller = thread::user_threads[current.reply.caller];
+                if (caller.object.type != object::type_t::thread ||
+                    caller.object.generation != current.reply.generation) {
+                    current.reply = {};
+                    result = error_t::not_found;
+                    break;
+                }
+                result = memory::unmap(caller.address_space, *source, a2);
+                if (result == error_t::success && current.owner != nullptr) {
+                    result =
+                        memory::destroy_frame(*current.owner, static_cast<capability_id_t>(a1));
                 }
                 break;
             }
@@ -331,6 +373,31 @@ namespace sys::kernel::syscall
                     result = memory::unmap(*target_space, *source_frame, a3);
                 break;
             }
+            case abi::v1::control_operation::endpoint_create:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = ipc::create(*current.owner, static_cast<capability_id_t>(a1));
+                break;
+            case abi::v1::control_operation::endpoint_destroy:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = ipc::destroy(*current.owner, static_cast<capability_id_t>(a1));
+                break;
+            case abi::v1::control_operation::notification_create:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = notification::create(*current.owner, static_cast<capability_id_t>(a1));
+                break;
+            case abi::v1::control_operation::notification_destroy:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result =
+                        notification::destroy(*current.owner, static_cast<capability_id_t>(a1));
+                break;
             case abi::v1::control_operation::notification_signal:
             case abi::v1::control_operation::notification_poll: {
                 if (current.owner == nullptr) {
@@ -417,6 +484,12 @@ namespace sys::kernel::syscall
                     case 10U:
                         name = "hypervisor_profile_0_4";
                         break;
+                    case 11U:
+                        name = "userspace_pager_service";
+                        break;
+                    case 12U:
+                        name = "dynamic_ipc_objects";
+                        break;
                     default:
                         break;
                 }
@@ -445,6 +518,7 @@ namespace sys::kernel::syscall
                 break;
             }
             case abi::v1::control_operation::child_create:
+            case abi::v1::control_operation::process_create:
                 if (current.owner == nullptr || !current.owner->root) {
                     result = error_t::denied;
                     break;
@@ -457,6 +531,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             case abi::v1::control_operation::child_destroy:
+            case abi::v1::control_operation::process_destroy:
                 if (current.owner == nullptr || !current.owner->root) {
                     result = error_t::denied;
                     break;

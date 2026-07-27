@@ -24,6 +24,8 @@ namespace sys::kernel::thread
     inline constexpr u32 user_thread_count = 10U;
     inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
     inline constexpr u32 maximum_cpu_count = 4U;
+    inline constexpr word_t memory_server_role = 0x100U;
+    inline constexpr word_t fault_client_role = 0x101U;
     inline thread user_threads[user_thread_count]{};
     inline task::task user_tasks[user_thread_count]{};
     inline u32 current_user_thread[maximum_cpu_count]{};
@@ -196,87 +198,164 @@ namespace sys::kernel::thread
         return error_t::success;
     }
 
+    [[nodiscard]] inline error_t resolve_fault_with_frame(thread& pager, thread& target,
+                                                          memory::frame& source, vaddr_t address,
+                                                          memory::permission permissions) noexcept {
+        if (load_state(target) != state::blocked_fault ||
+            target.fault_disposition != fault::disposition::pending)
+            return error_t::invalid_argument;
+        if (target.owner == nullptr || pager.owner == nullptr)
+            return error_t::denied;
+        const vaddr_t page_address = address & ~(memory::page_size - 1U);
+        const error_t result = memory::map(target.address_space, source, page_address, permissions);
+        if (result != error_t::success)
+            return result;
+        target.fault_disposition = fault::disposition::resume;
+        target.last_fault = {};
+        target.waiting_endpoint = 0U;
+        target.ipc_timeout_active = false;
+        store_state(target, state::ready);
+        ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
+        return error_t::success;
+    }
+
     inline volatile u64 certification_operations[maximum_cpu_count]{};
     inline volatile u64 certification_failures[maximum_cpu_count]{};
+
+    [[nodiscard]] inline u32 find_free_user_slot(cpu_id_t preferred) noexcept {
+        if (preferred > 0U && preferred < user_thread_count &&
+            load_state(user_threads[preferred]) == state::inactive)
+            return preferred;
+        for (u32 id = 1U; id < user_thread_count; ++id) {
+            if (load_state(user_threads[id]) == state::inactive)
+                return id;
+        }
+        return user_thread_count;
+    }
+
+    inline void clear_user_bundle(thread& target, task::task& owner) noexcept {
+        target.owner = nullptr;
+        target.object = {};
+        target.address_space.object = {};
+        target.scheduling_context.object = {};
+        target.waiting_endpoint = 0U;
+        target.reply = {};
+        target.transfer = {};
+        target.ipc_timeout_active = false;
+        target.last_fault = {};
+        target.fault_disposition = fault::disposition::pending;
+        store_state(target, state::inactive);
+        capability::initialize(owner.cspace);
+        owner.object = {};
+        owner.address_space_id = 0U;
+        owner.fault_endpoint = 0U;
+        owner.memory_quota_pages = 64U;
+        owner.memory_pages_owned = 0U;
+        owner.root = false;
+    }
 
     [[nodiscard]] inline error_t create_user_bundle(task::task& root, cpu_id_t cpu, word_t role,
                                                     capability_id_t thread_selector,
                                                     capability_id_t task_selector,
                                                     capability_id_t space_selector) noexcept {
-        if (!root.root || cpu == 0U || cpu >= maximum_cpu_count ||
+        if (!root.root || cpu >= maximum_cpu_count ||
             thread_selector >= capability::cspace_slot_count ||
             task_selector >= capability::cspace_slot_count ||
-            space_selector >= capability::cspace_slot_count) {
+            space_selector >= capability::cspace_slot_count || thread_selector == task_selector ||
+            thread_selector == space_selector || task_selector == space_selector) {
             return error_t::invalid_argument;
         }
-
-        const u32 id = cpu;
-        if (id >= user_thread_count || load_state(user_threads[id]) != state::inactive) {
+        if (root.cspace.slots[thread_selector].object.type != object::type_t::none ||
+            root.cspace.slots[task_selector].object.type != object::type_t::none ||
+            root.cspace.slots[space_selector].object.type != object::type_t::none)
             return error_t::busy;
-        }
 
-        task::initialize(user_tasks[id], static_cast<space_id_t>(id));
-        error_t result = object::register_object(
-            user_tasks[id].object, static_cast<object_id_t>(16U + id), object::type_t::task);
-        if (result != error_t::success)
-            return result;
+        const u32 id = find_free_user_slot(cpu);
+        if (id >= user_thread_count)
+            return error_t::no_memory;
 
-        initialize_user(user_threads[id], static_cast<thread_id_t>(id), cpu, role,
-                        initial_fuzz_seed(id));
-        user_threads[id].owner = &user_tasks[id];
-        user_tasks[id].fault_endpoint = 10U;
-        result = object::register_object(user_threads[id].object, static_cast<object_id_t>(id),
-                                         object::type_t::thread);
-        if (result != error_t::success)
-            return result;
-        result = object::register_object(user_threads[id].address_space.object,
-                                         static_cast<object_id_t>(60U + id),
-                                         object::type_t::address_space);
-        if (result != error_t::success)
-            return result;
-        result = object::register_object(user_threads[id].scheduling_context.object,
-                                         static_cast<object_id_t>(50U + id),
-                                         object::type_t::scheduling_context);
-        if (result != error_t::success)
-            return result;
+        task::task& owner = user_tasks[id];
+        thread& target = user_threads[id];
+        task::initialize(owner, static_cast<space_id_t>(id));
+        initialize_user(target, static_cast<thread_id_t>(id), cpu, role, initial_fuzz_seed(id));
+        target.owner = &owner;
+        owner.fault_endpoint = 10U;
+
+        error_t result = object::register_dynamic_object(owner.object, object::type_t::task);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.object, object::type_t::thread);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.address_space.object,
+                                                     object::type_t::address_space);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.scheduling_context.object,
+                                                     object::type_t::scheduling_context);
 
         const capability::rights_t control_rights{static_cast<u32>(capability::right_t::read) |
                                                   static_cast<u32>(capability::right_t::write) |
                                                   static_cast<u32>(capability::right_t::grant) |
                                                   static_cast<u32>(capability::right_t::control)};
-        result = capability::install(root.cspace, thread_selector,
-                                     object::reference(user_threads[id].object), control_rights);
-        if (result != error_t::success)
-            return result;
-        result = capability::install(root.cspace, task_selector,
-                                     object::reference(user_tasks[id].object), control_rights);
-        if (result != error_t::success)
-            return result;
-        result = capability::install(root.cspace, space_selector,
-                                     object::reference(user_threads[id].address_space.object),
-                                     control_rights);
-        if (result != error_t::success)
-            return result;
-
-        result = capability::install(user_tasks[id].cspace, 1U,
-                                     object::reference(user_tasks[id].object), control_rights);
-        if (result != error_t::success)
-            return result;
-        result = capability::install(user_tasks[id].cspace, 2U,
-                                     object::reference(user_threads[id].object), control_rights);
-        if (result != error_t::success)
-            return result;
-        result = capability::install(user_tasks[id].cspace, 3U,
-                                     object::reference(user_threads[id].address_space.object),
-                                     control_rights);
-        if (result != error_t::success)
-            return result;
-
-        if (id >= active_user_thread_count) {
-            __atomic_store_n(&active_user_thread_count, id + 1U, __ATOMIC_RELEASE);
+        if (result == error_t::success)
+            result = capability::install(root.cspace, thread_selector,
+                                         object::reference(target.object), control_rights);
+        if (result == error_t::success)
+            result = capability::install(root.cspace, task_selector,
+                                         object::reference(owner.object), control_rights);
+        if (result == error_t::success)
+            result =
+                capability::install(root.cspace, space_selector,
+                                    object::reference(target.address_space.object), control_rights);
+        if (result == error_t::success)
+            result = capability::install(owner.cspace, 1U, object::reference(owner.object),
+                                         control_rights);
+        if (result == error_t::success)
+            result = capability::install(owner.cspace, 2U, object::reference(target.object),
+                                         control_rights);
+        if (result == error_t::success)
+            result = capability::install(
+                owner.cspace, 3U, object::reference(target.address_space.object), control_rights);
+        if (result == error_t::success)
+            result = capability::install(owner.cspace, 4U,
+                                         object::reference(target.scheduling_context.object),
+                                         control_rights);
+        if (result == error_t::success) {
+            capability::rights_t endpoint_rights = capability::rights(capability::right_t::write);
+            if (role == memory_server_role) {
+                endpoint_rights.bits |= static_cast<u32>(capability::right_t::read);
+            }
+            result = capability::install(
+                owner.cspace, 10U, object::reference(ipc::endpoints[0].object), endpoint_rights);
         }
-        certification_operations[cpu] = 0U;
-        certification_failures[cpu] = 0U;
+        if (result == error_t::success)
+            result = capability::install(owner.cspace, 14U,
+                                         object::reference(profile::root_notification.object),
+                                         capability::rights(capability::right_t::write));
+
+        if (result != error_t::success) {
+            (void)capability::delete_capability(root.cspace, thread_selector);
+            (void)capability::delete_capability(root.cspace, task_selector);
+            (void)capability::delete_capability(root.cspace, space_selector);
+            capability::revoke_reference(object::reference(target.scheduling_context.object));
+            capability::revoke_reference(object::reference(target.address_space.object));
+            capability::revoke_reference(object::reference(target.object));
+            capability::revoke_reference(object::reference(owner.object));
+            if (target.scheduling_context.object.type != object::type_t::none)
+                (void)object::unregister_object(
+                    object::reference(target.scheduling_context.object));
+            if (target.address_space.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.address_space.object));
+            if (target.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.object));
+            if (owner.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(owner.object));
+            clear_user_bundle(target, owner);
+            return result;
+        }
+
+        if (id >= active_user_thread_count)
+            __atomic_store_n(&active_user_thread_count, id + 1U, __ATOMIC_RELEASE);
+        certification_operations[id] = 0U;
+        certification_failures[id] = 0U;
         return error_t::success;
     }
 
@@ -296,9 +375,10 @@ namespace sys::kernel::thread
             return error_t::busy;
 
         store_state(target, state::terminated);
-        capability::revoke_in(root.cspace, object::reference(target.object));
-        capability::revoke_in(root.cspace, object::reference(target.owner->object));
-        capability::revoke_in(root.cspace, object::reference(target.address_space.object));
+        capability::revoke_reference(object::reference(target.object));
+        capability::revoke_reference(object::reference(target.owner->object));
+        capability::revoke_reference(object::reference(target.address_space.object));
+        capability::revoke_reference(object::reference(target.scheduling_context.object));
         (void)capability::delete_capability(root.cspace, thread_selector);
         (void)capability::delete_capability(root.cspace, task_selector);
         (void)capability::delete_capability(root.cspace, space_selector);
@@ -308,24 +388,7 @@ namespace sys::kernel::thread
         task::task* owner = target.owner;
         (void)object::unregister_object(object::reference(target.object));
         (void)object::unregister_object(object::reference(owner->object));
-        target.owner = nullptr;
-        target.object.id = 0U;
-        target.object.generation = 0U;
-        target.object.type = object::type_t::none;
-        target.address_space.object.id = 0U;
-        target.address_space.object.generation = 0U;
-        target.address_space.object.type = object::type_t::none;
-        target.scheduling_context.object.id = 0U;
-        target.scheduling_context.object.generation = 0U;
-        target.scheduling_context.object.type = object::type_t::none;
-        store_state(target, state::inactive);
-        capability::initialize(owner->cspace);
-        owner->object.id = 0U;
-        owner->object.generation = 0U;
-        owner->object.type = object::type_t::none;
-        owner->address_space_id = 0U;
-        owner->fault_endpoint = 0U;
-        owner->root = false;
+        clear_user_bundle(target, *owner);
         return error_t::success;
     }
 
@@ -409,6 +472,56 @@ namespace sys::kernel::thread
         result = memory::destroy_page_table(root, 19U);
         if (result != error_t::success || root.memory_pages_owned != owned_before)
             return error_t::invalid_argument;
+        const u32 pages_before_pager = root.memory_pages_owned;
+        result = create_user_bundle(root, 1U, 0x50414745U, 20U, 21U, 22U);
+        if (result != error_t::success)
+            return result;
+        object::header_t* pager_target_header = nullptr;
+        result = capability::lookup(root.cspace, 20U, object::type_t::thread,
+                                    capability::right_t::control, pager_target_header);
+        if (result != error_t::success || pager_target_header == nullptr)
+            return error_t::invalid_argument;
+        auto& pager_target = *reinterpret_cast<thread*>(pager_target_header);
+        result = memory::create_frame(root, 23U);
+        if (result != error_t::success)
+            return result;
+        object::header_t* pager_frame_header = nullptr;
+        result = capability::lookup(root.cspace, 23U, object::type_t::frame,
+                                    capability::right_t::control, pager_frame_header);
+        if (result != error_t::success || pager_frame_header == nullptr)
+            return error_t::invalid_argument;
+        auto& pager_frame = *reinterpret_cast<memory::frame*>(pager_frame_header);
+        pager_target.last_fault = {fault::kind::data_abort,
+                                   pager_target.id,
+                                   pager_target.object.generation,
+                                   0x96000004U,
+                                   (arch::space::user_code + 0x4000ULL),
+                                   pager_target.context.instruction_pointer};
+        pager_target.fault_disposition = fault::disposition::pending;
+        pager_target.waiting_endpoint = 10U;
+        store_state(pager_target, state::blocked_fault);
+        result = resolve_fault_with_frame(
+            user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x4000ULL,
+            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
+                                            static_cast<u8>(memory::permission::write)));
+        if (result != error_t::success || load_state(pager_target) != state::ready ||
+            pager_target.fault_disposition != fault::disposition::resume ||
+            pager_frame.mapping_count != 1U)
+            return error_t::invalid_argument;
+        result = memory::unmap(pager_target.address_space, pager_frame,
+                               arch::space::user_code + 0x4000ULL);
+        if (result != error_t::success)
+            return result;
+        result = memory::destroy_frame(root, 23U);
+        if (result != error_t::success)
+            return result;
+        store_state(pager_target, state::suspended);
+        result = destroy_user_bundle(root, 20U, 21U, 22U);
+        if (result != error_t::success || root.memory_pages_owned != pages_before_pager)
+            return error_t::invalid_argument;
+        pr_info("[TEST] name=pager_fault_reply result=PASS address=%llx\n",
+                static_cast<unsigned long long>(arch::space::user_code + 0x4000ULL));
+
         pr_info("[TEST] name=dynamic_memory_objects result=PASS free=%u managed=%u\n",
                 static_cast<unsigned int>(memory::free_pages),
                 static_cast<unsigned int>(memory::managed_pages));

@@ -30,7 +30,7 @@ namespace sys::arch::thread
 
     [[nodiscard]] inline bool valid_user(const context& value) noexcept {
         constexpr vaddr_t user_code_begin = arch::space::user_code;
-        constexpr vaddr_t user_code_end = arch::space::user_code + 0x1000ULL;
+        const vaddr_t user_code_end = arch::space::user_image_end();
         constexpr vaddr_t user_stack_begin = arch::space::user_stack_base;
         constexpr vaddr_t user_stack_end = arch::space::user_stack_base + 0x1000ULL;
 

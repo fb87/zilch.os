@@ -70,12 +70,6 @@ namespace sys::kernel
         scheduler::initialize();
         scheduler::initialize_cpu();
 
-        pr_info("memory: base=%llx pages=%u free=%u page_size=%llu\n",
-                static_cast<unsigned long long>(memory::managed_base),
-                static_cast<unsigned int>(memory::managed_pages),
-                static_cast<unsigned int>(memory::free_pages),
-                static_cast<unsigned long long>(memory::page_size));
-
         pr_info("%s L4 microkernel %u.%u.%u\n", name, static_cast<unsigned int>(version_major),
                 static_cast<unsigned int>(version_minor), static_cast<unsigned int>(version_patch));
         pr_info("arch=%s platform=%s word_bits=%u el=%u\n", arch::name, platform::name,
@@ -108,6 +102,13 @@ namespace sys::kernel
                 static_cast<unsigned int>(expected), online ? "online" : "timeout");
         if constexpr (arch::space::user_available) {
             const error_t user_result = thread::initialize_user_threads();
+            if (user_result == error_t::success) {
+                pr_info("memory: base=%llx pages=%u free=%u page_size=%llu\n",
+                        static_cast<unsigned long long>(memory::managed_base),
+                        static_cast<unsigned int>(memory::managed_pages),
+                        static_cast<unsigned int>(memory::free_pages),
+                        static_cast<unsigned long long>(memory::page_size));
+            }
             if (user_result != error_t::success) {
                 pr_err("user object initialization failed=%d\n", static_cast<int>(user_result));
                 arch::cpu::halt();
