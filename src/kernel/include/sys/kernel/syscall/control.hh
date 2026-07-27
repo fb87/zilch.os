@@ -157,7 +157,7 @@ namespace sys::kernel::syscall
                 }
                 capability::lock(destination_task->cspace);
                 const capability::slot_t deleted =
-                    destination_task->cspace.slots[destination_selector];
+                    capability::slot_at(destination_task->cspace, destination_selector);
                 capability::unlock(destination_task->cspace);
                 if (deleted.object.type != object::type_t::none &&
                     capability::derivation_valid(deleted.derivation, deleted.object))
@@ -172,7 +172,8 @@ namespace sys::kernel::syscall
                     break;
                 }
                 capability::lock(current.owner->cspace);
-                const capability::slot_t source_slot = current.owner->cspace.slots[source_selector];
+                const capability::slot_t source_slot =
+                    capability::slot_at(current.owner->cspace, source_selector);
                 capability::unlock(current.owner->cspace);
                 if (source_slot.object.type == object::type_t::none ||
                     !capability::derivation_valid(source_slot.derivation, source_slot.object)) {

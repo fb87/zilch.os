@@ -222,7 +222,8 @@ namespace sys::kernel::thread
         boot::root_bootinfo.capability_count = arch::hypervisor::active ? 11U : 9U;
         const capability_id_t selectors[11]{1U, 2U, 3U, 4U, 10U, 12U, 14U, 15U, 32U, 28U, 29U};
         for (u32 index = 0U; index < boot::root_bootinfo.capability_count; ++index) {
-            const capability::slot_t& slot = root_task.cspace.slots[selectors[index]];
+            const capability::slot_t& slot =
+                capability::slot_at(root_task.cspace, selectors[index]);
             boot::root_bootinfo.capabilities[index] = {selectors[index], slot.object,
                                                        slot.rights.bits};
         }
@@ -348,9 +349,9 @@ namespace sys::kernel::thread
             thread_selector == space_selector || task_selector == space_selector) {
             return error_t::invalid_argument;
         }
-        if (root.cspace.slots[thread_selector].object.type != object::type_t::none ||
-            root.cspace.slots[task_selector].object.type != object::type_t::none ||
-            root.cspace.slots[space_selector].object.type != object::type_t::none)
+        if (capability::slot_at(root.cspace, thread_selector).object.type != object::type_t::none ||
+            capability::slot_at(root.cspace, task_selector).object.type != object::type_t::none ||
+            capability::slot_at(root.cspace, space_selector).object.type != object::type_t::none)
             return error_t::busy;
 
         const u32 id = find_free_user_slot(cpu);
@@ -422,7 +423,8 @@ namespace sys::kernel::thread
                                          capability::rights(capability::right_t::write));
 
         if (result != error_t::success) {
-            if (owner.cspace.slots[15U].object.type == object::type_t::memory_resource)
+            if (capability::slot_at(owner.cspace, 15U).object.type ==
+                object::type_t::memory_resource)
                 (void)memory::destroy_resource(owner, 15U);
             (void)capability::delete_capability(root.cspace, thread_selector);
             (void)capability::delete_capability(root.cspace, task_selector);
@@ -548,7 +550,8 @@ namespace sys::kernel::thread
         (void)capability::delete_capability(root.cspace, space_selector);
 
         memory::unmap_all(target.address_space);
-        if (owner->cspace.slots[15U].object.type == object::type_t::memory_resource) {
+        if (capability::slot_at(owner->cspace, 15U).object.type ==
+            object::type_t::memory_resource) {
             result = memory::destroy_resource(*owner, 15U);
             if (result != error_t::success)
                 return result;
@@ -637,11 +640,77 @@ namespace sys::kernel::thread
                                   capability::rights(capability::right_t::write), 0x5aU);
         if (result != error_t::success)
             return result;
-        const capability::derivation_id_t root_derivation = root.cspace.slots[10U].derivation;
+        const capability::derivation_id_t root_derivation =
+            capability::slot_at(root.cspace, 10U).derivation;
         if (capability::revoke_descendants(root_derivation) != 1U ||
-            root.cspace.slots[18U].object.type != object::type_t::none ||
-            root.cspace.slots[10U].object.type == object::type_t::none)
+            capability::slot_at(root.cspace, 18U).object.type != object::type_t::none ||
+            capability::slot_at(root.cspace, 10U).object.type == object::type_t::none)
             return error_t::invalid_argument;
+
+        static capability::cspace_t guarded_cspace{};
+        static capability_id_t scalable_selectors[193]{};
+        capability::initialize(guarded_cspace);
+        result = capability::set_guard(guarded_cspace, 0x5aU);
+        if (result != error_t::success)
+            return result;
+        for (u32 index = 0U; index < 193U; ++index) {
+            result = capability::allocate_slot(guarded_cspace, scalable_selectors[index]);
+            if (result != error_t::success)
+                return result;
+            result = capability::copy(guarded_cspace, scalable_selectors[index], root.cspace, 10U,
+                                      capability::rights(capability::right_t::write));
+            if (result != error_t::success)
+                return result;
+        }
+        object::header_t* guarded_result = nullptr;
+        result =
+            capability::lookup(guarded_cspace, scalable_selectors[192U], object::type_t::endpoint,
+                               capability::right_t::write, guarded_result);
+        if (result != error_t::success || guarded_result == nullptr ||
+            capability::lookup(guarded_cspace, capability::encode_selector(0x5bU, 192U),
+                               object::type_t::endpoint, capability::right_t::write,
+                               guarded_result) != error_t::not_found)
+            return error_t::invalid_argument;
+        if (capability::revoke_descendants(root_derivation) != 193U)
+            return error_t::invalid_argument;
+        for (u32 leaf = 0U; leaf < capability::cspace_leaf_count; ++leaf) {
+            if (guarded_cspace.leaves[leaf].occupied != 0U)
+                return error_t::invalid_argument;
+        }
+        u32 transfer_fuzz_state = 0x7f4a7c15U;
+        for (u32 operation = 0U; operation < 4096U; ++operation) {
+            transfer_fuzz_state ^= transfer_fuzz_state << 13U;
+            transfer_fuzz_state ^= transfer_fuzz_state >> 17U;
+            transfer_fuzz_state ^= transfer_fuzz_state << 5U;
+            capability_id_t destination{};
+            result = capability::allocate_slot(guarded_cspace, destination);
+            if (result != error_t::success)
+                return result;
+            const capability::right_t selected_right = (transfer_fuzz_state & 1U) != 0U
+                                                           ? capability::right_t::read
+                                                           : capability::right_t::write;
+            result = capability::copy(guarded_cspace, destination, root.cspace, 10U,
+                                      capability::rights(selected_right));
+            if (result != error_t::success)
+                return result;
+            guarded_result = nullptr;
+            result = capability::lookup(guarded_cspace, destination, object::type_t::endpoint,
+                                        selected_right, guarded_result);
+            if (result != error_t::success || guarded_result == nullptr)
+                return error_t::invalid_argument;
+            if ((operation & 31U) == 0U &&
+                capability::lookup(
+                    guarded_cspace,
+                    capability::encode_selector(0xa5U, static_cast<u32>(destination) &
+                                                           (capability::cspace_slot_count - 1U)),
+                    object::type_t::endpoint, selected_right, guarded_result) != error_t::not_found)
+                return error_t::invalid_argument;
+            result = capability::delete_capability(guarded_cspace, destination);
+            if (result != error_t::success)
+                return result;
+        }
+        pr_info("[TEST] name=guarded_cspace_scale result=PASS slots=193 leaves=4 guard=5a\n");
+        pr_info("[TEST] name=cross_cspace_transfer_fuzz result=PASS operations=4096\n");
 
         result =
             memory::map(user_threads[0].address_space, memory::frames[0], scratch_mapping_address,

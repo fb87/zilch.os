@@ -8,15 +8,28 @@
 
 namespace sys::kernel::capability
 {
-    inline constexpr u32 cspace_slot_count = 64U;
+    inline constexpr u32 cspace_leaf_bits = 6U;
+    inline constexpr u32 cspace_leaf_slot_count = 1U << cspace_leaf_bits;
+    inline constexpr u32 cspace_root_bits = 2U;
+    inline constexpr u32 cspace_leaf_count = 1U << cspace_root_bits;
+    inline constexpr u32 cspace_slot_count = cspace_leaf_count * cspace_leaf_slot_count;
+    inline constexpr u32 cspace_guard_shift = cspace_root_bits + cspace_leaf_bits;
+    inline constexpr u32 cspace_guard_mask = 0xffU;
     inline constexpr u32 maximum_registered_cspaces = 32U;
     inline constexpr u32 maximum_derivations = 4096U;
     inline constexpr u32 maximum_derivation_depth = 64U;
 
+    struct cspace_leaf_t {
+        slot_t slots[cspace_leaf_slot_count]{};
+        u64 occupied{};
+    };
+
     struct cspace_t {
         volatile u32 lock{};
         u32 registry_index{maximum_registered_cspaces};
-        slot_t slots[cspace_slot_count]{};
+        u32 guard{};
+        u32 allocation_hint{};
+        cspace_leaf_t leaves[cspace_leaf_count]{};
     };
 
     struct derivation_record_t {
@@ -58,6 +71,75 @@ namespace sys::kernel::capability
     }
     inline void unlock(cspace_t& cspace) noexcept {
         spin_unlock(cspace.lock, lock_order::rank::cspace);
+    }
+
+    [[nodiscard]] inline constexpr capability_id_t encode_selector(u32 guard, u32 index) noexcept {
+        return static_cast<capability_id_t>(((guard & cspace_guard_mask) << cspace_guard_shift) |
+                                            index);
+    }
+
+    [[nodiscard]] inline bool resolve_selector(const cspace_t& cspace, capability_id_t selector,
+                                               u32& index) noexcept {
+        const u32 raw = static_cast<u32>(selector);
+        index = raw & (cspace_slot_count - 1U);
+        const u32 guard = (raw >> cspace_guard_shift) & cspace_guard_mask;
+        return (raw >> (cspace_guard_shift + 8U)) == 0U && guard == cspace.guard;
+    }
+
+    [[nodiscard]] inline slot_t& slot_at(cspace_t& cspace, capability_id_t selector) noexcept {
+        const u32 index = static_cast<u32>(selector) & (cspace_slot_count - 1U);
+        return cspace.leaves[index >> cspace_leaf_bits]
+            .slots[index & (cspace_leaf_slot_count - 1U)];
+    }
+
+    [[nodiscard]] inline const slot_t& slot_at(const cspace_t& cspace,
+                                               capability_id_t selector) noexcept {
+        const u32 index = static_cast<u32>(selector) & (cspace_slot_count - 1U);
+        return cspace.leaves[index >> cspace_leaf_bits]
+            .slots[index & (cspace_leaf_slot_count - 1U)];
+    }
+
+    inline void mark_occupied(cspace_t& cspace, u32 index) noexcept {
+        cspace.leaves[index >> cspace_leaf_bits].occupied |=
+            1ULL << (index & (cspace_leaf_slot_count - 1U));
+    }
+
+    inline void mark_free(cspace_t& cspace, u32 index) noexcept {
+        cspace.leaves[index >> cspace_leaf_bits].occupied &=
+            ~(1ULL << (index & (cspace_leaf_slot_count - 1U)));
+    }
+
+    [[nodiscard]] inline error_t allocate_slot(cspace_t& cspace,
+                                               capability_id_t& selector) noexcept {
+        lock(cspace);
+        for (u32 scanned = 0U; scanned < cspace_slot_count; ++scanned) {
+            const u32 index = (cspace.allocation_hint + scanned) & (cspace_slot_count - 1U);
+            const u64 bit = 1ULL << (index & (cspace_leaf_slot_count - 1U));
+            if ((cspace.leaves[index >> cspace_leaf_bits].occupied & bit) == 0U) {
+                cspace.leaves[index >> cspace_leaf_bits].occupied |= bit;
+                cspace.allocation_hint = (index + 1U) & (cspace_slot_count - 1U);
+                selector = encode_selector(cspace.guard, index);
+                unlock(cspace);
+                return error_t::success;
+            }
+        }
+        unlock(cspace);
+        return error_t::no_memory;
+    }
+
+    [[nodiscard]] inline error_t set_guard(cspace_t& cspace, u32 guard) noexcept {
+        if (guard > cspace_guard_mask)
+            return error_t::invalid_argument;
+        lock(cspace);
+        for (u32 leaf = 0U; leaf < cspace_leaf_count; ++leaf) {
+            if (cspace.leaves[leaf].occupied != 0U) {
+                unlock(cspace);
+                return error_t::busy;
+            }
+        }
+        cspace.guard = guard;
+        unlock(cspace);
+        return error_t::success;
     }
 
     [[nodiscard]] inline derivation_id_t
@@ -136,20 +218,26 @@ namespace sys::kernel::capability
     inline void initialize(cspace_t& cspace) noexcept {
         cspace.lock = 0U;
         cspace.registry_index = maximum_registered_cspaces;
-        for (u32 index = 0U; index < cspace_slot_count; ++index)
-            cspace.slots[index] = {};
+        cspace.guard = 0U;
+        cspace.allocation_hint = 0U;
+        for (u32 leaf = 0U; leaf < cspace_leaf_count; ++leaf) {
+            cspace.leaves[leaf].occupied = 0U;
+            for (u32 slot = 0U; slot < cspace_leaf_slot_count; ++slot)
+                cspace.leaves[leaf].slots[slot] = {};
+        }
         (void)register_cspace(cspace);
     }
 
     [[nodiscard]] inline error_t install_locked(cspace_t& cspace, capability_id_t selector,
                                                 const object::reference_t& object,
                                                 rights_t granted_rights) noexcept {
-        if (selector >= cspace_slot_count || object.type == object::type_t::none ||
+        u32 index{};
+        if (!resolve_selector(cspace, selector, index) || object.type == object::type_t::none ||
             object::resolve(object) == nullptr || granted_rights.bits == 0U) {
             return error_t::invalid_argument;
         }
         lock(cspace);
-        slot_t& slot = cspace.slots[selector];
+        slot_t& slot = slot_at(cspace, index);
         if (slot.object.type != object::type_t::none) {
             unlock(cspace);
             return error_t::busy;
@@ -165,6 +253,7 @@ namespace sys::kernel::capability
         slot.parent = 0U;
         slot.badge = 0U;
         slot.depth = 0U;
+        mark_occupied(cspace, index);
         unlock(cspace);
         return error_t::success;
     }
@@ -180,14 +269,16 @@ namespace sys::kernel::capability
 
     [[nodiscard]] inline error_t remove_locked(cspace_t& cspace,
                                                capability_id_t selector) noexcept {
-        if (selector >= cspace_slot_count)
+        u32 index{};
+        if (!resolve_selector(cspace, selector, index))
             return error_t::invalid_argument;
-        slot_t& slot = cspace.slots[selector];
+        slot_t& slot = slot_at(cspace, index);
         if (slot.object.type == object::type_t::none)
             return error_t::not_found;
         if (slot.derivation < maximum_derivations)
             __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
         slot = {};
+        mark_free(cspace, index);
         return error_t::success;
     }
 
@@ -204,11 +295,12 @@ namespace sys::kernel::capability
                                         object::type_t expected_type, right_t required,
                                         object::header_t*& result) noexcept {
         result = nullptr;
-        if (selector >= cspace_slot_count)
+        u32 index{};
+        if (!resolve_selector(cspace, selector, index))
             return error_t::not_found;
         cspace_t& mutable_cspace = const_cast<cspace_t&>(cspace);
         lock(mutable_cspace);
-        const slot_t slot = cspace.slots[selector];
+        const slot_t slot = slot_at(cspace, index);
         error_t lookup_result = error_t::success;
         if (slot.object.type != expected_type)
             lookup_result = error_t::denied;
@@ -229,11 +321,12 @@ namespace sys::kernel::capability
                                              object::type_t expected_type, right_t required,
                                              slot_t& result) noexcept {
         result = {};
-        if (selector >= cspace_slot_count)
+        u32 index{};
+        if (!resolve_selector(cspace, selector, index))
             return error_t::not_found;
         cspace_t& mutable_cspace = const_cast<cspace_t&>(cspace);
         lock(mutable_cspace);
-        const slot_t slot = cspace.slots[selector];
+        const slot_t slot = slot_at(cspace, index);
         error_t lookup_result = error_t::success;
         if (slot.object.type != expected_type)
             lookup_result = error_t::denied;
@@ -253,7 +346,10 @@ namespace sys::kernel::capability
                                                const cspace_t& source,
                                                capability_id_t source_selector,
                                                rights_t rights_mask, badge_t badge) noexcept {
-        if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
+        u32 destination_index{};
+        u32 source_index{};
+        if (!resolve_selector(destination, destination_selector, destination_index) ||
+            !resolve_selector(source, source_selector, source_index))
             return error_t::invalid_argument;
         cspace_t& mutable_source = const_cast<cspace_t&>(source);
         cspace_t* first = &destination < &mutable_source ? &destination : &mutable_source;
@@ -261,8 +357,8 @@ namespace sys::kernel::capability
         lock(*first);
         if (second != first)
             lock(*second);
-        const slot_t source_slot = source.slots[source_selector];
-        slot_t& destination_slot = destination.slots[destination_selector];
+        const slot_t source_slot = slot_at(source, source_index);
+        slot_t& destination_slot = slot_at(destination, destination_index);
         error_t result = error_t::success;
         if (source_slot.object.type == object::type_t::none ||
             object::resolve(source_slot.object) == nullptr) {
@@ -286,6 +382,7 @@ namespace sys::kernel::capability
                 destination_slot.parent = source_slot.derivation;
                 destination_slot.badge = badge;
                 destination_slot.depth = source_slot.depth + 1U;
+                mark_occupied(destination, destination_index);
             }
         }
         if (second != first)
@@ -336,15 +433,18 @@ namespace sys::kernel::capability
                                              capability_id_t source_selector) noexcept {
         if (&destination == &source && destination_selector == source_selector)
             return error_t::success;
-        if (destination_selector >= cspace_slot_count || source_selector >= cspace_slot_count)
+        u32 destination_index{};
+        u32 source_index{};
+        if (!resolve_selector(destination, destination_selector, destination_index) ||
+            !resolve_selector(source, source_selector, source_index))
             return error_t::invalid_argument;
         cspace_t* first = &destination < &source ? &destination : &source;
         cspace_t* second = &destination < &source ? &source : &destination;
         lock(*first);
         if (second != first)
             lock(*second);
-        slot_t& source_slot = source.slots[source_selector];
-        slot_t& destination_slot = destination.slots[destination_selector];
+        slot_t& source_slot = slot_at(source, source_index);
+        slot_t& destination_slot = slot_at(destination, destination_index);
         error_t result = error_t::success;
         if (source_slot.object.type == object::type_t::none)
             result = error_t::not_found;
@@ -353,6 +453,8 @@ namespace sys::kernel::capability
         else {
             destination_slot = source_slot;
             source_slot = {};
+            mark_occupied(destination, destination_index);
+            mark_free(source, source_index);
         }
         if (second != first)
             unlock(*second);
@@ -397,6 +499,8 @@ namespace sys::kernel::capability
          * derivation graph, and only then invalidate slots and records.
          */
         static u8 revoke_marks[maximum_registered_cspaces][cspace_slot_count]{};
+        cspace_t* locked_spaces[maximum_registered_cspaces]{};
+        u32 locked_count = 0U;
         u32 removed = 0U;
         spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);
 
@@ -404,9 +508,24 @@ namespace sys::kernel::capability
             cspace_t* cspace = cspace_registry[space_index];
             if (cspace == nullptr)
                 continue;
-            lock(*cspace);
+            u32 position = locked_count;
+            while (position > 0U && reinterpret_cast<uintptr_t>(locked_spaces[position - 1U]) >
+                                        reinterpret_cast<uintptr_t>(cspace)) {
+                locked_spaces[position] = locked_spaces[position - 1U];
+                --position;
+            }
+            locked_spaces[position] = cspace;
+            ++locked_count;
+        }
+        for (u32 index = 0U; index < locked_count; ++index)
+            lock(*locked_spaces[index]);
+
+        for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
+            cspace_t* cspace = cspace_registry[space_index];
+            if (cspace == nullptr)
+                continue;
             for (u32 slot_index = 0U; slot_index < cspace_slot_count; ++slot_index) {
-                const slot_t& slot = cspace->slots[slot_index];
+                const slot_t& slot = slot_at(*cspace, slot_index);
                 revoke_marks[space_index][slot_index] =
                     slot.object.type != object::type_t::none &&
                             descendant_of(slot.derivation, ancestor)
@@ -422,20 +541,18 @@ namespace sys::kernel::capability
             for (u32 slot_index = 0U; slot_index < cspace_slot_count; ++slot_index) {
                 if (revoke_marks[space_index][slot_index] == 0U)
                     continue;
-                slot_t& slot = cspace->slots[slot_index];
+                slot_t& slot = slot_at(*cspace, slot_index);
                 if (slot.derivation < maximum_derivations)
                     __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
                 slot = {};
+                mark_free(*cspace, slot_index);
                 revoke_marks[space_index][slot_index] = 0U;
                 ++removed;
             }
         }
 
-        for (u32 space_index = maximum_registered_cspaces; space_index > 0U; --space_index) {
-            cspace_t* cspace = cspace_registry[space_index - 1U];
-            if (cspace != nullptr)
-                unlock(*cspace);
-        }
+        for (u32 index = locked_count; index > 0U; --index)
+            unlock(*locked_spaces[index - 1U]);
         spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
         return removed;
     }
@@ -451,12 +568,13 @@ namespace sys::kernel::capability
         u32 removed = 0U;
         lock(cspace);
         for (u32 index = 0U; index < cspace_slot_count; ++index) {
-            slot_t& slot = cspace.slots[index];
+            slot_t& slot = slot_at(cspace, index);
             if (slot.object.id == reference.id && slot.object.generation == reference.generation &&
                 slot.object.type == reference.type) {
                 if (slot.derivation < maximum_derivations)
                     __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
                 slot = {};
+                mark_free(cspace, index);
                 ++removed;
             }
         }

@@ -124,7 +124,7 @@ namespace sys::kernel::ipc
     [[nodiscard]] inline error_t create(task::task& owner, capability_id_t selector) noexcept {
         if (selector >= capability::cspace_slot_count)
             return error_t::invalid_argument;
-        if (owner.cspace.slots[selector].object.type != object::type_t::none)
+        if (capability::slot_at(owner.cspace, selector).object.type != object::type_t::none)
             return error_t::busy;
         for (u32 index = 0U; index < dynamic_endpoint_count; ++index) {
             endpoint& value = dynamic_endpoints[index];

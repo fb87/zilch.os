@@ -105,17 +105,17 @@ Every completed requirement must link to:
 
 - [x] **CAP-001** Generation-safe object references exist. Runtime destroy/reuse evidence exists.
 - [x] **CAP-002** Basic rights checks exist. Rights attenuation and negative checks are exercised.
-- [ ] **CAP-003** Hierarchical CSpace design completed.
-- [ ] **CAP-004** Guarded capability lookup implemented.
-- [ ] **CAP-005** Scalable slot allocation implemented.
-- [-] **CAP-006** Capability badges implemented. Basic badges/minting exist; scalable guarded CSpace semantics remain open.
+- [x] **CAP-003** CSpaces use a two-level 4×64 radix with explicit root/leaf selector geometry.
+- [x] **CAP-004** Every capability operation validates the CSpace's eight-bit guard before resolving a radix path; wrong-guard lookup is rejected.
+- [x] **CAP-005** Per-leaf occupancy bitmaps and a rotating allocation hint allocate across all 256 slots without a linear occupied-slot scan.
+- [-] **CAP-006** Capability badges implemented. Basic badges/minting and scalable guarded CSpace semantics exist; complete badge-delivery semantics remain open.
 - [-] **CAP-007** Rights attenuation enforced during derivation. Bounded implementation exists; concurrency proof remains open.
 
 ## 2.2 Derivation and revocation
 
 - [-] **CAP-008** Bounded capability derivation tree implemented. Parent/child records and recursive traversal exist; storage is fixed-size and revoke is not yet scalable or restartable.
 - [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
-- [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation is rejected; guarded CSpace and complete badge-delivery semantics remain open.
+- [-] **CAP-010** Mint operation implemented with reduced rights and badge. Rights escalation and wrong-guard access are rejected; complete badge-delivery semantics remain open.
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
 - [-] **CAP-012** Single-capability delete, atomic lookup snapshots, and exception-scoped lookup/use quiescence exist; generalized non-exception readers and long-duration interleaving evidence remain open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
@@ -128,7 +128,7 @@ Every completed requirement must link to:
 - [-] **CAP-017** Single-capability IPC transfer implemented for queued and direct rendezvous paths. Multi-capability transfer remains open.
 - [-] **CAP-018** Receiver-selected destination slots are supported for single-capability memory-server replies; general receive windows and multi-capability placement remain open.
 - [-] **CAP-019** Direct-call and reply-transfer failures preserve IPC authority and support transactional server rollback. Multi-capability partial-failure rollback and systematic fault injection remain open.
-- [ ] **CAP-020** Cross-CSpace transfer fuzz test passes.
+- [x] **CAP-020** A 4,096-operation cross-CSpace copy/lookup/delete fuzz sequence passes across guarded bitmap-allocated slots, including wrong-guard negatives and post-revoke reuse.
 - [x] **CAP-021** Cross-CPU revoke-versus-transfer race passes with a post-revoke no-descendant invariant for both legal linearizations.
 
 ### Capability completion gate

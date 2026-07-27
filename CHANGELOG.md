@@ -1,3 +1,11 @@
+## 0142 - Scale and guard capability spaces
+
+- Replace the single 64-slot CSpace array with a two-level 4×64 radix.
+- Validate an eight-bit CSpace guard before every capability path resolution.
+- Add per-leaf occupancy bitmaps and rotating slot allocation across 256 slots.
+- Sort global revoke lock acquisition by CSpace address and release in reverse order.
+- Certify cross-leaf allocation, wrong-guard rejection, bulk revoke, and 4,096 cross-CSpace transfer/reuse operations.
+
 ## 0141 - Make ASID and VMID rollover generation-safe
 
 - Replace fixed ASIDs with a generation-tagged bounded allocator.
