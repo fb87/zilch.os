@@ -10,3 +10,11 @@ notification with a client-specific badge.
 This executable is deliberately small. It verifies image isolation, pager reply
 state, frame ownership, mapping teardown, and process-image reuse without making
 the memory server part of the kernel.
+
+## Reply capability delivery
+
+Allocation requests include a receiver-selected destination CSpace slot. The
+server replies with a derived read/write frame capability. If the destination
+is occupied, the reply transfer fails without consuming reply authority; the
+server destroys the frame, clears the handle, and reports the error in a retry
+reply.

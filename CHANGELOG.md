@@ -252,3 +252,33 @@
 - Added a separately linked memory pressure client ELF.
 - Added three-CPU PL3 allocation/query/release pressure through the memory server.
 - Added owner-bound frame handles and clean shutdown validation.
+
+## 0115 - Reply capability transfer and client-owned frames
+
+- Extend IPC reply and reply-receive with optional single-capability transfer.
+- Commit reply transfer before consuming the single-use reply authority, so a
+  busy destination leaves the caller blocked and permits a retry or error reply.
+- Transfer resource-backed frame capabilities from the PL3 memory server into
+  receiver-selected client CSpace slots.
+- Roll back the server-side frame and handle when a selected destination slot
+  is occupied, then report the transfer error through the preserved reply.
+- Require clients to delete received capabilities before releasing server
+  handles.
+- Exercise successful delivery and occupied-slot rollback across three
+  concurrent PL3 clients.
+
+
+## 0116 - Aggregate memory-client completion badges
+
+- Fix the root certification runner dropping valid notification badges that arrive out of order.
+- Accumulate notification bits until the complete expected mask has been observed.
+- Wait for all three concurrent memory-client completion badges as one set.
+- Preserve immediate failure handling for high-order memory-server failure badges.
+
+## 0116 - Memory-client capability deletion fix
+
+- Pass the current-task selector (`0`) explicitly when deleting frame
+  capabilities received from the memory server.
+- Prevent received frame slots from being misinterpreted as task selectors,
+  which caused `denied` results and aborted all memory clients before release
+  and shutdown.

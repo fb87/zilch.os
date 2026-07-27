@@ -82,7 +82,8 @@ namespace
         return false;
     }
 
-    [[nodiscard]] bool wait_for_badge(sys::word_t expected) noexcept {
+    [[nodiscard]] bool wait_for_badges(sys::word_t expected) noexcept {
+        sys::word_t observed = 0U;
         for (sys::word_t spin = 0U; spin < 10000000U; ++spin) {
             sys::word_t badges = 0U;
             const sys::word_t status = sys::control_result1(
@@ -90,7 +91,8 @@ namespace
             if (status == static_cast<sys::word_t>(sys::error_t::success)) {
                 if ((badges & 0xffff0000U) != 0U)
                     return false;
-                if ((badges & expected) != 0U)
+                observed |= badges;
+                if ((observed & expected) == expected)
                     return true;
             }
         }
@@ -118,7 +120,7 @@ namespace
         bool pager =
             create_service_process(2U, fault_client_role, client_thread, client_task, client_space);
         if (pager)
-            pager = wait_for_badge(1U);
+            pager = wait_for_badges(1U);
         if (pager)
             pager = destroy_service_process(client_thread, client_task, client_space);
 
@@ -126,7 +128,7 @@ namespace
             pager = create_service_process(3U, second_fault_client_role, client_thread, client_task,
                                            client_space);
         if (pager)
-            pager = wait_for_badge(2U);
+            pager = wait_for_badges(2U);
         if (pager)
             pager = destroy_service_process(client_thread, client_task, client_space);
         result.pager = pager;
@@ -137,8 +139,10 @@ namespace
                                               client_thread + index, client_task + index,
                                               client_space + index);
         }
-        for (sys::word_t index = 0U; index < 3U && pressure; ++index)
-            pressure = wait_for_badge(1U << (index + 2U));
+        if (pressure) {
+            constexpr sys::word_t all_client_badges = (1U << 2U) | (1U << 3U) | (1U << 4U);
+            pressure = wait_for_badges(all_client_badges);
+        }
         for (sys::word_t index = 0U; index < 3U; ++index) {
             pressure = destroy_service_process(client_thread + index, client_task + index,
                                                client_space + index) &&

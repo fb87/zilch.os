@@ -234,20 +234,34 @@ namespace sys::kernel::syscall
         return error_t::success;
     }
 
-    inline void reply_to_caller(thread::thread& server) noexcept {
+    [[nodiscard]] inline error_t reply_to_caller(thread::thread& server) noexcept {
         const thread::reply_capability reply = server.reply;
-        server.reply = {};
-        if (reply.donation_active)
-            scheduling::revoke_donation(server.scheduling_context);
         if (!reply.valid || reply.caller >= thread::user_thread_count)
-            return;
+            return error_t::not_found;
         thread::thread& caller = thread::user_threads[reply.caller];
         const thread::state caller_state = thread::load_state(caller);
         if (caller.object.generation != reply.generation ||
             (caller_state != thread::state::blocked_reply &&
              caller_state != thread::state::blocked_fault)) {
-            return;
+            return error_t::not_found;
         }
+
+        /*
+         * Reply capability transfer is committed before consuming the
+         * single-use reply authority.  A busy or invalid destination leaves
+         * the caller blocked and allows the server to retry or cancel.
+         */
+        if (caller_state == thread::state::blocked_reply) {
+            const error_t transfer_result = transfer_capability(server, caller);
+            if (transfer_result != error_t::success)
+                return transfer_result;
+        } else if (server.transfer.valid) {
+            return error_t::invalid_argument;
+        }
+
+        server.reply = {};
+        if (reply.donation_active)
+            scheduling::revoke_donation(server.scheduling_context);
         if (caller_state == thread::state::blocked_fault) {
             const auto disposition = static_cast<fault::disposition>(server.message[0]);
             caller.fault_disposition = disposition;
@@ -257,13 +271,14 @@ namespace sys::kernel::syscall
             } else {
                 thread::store_state(caller, thread::state::terminated);
             }
-            return;
+            return error_t::success;
         }
         caller.ipc_timeout_active = false;
         thread::publish_pending(caller, thread::pending_ipc::reply, server.id,
                                 server.object.generation, server.message);
         (void)thread::wake(caller);
         ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
+        return error_t::success;
     }
 
     inline bool receive(thread::thread& current, arch::thread::context& frame,
@@ -468,17 +483,28 @@ namespace sys::kernel::syscall
                 return call(current, frame, endpoint);
             case abi::v1::ipc_operation::receive:
                 return receive(current, frame, endpoint);
-            case abi::v1::ipc_operation::reply_receive:
+            case abi::v1::ipc_operation::reply_receive: {
                 copy_message_from_frame(current, frame);
-                reply_to_caller(current);
+                capture_transfer(current, frame);
+                const error_t result = reply_to_caller(current);
+                if (result != error_t::success) {
+                    current.transfer = {};
+                    set_error(frame, result);
+                    return true;
+                }
                 return receive(current, frame, endpoint);
+            }
             case abi::v1::ipc_operation::cancel:
                 return cancel(current, frame);
-            case abi::v1::ipc_operation::reply:
+            case abi::v1::ipc_operation::reply: {
                 copy_message_from_frame(current, frame);
-                reply_to_caller(current);
-                set_error(frame, error_t::success);
+                capture_transfer(current, frame);
+                const error_t result = reply_to_caller(current);
+                if (result != error_t::success)
+                    current.transfer = {};
+                set_error(frame, result);
                 return true;
+            }
         }
         set_error(frame, error_t::denied);
         return true;

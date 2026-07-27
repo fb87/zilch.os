@@ -126,8 +126,8 @@ Every completed requirement must link to:
 ## 2.3 Capability transfer
 
 - [-] **CAP-017** Single-capability IPC transfer implemented for queued and direct rendezvous paths. Multi-capability transfer remains open.
-- [ ] **CAP-018** Receiver-controlled destination slots implemented.
-- [-] **CAP-019** Direct-transfer failure restores the waiting receiver and avoids caller blocking. Multi-capability partial-failure rollback and fault injection remain open.
+- [-] **CAP-018** Receiver-selected destination slots are supported for single-capability memory-server replies; general receive windows and multi-capability placement remain open.
+- [-] **CAP-019** Direct-call and reply-transfer failures preserve IPC authority and support transactional server rollback. Multi-capability partial-failure rollback and systematic fault injection remain open.
 - [ ] **CAP-020** Cross-CSpace transfer fuzz test passes.
 - [ ] **CAP-021** Concurrent revoke-versus-transfer race test passes.
 
@@ -149,7 +149,7 @@ Every completed requirement must link to:
 - [-] **IPC-006** Teardown cancellation exists; concurrency/quiescence proof remains open.
 - [-] **IPC-007** Bounded IPC timeout expiration exists. Complete timeout ABI, race stress, and donation rollback remain open.
 - [-] **IPC-008** Basic notification signal/wait and dynamic lifecycle exist; full binding policy remains open.
-- [-] **IPC-009** Single-capability transfer exists; multi-capability atomic transfer remains open.
+- [-] **IPC-009** Single-capability transfer works on calls and replies, including receiver-selected destinations for the memory-server protocol; multi-capability atomic transfer remains open.
 - [ ] **IPC-010** Bounded out-of-line message strategy implemented.
 
 ## 3.2 Scheduling integration
@@ -319,7 +319,7 @@ Every completed requirement must link to:
 
 - [-] **USR-006** The independently linked PL3 memory server now allocates frames through its delegated memory-resource capability; production inventory/policy APIs remain open.
 - [-] **USR-007** Root bootinfo carries the physical memory inventory; the userspace memory server does not yet import and manage it.
-- [-] **USR-008** The pager memory server uses resource-backed frame creation and quota enforcement; general client allocation API remains open.
+- [-] **USR-008** The PL3 memory server provides resource-backed allocation and transfers derived frame capabilities into client-selected slots; general libraries, asynchronous queues, and scalable handle management remain open.
 - [-] **USR-009** Independent pager service handles two sequential clients; concurrency, death, and pressure policies remain open.
 - [ ] **USR-010** Demand paging implemented where configured.
 - [-] **USR-011** Resource quota exhaustion returns deterministic `no_memory`; reclamation/pressure policy remains open.

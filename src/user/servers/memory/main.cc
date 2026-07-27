@@ -2,6 +2,7 @@
 #include <sys/ipc.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/memory.hh>
 
@@ -20,6 +21,7 @@ namespace
     struct handle_state final {
         bool allocated{};
         sys::word_t owner{};
+        sys::capability_id_t destination{};
     };
 
     handle_state handles[sys::abi::v1::memory_server_max_handles]{};
@@ -32,9 +34,11 @@ namespace
     }
 
     [[nodiscard]] sys::word_t service_request(const sys::abi::v1::ipc_result& request,
-                                              sys::word_t& value) noexcept {
+                                              sys::word_t& value,
+                                              sys::abi::v1::ipc_transfer& transfer) noexcept {
         const auto operation = static_cast<sys::abi::v1::memory_server_operation>(request.message0);
         const sys::word_t handle = request.message1;
+        const auto destination = static_cast<sys::capability_id_t>(request.message2);
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
         const sys::word_t invalid = static_cast<sys::word_t>(sys::error_t::invalid_argument);
         const sys::word_t denied = static_cast<sys::word_t>(sys::error_t::denied);
@@ -48,6 +52,11 @@ namespace
                     return static_cast<sys::word_t>(sys::error_t::no_memory);
                 handles[handle].allocated = true;
                 handles[handle].owner = request.sender;
+                handles[handle].destination = destination;
+                transfer.source = static_cast<sys::capability_id_t>(service_frame_base + handle);
+                transfer.destination = destination;
+                transfer.rights = static_cast<sys::u32>(sys::abi::v1::CapabilityRight::read) |
+                                  static_cast<sys::u32>(sys::abi::v1::CapabilityRight::write);
                 value = handle;
                 return success;
 
@@ -126,9 +135,25 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             fail(0x40U);
         sys::word_t value = 0U;
-        const sys::word_t status = service_request(request, value);
-        if (sys::ipc_reply(status, value, 0U, 0U) !=
-            static_cast<sys::word_t>(sys::error_t::success))
+        sys::abi::v1::ipc_transfer transfer{};
+        const sys::word_t status = service_request(request, value, transfer);
+        sys::word_t reply_status = sys::ipc_reply(status, value, 0U, 0U, transfer);
+        if (reply_status != static_cast<sys::word_t>(sys::error_t::success)) {
+            /*
+             * Capability transfer is atomic with reply delivery.  If the
+             * receiver-selected slot is invalid or occupied, reclaim the
+             * server-side frame and use the still-live reply authority to
+             * report the transfer error.
+             */
+            if (transfer.source != static_cast<sys::capability_id_t>(-1) &&
+                value < sys::abi::v1::memory_server_max_handles && handles[value].allocated) {
+                (void)sys::control(sys::abi::v1::control_operation::frame_destroy,
+                                   service_frame_base + value);
+                handles[value] = {};
+            }
+            reply_status = sys::ipc_reply(reply_status, 0U, 0U, 0U);
+        }
+        if (reply_status != static_cast<sys::word_t>(sys::error_t::success))
             fail(0x41U);
         if (static_cast<sys::abi::v1::memory_server_operation>(request.message0) ==
                 sys::abi::v1::memory_server_operation::shutdown &&

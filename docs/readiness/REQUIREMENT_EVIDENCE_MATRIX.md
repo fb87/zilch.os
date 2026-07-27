@@ -39,16 +39,16 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 | CAP-012 | IN PROGRESS | single-slot delete | descendant removal negative checks | Concurrent lookup evidence missing |
 | CAP-013 | IN PROGRESS | global descendant revoke | child/grandchild become absent | Scalable/restartable revoke missing |
 | CAP-016 | IN PROGRESS | generations plus reusable derivations | repeated reuse loop | Long soak missing |
-| CAP-017 | IN PROGRESS | one-cap IPC mint transfer | pager/IPC integration | Dedicated cross-CSpace runtime test missing |
-| CAP-019 | IN PROGRESS | direct-transfer failure restores receiver | build and code-path review | Fault injection matrix missing |
+| CAP-017 | IN PROGRESS | one-cap IPC mint transfer on calls and replies | pager plus three-client memory-server integration | Multi-capability transfer and long-duration race evidence missing |
+| CAP-019 | IN PROGRESS | direct-call rollback and reply-transfer retry preserve authority | occupied destination rollback in memory-server protocol | Multi-capability fault injection matrix missing |
 | IPC-003 | IN PROGRESS | generation-checked single-use reply authority | pager two-client lifecycle | Not first-class reply object |
 | IPC-004 | IN PROGRESS | reply-receive path | pager service integration | Atomicity stress incomplete |
 | IPC-005 | IN PROGRESS | endpoint/thread cancellation paths | existing lifecycle suite | Race fuzz incomplete |
-| IPC-009 | IN PROGRESS | one-cap transfer descriptor | direct/queued transfer paths | Multi-cap and receive windows absent |
+| IPC-009 | IN PROGRESS | one-cap transfer descriptor on call and reply | receiver-selected memory-server frame delivery | Multi-capability transfer absent |
 
 | CAP-008..013 | IN PROGRESS | bounded CDT, copy/mint/move/delete/revoke in `capability/cspace.hh` | 128 derive/revoke/reuse cycles and attenuation negatives | fixed storage; concurrency and restartable revoke open |
 | CAP-016 | IN PROGRESS | generation checks plus reusable derivation records | destroy/reuse and capability-control runtime suites | long soak and concurrent ABA proof open |
-| CAP-017, CAP-019 | IN PROGRESS | single-cap IPC transfer and direct-rendezvous rollback in `syscall/ipc.hh` | pager and IPC integration; destination-occupied negative path | multi-cap receive windows and fault-injection matrix open |
+| CAP-017, CAP-018, CAP-019 | IN PROGRESS | single-cap call/reply transfer, receiver-selected destination, and retry-safe reply authority in `syscall/ipc.hh` | three-client memory-server delivery plus occupied-slot rollback | general receive windows, multi-cap transfer, and fault-injection matrix open |
 | IPC-007, IPC-013, IPC-014 | IN PROGRESS | bounded timeout/donation cleanup and receiver-CPU wakeup paths | certification integration baseline | timeout ABI, race fuzz, and fully targeted teardown IPIs open |
 
 ## Batch 0092 evidence
@@ -149,3 +149,5 @@ Status follows `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`. A passing bou
 
 | USR-008 | IN PROGRESS | `include/abi/sys/v1/memory.hh`, `src/user/servers/memory/main.cc` | `memory_server_protocol` | Bounded handle protocol; no capability return yet |
 | USR-011 / TST-023 | IN PROGRESS | `src/user/tests/memory_client/main.cc` | Three PL3 clients, 768 allocation/release calls | Full-RAM and long-duration pressure open |
+
+| CAP-018 | IN PROGRESS | receiver-selected destination in memory-server reply protocol | occupied-slot negative test and successful frame-cap delivery | general receive windows remain open |
