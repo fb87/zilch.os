@@ -1,5 +1,4 @@
 #pragma once
-
 #include <sys/arch/cpu.hh>
 #include <sys/arch/irq.hh>
 #include <sys/arch/space/address_space.hh>
@@ -338,6 +337,13 @@ namespace sys::kernel::thread
             return error_t::denied;
         }
         const vaddr_t page_address = address & ~(memory::page_size - 1U);
+        const vaddr_t fault_page = target.last_fault.address & ~(memory::page_size - 1U);
+        const error_t validation =
+            fault::validate_mapping_reply(target.last_fault, page_address, fault_page, permissions);
+        if (validation != error_t::success) {
+            unlock_ipc_lifecycle();
+            return validation;
+        }
         error_t result =
             memory::map(target.address_space, source, page_address, permissions, 0U, 0U);
         if (result == error_t::busy &&
@@ -917,12 +923,28 @@ namespace sys::kernel::thread
         pager_target.last_fault = {fault::kind::data_abort,
                                    pager_target.id,
                                    pager_target.object.generation,
-                                   0x96000004U,
+                                   0x96000044U,
                                    (arch::space::user_code + 0x4000ULL),
                                    pager_target.context.instruction_pointer};
         pager_target.fault_disposition = fault::disposition::pending;
         pager_target.waiting_endpoint = 10U;
         store_state(pager_target, state::blocked_fault);
+        result = resolve_fault_with_frame(
+            user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x5000ULL,
+            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
+                                            static_cast<u8>(memory::permission::write)));
+        if (result != error_t::invalid_argument ||
+            load_state(pager_target) != state::blocked_fault ||
+            pager_target.fault_disposition != fault::disposition::pending ||
+            pager_frame.mapping_count != 0U)
+            return error_t::invalid_argument;
+        result =
+            resolve_fault_with_frame(user_threads[0], pager_target, pager_frame,
+                                     arch::space::user_code + 0x4000ULL, memory::permission::read);
+        if (result != error_t::denied || load_state(pager_target) != state::blocked_fault ||
+            pager_target.fault_disposition != fault::disposition::pending ||
+            pager_frame.mapping_count != 0U)
+            return error_t::invalid_argument;
         result = resolve_fault_with_frame(
             user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x4000ULL,
             static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
@@ -979,6 +1001,7 @@ namespace sys::kernel::thread
             pager_target.ipc_timeout_active)
             return error_t::invalid_argument;
         pr_info("[TEST] name=same_page_fault_serialization result=PASS mappings=1\n");
+        pr_info("[TEST] name=pager_invalid_reply result=PASS wrong_page=reject write_ro=reject\n");
         pr_info("[TEST] name=nested_fault_bound result=PASS depth=1\n");
         pr_info("[TEST] name=pager_timeout_death result=PASS disposition=terminate\n");
         pr_info("[TEST] name=timeout_queue_order result=PASS expired=1 remaining=0\n");

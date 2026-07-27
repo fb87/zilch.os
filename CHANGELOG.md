@@ -1,3 +1,10 @@
+## 0150 - Bind pager replies to the pending fault
+
+- Reject pager mappings for a page other than the recorded fault page.
+- Enforce read, write, and execute permissions against the recorded access type.
+- Preserve blocked state and reply authority after invalid replies.
+- Certify corrected retry and terminate behavior through real userspace pager policy.
+
 ## 0149 - Freeze the fault IPC metadata contract
 
 - Define the four-word ABI v1 fault message as kind, syndrome, address, and PC.

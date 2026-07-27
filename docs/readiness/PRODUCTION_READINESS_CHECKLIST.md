@@ -212,7 +212,7 @@ Every completed requirement must link to:
 
 - [-] **MEM-022** Pager endpoint is configured for test address spaces; general per-region policy remains open.
 - [x] **MEM-023** Fault IPC carries fault address, access syndrome/type data, and PC.
-- [-] **MEM-024** Map/resume and terminate mechanisms exist; denial/invalid-reply policy tests remain open.
+- [x] **MEM-024** Pager map/resume is bound to the recorded fault page and access type; wrong-page and insufficient-permission replies are rejected without consuming reply authority, corrected retry succeeds, and terminate policy is runtime verified.
 - [-] **MEM-025** Fault map/reply is serialized by the IPC lifecycle and mapping locks, and an already-installed identical mapping completes idempotently with one mapping record; a forced simultaneous multi-CPU interleaving remains open.
 - [-] **MEM-026** The kernel enforces a bounded orphaned-fault safety deadline and pager exit consumes live fault reply authority; userspace supervisor restart/reassignment policy remains open.
 

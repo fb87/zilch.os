@@ -111,6 +111,17 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
 
         constexpr auto read_write =
             sys::abi::v1::memory_permission::read | sys::abi::v1::memory_permission::write;
+        if (index == 0U) {
+            const sys::word_t wrong_page =
+                sys::control(sys::abi::v1::control_operation::fault_reply_sender, pager_frame,
+                             fault_record.address + 0x1000U, sys::abi::v1::encode(read_write));
+            const sys::word_t read_only = sys::control(
+                sys::abi::v1::control_operation::fault_reply_sender, pager_frame,
+                fault_record.address, sys::abi::v1::encode(sys::abi::v1::memory_permission::read));
+            if (wrong_page != static_cast<sys::word_t>(sys::error_t::invalid_argument) ||
+                read_only != static_cast<sys::word_t>(sys::error_t::denied))
+                fail(3U + index * 8U);
+        }
         const sys::word_t resolved =
             sys::control(sys::abi::v1::control_operation::fault_reply_sender, pager_frame,
                          fault_record.address, sys::abi::v1::encode(read_write));
