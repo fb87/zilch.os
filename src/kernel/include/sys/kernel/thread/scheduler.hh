@@ -519,6 +519,8 @@ namespace sys::kernel::thread
 
 #if CONFIG_SELFTEST
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
+        if (!arch::memory::kernel_stack_guards_valid())
+            return error_t::invalid_argument;
         if (memory::physical_region_count == 0U ||
             memory::physical_region_count > memory::maximum_physical_regions ||
             memory::managed_pages == 0U || memory::free_pages >= memory::managed_pages)

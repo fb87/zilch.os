@@ -9,16 +9,18 @@ SECTIONS
   .rodata : ALIGN(4096) { *(.rodata .rodata.*) }
   .data : ALIGN(4096) { *(.data .data.*) }
   .bss (NOLOAD) : ALIGN(4096) { __bss_start = .; *(.bss .bss.* COMMON) __bss_end = .; }
-  .stacks (NOLOAD) : ALIGN(32768) {
+  .stacks (NOLOAD) : ALIGN(2097152) {
     __cpu_stacks_start = .;
-    . += 4 * 0x8000;
+    . += 4 * 0x10000;
     __cpu_stacks_end = .;
   }
-  .hypervisor_stacks (NOLOAD) : ALIGN(32768) {
+  .hypervisor_stacks (NOLOAD) : ALIGN(65536) {
     __hypervisor_stacks_start = .;
-    . += 4 * 0x8000;
+    . += 4 * 0x10000;
     __hypervisor_stacks_end = .;
   }
+  ASSERT((__hypervisor_stacks_end - __cpu_stacks_start) <= 0x200000,
+         "EL1/EL2 stack slots must fit in one guarded L3 window")
   __kernel_end = ALIGN(4096);
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.init_array*) *(.fini_array*) }
 }

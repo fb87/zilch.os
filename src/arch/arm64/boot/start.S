@@ -13,7 +13,7 @@
   and x9, x9, #0xff
   ldr x10, =\symbol
   add x9, x9, #1
-  lsl x9, x9, #15
+  lsl x9, x9, #16
   add \destination, x10, x9
 .endm
 

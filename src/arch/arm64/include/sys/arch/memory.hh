@@ -36,6 +36,12 @@ namespace sys::arch
         inline table_t kernel_l0{};
         inline table_t kernel_l1{};
         inline table_t kernel_l2{};
+        inline table_t kernel_identity_l2{};
+        inline table_t kernel_stack_l3{};
+        inline u32 kernel_identity_ready{};
+
+        extern "C" char __cpu_stacks_start[];
+        extern "C" char __hypervisor_stacks_end[];
 
         inline void clear(table_t& table) noexcept {
             for (usize_t i = 0U; i < entries; ++i)
@@ -46,18 +52,92 @@ namespace sys::arch
             return (reinterpret_cast<u64>(&table) & ~0xfffULL) | descriptor_table;
         }
 
+        inline void build_kernel_identity_tables() noexcept {
+            if (__atomic_load_n(&kernel_identity_ready, __ATOMIC_ACQUIRE) != 0U)
+                return;
+            clear(kernel_identity_l2);
+            clear(kernel_stack_l3);
+            for (usize_t index = 0U; index < entries; ++index) {
+                const paddr_t physical = 0x40000000ULL + index * 0x200000ULL;
+                kernel_identity_l2.entry[index] = physical | descriptor_valid | access_flag |
+                                                  inner_shareable | attr_normal | ap_el1_rw | uxn;
+            }
+
+            const uintptr_t stack_window =
+                reinterpret_cast<uintptr_t>(__cpu_stacks_start) & ~0x1fffffULL;
+            const uintptr_t stack_end = reinterpret_cast<uintptr_t>(__hypervisor_stacks_end);
+            if (stack_window >= 0x40000000ULL && stack_end <= stack_window + 0x200000ULL) {
+                for (usize_t index = 0U; index < entries; ++index) {
+                    const paddr_t physical = stack_window + index * page_size;
+                    kernel_stack_l3.entry[index] = physical | descriptor_page | access_flag |
+                                                   inner_shareable | attr_normal | ap_el1_rw | uxn;
+                }
+                constexpr usize_t cpu_count = 4U;
+                constexpr usize_t slot_size = 0x10000U;
+                constexpr usize_t usable_stack_size = 0x8000U;
+                const uintptr_t el1_start = reinterpret_cast<uintptr_t>(__cpu_stacks_start);
+                const uintptr_t el2_start =
+                    reinterpret_cast<uintptr_t>(__hypervisor_stacks_end) - cpu_count * slot_size;
+                for (usize_t cpu = 0U; cpu < cpu_count; ++cpu) {
+                    const uintptr_t el1_guard =
+                        el1_start + (cpu + 1U) * slot_size - usable_stack_size - page_size;
+                    const uintptr_t el2_guard =
+                        el2_start + (cpu + 1U) * slot_size - usable_stack_size - page_size;
+                    kernel_stack_l3.entry[(el1_guard - stack_window) >> page_shift] = 0U;
+                    kernel_stack_l3.entry[(el2_guard - stack_window) >> page_shift] = 0U;
+                }
+                const usize_t identity_index =
+                    static_cast<usize_t>((stack_window - 0x40000000ULL) >> 21U);
+                kernel_identity_l2.entry[identity_index] = table_descriptor(kernel_stack_l3);
+            }
+            __atomic_store_n(&kernel_identity_ready, 1U, __ATOMIC_RELEASE);
+        }
+
         inline void build_kernel_table(table_t& l0, table_t& l1, table_t& l2) noexcept {
+            build_kernel_identity_tables();
             clear(l0);
             clear(l1);
             clear(l2);
             l0.entry[0] = table_descriptor(l1);
             l1.entry[0] = table_descriptor(l2);
-            l1.entry[1] = 0x40000000ULL | descriptor_valid | access_flag | inner_shareable |
-                          attr_normal | ap_el1_rw | uxn;
+            l1.entry[1] = table_descriptor(kernel_identity_l2);
             l2.entry[0x08000000ULL >> 21U] = 0x08000000ULL | descriptor_valid | access_flag |
                                              attr_device | ap_el1_rw | pxn | uxn;
             l2.entry[0x09000000ULL >> 21U] = 0x09000000ULL | descriptor_valid | access_flag |
                                              attr_device | ap_el1_rw | pxn | uxn;
+        }
+
+        [[nodiscard]] inline bool kernel_stack_guards_valid() noexcept {
+            if (__atomic_load_n(&kernel_identity_ready, __ATOMIC_ACQUIRE) == 0U)
+                return false;
+            constexpr usize_t cpu_count = 4U;
+            constexpr usize_t slot_size = 0x10000U;
+            constexpr usize_t usable_stack_size = 0x8000U;
+            const uintptr_t stack_window =
+                reinterpret_cast<uintptr_t>(__cpu_stacks_start) & ~0x1fffffULL;
+            const uintptr_t el1_start = reinterpret_cast<uintptr_t>(__cpu_stacks_start);
+            const uintptr_t el2_start =
+                reinterpret_cast<uintptr_t>(__hypervisor_stacks_end) - cpu_count * slot_size;
+            const usize_t identity_index =
+                static_cast<usize_t>((stack_window - 0x40000000ULL) >> 21U);
+            if (identity_index >= entries ||
+                kernel_identity_l2.entry[identity_index] != table_descriptor(kernel_stack_l3))
+                return false;
+            for (usize_t cpu = 0U; cpu < cpu_count; ++cpu) {
+                const uintptr_t el1_guard =
+                    el1_start + (cpu + 1U) * slot_size - usable_stack_size - page_size;
+                const uintptr_t el2_guard =
+                    el2_start + (cpu + 1U) * slot_size - usable_stack_size - page_size;
+                const usize_t el1_index = (el1_guard - stack_window) >> page_shift;
+                const usize_t el2_index = (el2_guard - stack_window) >> page_shift;
+                if (el1_index + 1U >= entries || el2_index + 1U >= entries ||
+                    kernel_stack_l3.entry[el1_index] != 0U ||
+                    kernel_stack_l3.entry[el2_index] != 0U ||
+                    kernel_stack_l3.entry[el1_index + 1U] == 0U ||
+                    kernel_stack_l3.entry[el2_index + 1U] == 0U)
+                    return false;
+            }
+            return true;
         }
 
         inline void activate(paddr_t root) noexcept {

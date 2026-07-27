@@ -483,7 +483,7 @@ Every completed requirement must link to:
 - [-] **SEC-001** Kernel and guest W^X checks exist in bring-up paths.
 - [ ] **SEC-002** W^X enforced in every production address space.
 - [ ] **SEC-003** Kernel read-only data protected after initialization.
-- [-] **SEC-004** EL1 and EL2 use disjoint 32 KiB per-CPU stacks with bounds checks, base canaries, and retained high-water marks on every exception; unmapped guard pages remain open.
+- [x] **SEC-004** Every EL1 and EL2 per-CPU stack has an unmapped guard page below its 32 KiB usable region, plus exception-time bounds/canary checks and retained high-water marks. Bootstrap certification verifies all guard and adjacent usable PTEs.
 - [ ] **SEC-005** User copy routines validate full ranges and overflow.
 - [ ] **SEC-006** Reused memory and architectural state are zeroed.
 

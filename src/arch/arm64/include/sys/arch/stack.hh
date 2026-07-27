@@ -6,6 +6,7 @@
 namespace sys::arch::stack
 {
     inline constexpr usize_t cpu_count = 4U;
+    inline constexpr usize_t slot_size = 0x10000U;
     inline constexpr usize_t stack_size = 0x8000U;
     inline constexpr usize_t canary_words = 8U;
     inline constexpr u64 canary = 0x5a494c434b53544bULL;
@@ -20,11 +21,13 @@ namespace sys::arch::stack
     [[nodiscard]] inline uintptr_t bottom(u64 level, u32 cpu) noexcept {
         const uintptr_t start = reinterpret_cast<uintptr_t>(level == 2U ? __hypervisor_stacks_start
                                                                         : __cpu_stacks_start);
-        return start + static_cast<uintptr_t>(cpu) * stack_size;
+        return start + static_cast<uintptr_t>(cpu + 1U) * slot_size - stack_size;
     }
 
     [[nodiscard]] inline uintptr_t top(u64 level, u32 cpu) noexcept {
-        return bottom(level, cpu) + stack_size;
+        const uintptr_t start = reinterpret_cast<uintptr_t>(level == 2U ? __hypervisor_stacks_start
+                                                                        : __cpu_stacks_start);
+        return start + static_cast<uintptr_t>(cpu + 1U) * slot_size;
     }
 
     inline void seed(uintptr_t base) noexcept {

@@ -1,3 +1,10 @@
+## 0128 - Unmapped kernel stack guard pages
+
+- Replace the coarse ARM64 kernel identity block with a shared L2 identity map.
+- Split the 2 MiB stack window into L3 pages shared by kernel and user TTBR0 roots.
+- Place each EL1 and EL2 stack in a 64 KiB slot with an unmapped page immediately below its 32 KiB usable region.
+- Validate every guard and adjacent usable page during kernel bootstrap certification.
+
 ## 0127 - Kernel stack bounds and canaries
 
 - Seed independent canary regions at every EL1 and EL2 per-CPU stack base.
