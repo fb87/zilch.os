@@ -499,7 +499,7 @@ namespace sys::kernel::capability
          * derivation graph, and only then invalidate slots and records.
          */
         static u8 revoke_marks[maximum_registered_cspaces][cspace_slot_count]{};
-        cspace_t* locked_spaces[maximum_registered_cspaces]{};
+        cspace_t* locked_spaces[maximum_registered_cspaces];
         u32 locked_count = 0U;
         u32 removed = 0U;
         spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);

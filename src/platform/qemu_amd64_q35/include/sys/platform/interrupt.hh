@@ -18,5 +18,11 @@ namespace sys::platform::interrupt
         return 0U;
     }
     inline void complete(irq_id_t) noexcept {}
+    inline void deactivate(irq_id_t) noexcept {}
+    inline void mask(irq_id_t) noexcept {}
+    inline void unmask(irq_id_t) noexcept {}
+    [[nodiscard]] inline error_t configure(irq_id_t, bool) noexcept {
+        return error_t::unsupported;
+    }
     inline void send_ipi_all_others(irq_id_t) noexcept {}
 } // namespace sys::platform::interrupt

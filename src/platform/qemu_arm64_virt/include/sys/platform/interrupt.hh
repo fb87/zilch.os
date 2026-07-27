@@ -113,6 +113,9 @@ namespace sys::platform::interrupt
         __asm__ volatile("msr ICC_PMR_EL1, %0" : : "r"(value) : "memory");
         value = 0U;
         __asm__ volatile("msr ICC_BPR1_EL1, %0" : : "r"(value) : "memory");
+        __asm__ volatile("mrs %0, ICC_CTLR_EL1" : "=r"(value));
+        value |= 1U << 1U;
+        __asm__ volatile("msr ICC_CTLR_EL1, %0\n\tisb" : : "r"(value) : "memory");
         value = 1U;
         __asm__ volatile("msr ICC_IGRPEN1_EL1, %0\n\tisb" : : "r"(value) : "memory");
 
@@ -137,6 +140,50 @@ namespace sys::platform::interrupt
     inline void complete(irq_id_t irq) noexcept {
         const u64 value = irq;
         __asm__ volatile("msr ICC_EOIR1_EL1, %0\n\tisb" : : "r"(value) : "memory");
+    }
+
+    inline void deactivate(irq_id_t irq) noexcept {
+        const u64 value = irq;
+        __asm__ volatile("msr ICC_DIR_EL1, %0\n\tisb" : : "r"(value) : "memory");
+    }
+
+    inline void mask(irq_id_t irq) noexcept {
+        const u32 bit = 1U << (irq & 31U);
+        if (irq < 32U) {
+            const uintptr_t redistributor = find_redistributor();
+            if (redistributor != 0U)
+                reg32(redistributor + sgi_base_offset + 0x0180U) = bit;
+        } else {
+            reg32(distributor_base + 0x0180U + static_cast<uintptr_t>(irq / 32U) * 4U) = bit;
+        }
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+
+    inline void unmask(irq_id_t irq) noexcept {
+        const u32 bit = 1U << (irq & 31U);
+        if (irq < 32U) {
+            const uintptr_t redistributor = find_redistributor();
+            if (redistributor != 0U)
+                reg32(redistributor + sgi_base_offset + 0x0100U) = bit;
+        } else {
+            reg32(distributor_base + 0x0100U + static_cast<uintptr_t>(irq / 32U) * 4U) = bit;
+        }
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+
+    [[nodiscard]] inline error_t configure(irq_id_t irq, bool edge) noexcept {
+        if (irq < 16U || irq >= spurious_irq)
+            return error_t::invalid_argument;
+        const uintptr_t base =
+            irq < 32U ? find_redistributor() + sgi_base_offset : distributor_base;
+        if (base == 0U)
+            return error_t::not_found;
+        volatile u32& config = reg32(base + 0x0c00U + static_cast<uintptr_t>(irq / 16U) * 4U);
+        const u32 shift = (irq & 15U) * 2U + 1U;
+        const u32 value = config;
+        config = edge ? value | (1U << shift) : value & ~(1U << shift);
+        __asm__ volatile("dsb sy" ::: "memory");
+        return error_t::success;
     }
 
     inline void send_ipi_all_others(irq_id_t irq) noexcept {

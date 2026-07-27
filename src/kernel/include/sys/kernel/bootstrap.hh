@@ -23,7 +23,7 @@ namespace sys::kernel::bootstrap
                                     object::type_t::notification);
         if (result != error_t::success)
             return result;
-        root_timer_interrupt.irq = 27U;
+        interrupt::initialize(root_timer_interrupt, 27U);
         root_timer_interrupt.notification = object::reference(root_notification.object);
         result = object::register_object(root_timer_interrupt.object,
                                          object::bootstrap_id::timer_interrupt,

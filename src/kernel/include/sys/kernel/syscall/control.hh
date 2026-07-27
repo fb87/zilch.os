@@ -844,13 +844,24 @@ namespace sys::kernel::syscall
                     auto& interrupt = *reinterpret_cast<interrupt::interrupt_t*>(interrupt_header);
                     auto& target =
                         *reinterpret_cast<notification::notification*>(notification_header);
-                    interrupt.notification = object::reference(target.object);
+                    result = interrupt::bind(interrupt, object::reference(target.object));
                 }
                 break;
             }
-            case abi::v1::control_operation::interrupt_ack:
-                result = error_t::success;
+            case abi::v1::control_operation::interrupt_ack: {
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                object::header_t* interrupt_header = nullptr;
+                result = capability::lookup(current.owner->cspace, a1, object::type_t::interrupt,
+                                            capability::right_t::write, interrupt_header);
+                if (result == error_t::success) {
+                    auto& interrupt = *reinterpret_cast<interrupt::interrupt_t*>(interrupt_header);
+                    result = interrupt::acknowledge(interrupt);
+                }
                 break;
+            }
             case abi::v1::control_operation::scheduling_configure: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);

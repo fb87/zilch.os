@@ -268,13 +268,13 @@ Every completed requirement must link to:
 ## 6.1 ARM64 interrupt subsystem
 
 - [x] **IRQ-001** GICv3 distributor and CPU interfaces initialize on QEMU ARM64 virt.
-- [ ] **IRQ-002** Complete interrupt registration and ownership model.
-- [ ] **IRQ-003** IRQ capabilities delegated to userspace.
-- [ ] **IRQ-004** Mask, unmask, acknowledge, and deactivate semantics completed.
-- [ ] **IRQ-005** Level and edge interrupt behavior tested.
-- [ ] **IRQ-006** Shared interrupt policy explicitly defined.
-- [ ] **IRQ-007** Interrupt storm containment implemented.
-- [ ] **IRQ-008** Per-IRQ accounting and diagnostics implemented.
+- [-] **IRQ-002** An exclusive IRQ registry binds one generation-checked interrupt object to each GIC line; data-driven external IRQ discovery/publication remains open.
+- [-] **IRQ-003** Registered IRQ capabilities support rights-attenuated cross-CSpace delegation and revoke; a real userspace device-manager delegation flow remains open.
+- [x] **IRQ-004** GIC mask/unmask, priority-drop, explicit deactivate, active-state validation, and notification-gated acknowledge semantics are implemented.
+- [-] **IRQ-005** Edge configuration and the level-triggered timer path pass QEMU integration; real external edge/level device evidence remains open.
+- [x] **IRQ-006** IRQ ownership is exclusive for 1.0: a second object cannot register the same physical line; shared-line demultiplexing is delegated to a userspace driver service.
+- [x] **IRQ-007** A bounded delivery window masks a line after 64 events and requires explicit rebinding/recovery before delivery resumes.
+- [x] **IRQ-008** Per-IRQ delivered, acknowledged, suppressed, window-count, active, masked, and stormed diagnostics are maintained.
 
 ## 6.2 Timers
 

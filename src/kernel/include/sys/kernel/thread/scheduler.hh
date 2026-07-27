@@ -11,6 +11,9 @@
 #if CONFIG_HYPERVISOR_SELFTEST
 #include <sys/kernel/tests/hypervisor/control_models.hh>
 #endif
+#if CONFIG_SELFTEST
+#include <sys/kernel/tests/interrupt/lifecycle.hh>
+#endif
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/bootstrap.hh>
 #include <sys/kernel/memory/manager.hh>
@@ -251,6 +254,7 @@ namespace sys::kernel::thread
         root_result = capability::install(root_task.cspace, 15U,
                                           object::reference(bootstrap::root_timer_interrupt.object),
                                           {static_cast<u32>(capability::right_t::read) |
+                                           static_cast<u32>(capability::right_t::write) |
                                            static_cast<u32>(capability::right_t::control)});
         if (root_result != error_t::success)
             return root_result;
@@ -816,6 +820,10 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=scheduling_context_donation result=PASS depth=2 returned=6\n");
         pr_info("[TEST] name=priority_inheritance result=PASS inherited=240 base=20\n");
         pr_info("[TEST] name=donation_chain_bound result=PASS maximum=8\n");
+
+        result = tests::interrupt::run(root, guarded_cspace);
+        if (result != error_t::success)
+            return result;
 
         result =
             memory::map(user_threads[0].address_space, memory::frames[0], scratch_mapping_address,

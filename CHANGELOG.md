@@ -1,3 +1,12 @@
+## 0145 - Enforce physical IRQ ownership and containment
+
+- Add an exclusive generation-safe IRQ registry and notification binding.
+- Route non-reserved GIC interrupts through capability-owned kernel IRQ objects.
+- Implement mask, priority drop, explicit deactivate, acknowledge, and unmask sequencing.
+- Add level/edge trigger configuration and an explicit no-shared-lines 1.0 policy.
+- Track delivery/ack/suppression state and mask interrupt storms after 64 events per window.
+- Certify attenuated cross-CSpace delegation, revoke, delivery, acknowledge, and storm containment.
+
 ## 0144 - Donate scheduling contexts through IPC
 
 - Propagate remaining budget and inherited priority through synchronous IPC calls.

@@ -1,6 +1,7 @@
 #include <sys/arch/arch.hh>
 #include <sys/arch/stack.hh>
 #include <sys/kernel/emergency.hh>
+#include <sys/kernel/interrupt.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/panic.hh>
 #include <sys/kernel/printk.hh>
@@ -35,6 +36,7 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
 
     if (exception_class == 1U) {
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
+        bool userspace_deactivate = false;
         sys::kernel::emergency::trace(sys::kernel::emergency::event::irq, irq, vector, level);
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
             const sys::u64 ticks = sys::platform::timer::handle_interrupt();
@@ -65,9 +67,13 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
         } else if (irq == sys::platform::interrupt::tlb_shootdown_ipi) {
             sys::arch::memory::invalidate_tlb_all();
             sys::arch::smp::record_tlb_shootdown_ipi();
+        } else {
+            userspace_deactivate = sys::kernel::interrupt::dispatch(irq);
         }
         if (irq < 1020U) {
             sys::platform::interrupt::complete(irq);
+            if (!userspace_deactivate)
+                sys::platform::interrupt::deactivate(irq);
         }
         return;
     }
