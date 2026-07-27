@@ -73,6 +73,7 @@ namespace sys::kernel::thread
         u64 faults{};
         fault::record last_fault{};
         fault::disposition fault_disposition{fault::disposition::pending};
+        volatile bool executing{};
     };
 
     [[nodiscard]] inline constexpr u64 initial_fuzz_seed(thread_id_t id) noexcept {
@@ -104,6 +105,7 @@ namespace sys::kernel::thread
         value.faults = 0U;
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
+        __atomic_store_n(&value.executing, false, __ATOMIC_RELAXED);
         value.address_space.initialize(static_cast<u16>(id + 1U), argument0);
         arch::thread::initialize_user(value.context, arch::space::entry(value.address_space.native),
                                       arch::space::stack_top(), argument0, argument1);

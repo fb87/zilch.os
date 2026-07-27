@@ -59,3 +59,8 @@ The build is a single non-recursive dependency graph assembled from ownership fr
 - `mk/` — shared configuration, toolchain, and verification targets.
 
 Use `make boundary-check` and `make abi-check` to verify private-header isolation and ABI layout/self-containment.
+
+## Build layout
+
+Zilch uses one non-recursive build graph. The repository root `Makefile` is the only Make entry point; domain orchestration is defined by `src/kernel/kernel.mk`, `src/user/user.mk`, `src/image/image.mk`, and `tests/tests.mk`. Directory-local object lists use `build.mk` consistently.
+

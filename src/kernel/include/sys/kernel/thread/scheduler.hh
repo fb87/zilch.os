@@ -362,6 +362,28 @@ namespace sys::kernel::thread
         return error_t::success;
     }
 
+    [[nodiscard]] inline error_t quiesce_user_thread(thread& target) noexcept {
+        store_state(target, state::suspended);
+        platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+
+        /*
+         * State publication alone does not prove that a remote CPU has left
+         * PL3.  Wait for the target CPU's exception/scheduler path to save
+         * the context and publish executing=false before reclaiming or
+         * replacing the address-space image.
+         */
+        constexpr u32 maximum_wait_rounds = 1000000U;
+        for (u32 round = 0U; round < maximum_wait_rounds; ++round) {
+            if (!__atomic_load_n(&target.executing, __ATOMIC_ACQUIRE))
+                return error_t::success;
+            if ((round & 0x3ffU) == 0U) {
+                platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+            }
+            arch::cpu::relax();
+        }
+        return error_t::busy;
+    }
+
     [[nodiscard]] inline error_t destroy_user_bundle(task::task& root,
                                                      capability_id_t thread_selector,
                                                      capability_id_t task_selector,
@@ -374,8 +396,9 @@ namespace sys::kernel::thread
         auto& target = *reinterpret_cast<thread*>(header);
         if (target.id == 0U || target.id >= user_thread_count)
             return error_t::denied;
-        if (load_state(target) == state::running)
-            return error_t::busy;
+        result = quiesce_user_thread(target);
+        if (result != error_t::success)
+            return result;
 
         store_state(target, state::terminated);
         capability::revoke_reference(object::reference(target.object));
@@ -652,6 +675,7 @@ namespace sys::kernel::thread
         if (user_execution_active[cpu]) {
             thread& value = user_threads[current_user_thread[cpu]];
             arch::thread::copy(value.context, frame);
+            __atomic_store_n(&value.executing, false, __ATOMIC_RELEASE);
             (void)scheduling::charge(value.scheduling_context, 1U);
         }
     }
@@ -712,6 +736,7 @@ namespace sys::kernel::thread
                     continue;
                 }
                 value.address_space.activate();
+                __atomic_store_n(&value.executing, true, __ATOMIC_RELEASE);
                 arch::thread::copy(frame, value.context);
                 __atomic_fetch_add(&per_cpu_switches[cpu], 1U, __ATOMIC_RELAXED);
                 return;
@@ -775,6 +800,17 @@ namespace sys::kernel::thread
     inline void prepare_block(arch::thread::context& frame, state blocked_state) noexcept {
         thread& value = current();
         arch::thread::copy(value.context, frame);
+
+        /*
+         * A thread becomes reclaimable only after the kernel has committed to
+         * not returning this exception frame to it.  Publishing quiescence on
+         * generic EL0 exception entry is unsafe because another CPU may then
+         * destroy the address space while the syscall or fault handler still
+         * owns the context.  Blocking is an explicit hand-off point: the
+         * saved context is complete and schedule_prepared() will install a
+         * different user context or the kernel-idle frame.
+         */
+        __atomic_store_n(&value.executing, false, __ATOMIC_RELEASE);
         store_state(value, blocked_state);
     }
 
@@ -916,6 +952,7 @@ namespace sys::kernel::thread
         store_state(user_threads[first], state::running);
         consume_pending(user_threads[first]);
         user_threads[first].address_space.activate();
+        __atomic_store_n(&user_threads[first].executing, true, __ATOMIC_RELEASE);
         arch::thread::enter_user(user_threads[first].context);
     }
 } // namespace sys::kernel::thread

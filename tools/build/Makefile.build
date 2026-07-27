@@ -2,7 +2,7 @@
 src := $(SRCTREE)/$(obj)
 out := $(OBJTREE)/$(obj)
 obj-y :=
-include $(src)/Makefile
+include $(src)/build.mk
 subdir-y := $(patsubst %/,%,$(filter %/,$(obj-y)))
 local-y := $(filter-out %/,$(obj-y))
 local-objs := $(addprefix $(out)/,$(local-y))

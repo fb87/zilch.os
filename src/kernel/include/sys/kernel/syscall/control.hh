@@ -321,10 +321,8 @@ namespace sys::kernel::syscall
             case abi::v1::control_operation::thread_suspend: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);
-                if (result == error_t::success) {
-                    thread::store_state(*target, thread::state::suspended);
-                    platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
-                }
+                if (result == error_t::success)
+                    result = thread::quiesce_user_thread(*target);
                 break;
             }
             case abi::v1::control_operation::map_frame: {

@@ -29,3 +29,11 @@ if grep -n 'src/kernel/include' "$root/src/user/user.mk"; then
     exit 1
 fi
 echo 'build ownership boundary: PASS'
+
+subdir_makefiles=$(find "$root" -mindepth 2 -type f -name Makefile -print)
+[ -z "$subdir_makefiles" ] || {
+    echo 'error: subdirectory Makefile files remain; use .mk fragments:' >&2
+    echo "$subdir_makefiles" >&2
+    exit 1
+}
+[ -f "$root/tools/build/Makefile.build" ] || { echo 'error: low-level build engine missing' >&2; exit 1; }
