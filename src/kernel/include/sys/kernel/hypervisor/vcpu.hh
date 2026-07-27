@@ -1,0 +1,88 @@
+#pragma once
+
+#include <sys/kernel/hypervisor/object.hh>
+#include <sys/kernel/printk.hh>
+
+namespace sys::kernel::hypervisor
+{
+    [[nodiscard]] inline error_t configure_vcpu(virtual_cpu_t& vcpu, u64 pc, u64 pstate,
+                                                u64 sp) noexcept {
+        if (!aligned(pc) || !aligned(sp))
+            return error_t::invalid_argument;
+        vcpu.context.pc = pc;
+        vcpu.context.pstate = pstate;
+        vcpu.context.sp_el1 = sp;
+        vcpu.interrupt_state.reset();
+        vcpu.virtual_irq_pending = false;
+        vcpu.state = vm_state::runnable;
+        vcpu.lifecycle = vcpu_state::runnable;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t inject_irq(virtual_cpu_t& vcpu, u16 irq) noexcept {
+        if (vcpu.running)
+            return error_t::busy;
+        vcpu.virtual_irq = irq;
+        const error_t irq_result = vcpu.interrupt_state.inject(irq);
+        if (irq_result != error_t::success)
+            return irq_result;
+        __atomic_store_n(&vcpu.virtual_irq_pending, true, __ATOMIC_RELEASE);
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t run(virtual_cpu_t& vcpu, exit_record& exit) noexcept {
+        auto* vm_header = object::resolve(vcpu.virtual_machine);
+        if (vm_header == nullptr || vm_header->type != object::type_t::virtual_machine)
+            return error_t::not_found;
+        auto& vm = *reinterpret_cast<virtual_machine_t*>(vm_header);
+        if (vcpu.state != vm_state::runnable || vm.mapping_count == 0U)
+            return error_t::invalid_argument;
+        if (__atomic_exchange_n(&vcpu.running, true, __ATOMIC_ACQ_REL))
+            return error_t::busy;
+        ++vm.active_vcpus;
+        ++vcpu.run_generation;
+        vcpu.previous_host_cpu = vcpu.host_cpu;
+        vcpu.host_cpu = arch::cpu::current_id();
+        if (vcpu.run_generation > 1U && vcpu.previous_host_cpu != vcpu.host_cpu)
+            ++vcpu.migration_count;
+        vcpu.lifecycle = vcpu_state::running;
+        const bool pending_irq = __atomic_load_n(&vcpu.virtual_irq_pending, __ATOMIC_ACQUIRE);
+        const error_t result =
+            arch::hypervisor::run_guest(vm.vmid, vm.stage_2_root, vcpu.context, exit, pending_irq);
+        if (pending_irq && result == error_t::success) {
+            __atomic_store_n(&vcpu.virtual_irq_pending, false, __ATOMIC_RELEASE);
+            vcpu.interrupt_state.reset();
+        }
+        vcpu.last_exit = exit;
+        --vm.active_vcpus;
+        __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
+        vcpu.lifecycle = result == error_t::success ? vcpu_state::runnable : vcpu_state::faulted;
+        if (result != error_t::success) {
+            vcpu.last_diagnostic.result = result;
+            vcpu.last_diagnostic.syndrome = exit.syndrome;
+            vcpu.last_diagnostic.fault_address = exit.fault_address;
+            vcpu.last_diagnostic.guest_pc = exit.guest_pc;
+            pr_err("hv guest-exit result=%d reason=%u esr=%llx far=%llx hpfar=%llx pc=%llx "
+                   "pstate=%llx vmid=%u run=%u\n",
+                   static_cast<int>(result), static_cast<unsigned int>(exit.reason),
+                   static_cast<unsigned long long>(exit.syndrome),
+                   static_cast<unsigned long long>(exit.fault_address),
+                   static_cast<unsigned long long>(exit.qualification),
+                   static_cast<unsigned long long>(exit.guest_pc),
+                   static_cast<unsigned long long>(vcpu.context.pstate), vm.vmid,
+                   vcpu.run_generation);
+            pr_err("hv guest-regs x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx x6=%llx x7=%llx "
+                   "sp1=%llx\n",
+                   static_cast<unsigned long long>(vcpu.context.x[0]),
+                   static_cast<unsigned long long>(vcpu.context.x[1]),
+                   static_cast<unsigned long long>(vcpu.context.x[2]),
+                   static_cast<unsigned long long>(vcpu.context.x[3]),
+                   static_cast<unsigned long long>(vcpu.context.x[4]),
+                   static_cast<unsigned long long>(vcpu.context.x[5]),
+                   static_cast<unsigned long long>(vcpu.context.x[6]),
+                   static_cast<unsigned long long>(vcpu.context.x[7]),
+                   static_cast<unsigned long long>(vcpu.context.sp_el1));
+        }
+        return result;
+    }
+} // namespace sys::kernel::hypervisor

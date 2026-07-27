@@ -67,10 +67,16 @@ namespace sys::arch::space
             __asm__ volatile("dc cvau, %0" : : "r"(address) : "memory");
         }
         __asm__ volatile("dsb ish" : : : "memory");
-        for (vaddr_t address = begin & ~(instruction_line - 1U); address < end;
-             address += instruction_line) {
-            __asm__ volatile("ic ivau, %0" : : "r"(address) : "memory");
-        }
+        /*
+         * The address-space slot may previously have executed a different ELF
+         * at the same virtual addresses on another CPU.  IC IVAU only
+         * invalidates the local PE, so it is insufficient for slot reuse in
+         * the SMP certification path.  Invalidate all instruction caches in
+         * the inner-shareable domain after cleaning the replacement image to
+         * the point of unification.
+         */
+        (void)instruction_line;
+        __asm__ volatile("ic ialluis" : : : "memory");
         __asm__ volatile("dsb ish\n\tisb" : : : "memory");
     }
 
@@ -133,6 +139,22 @@ namespace sys::arch::space
         const u64 ttbr = root | (static_cast<u64>(value.asid) << 48U);
         __atomic_fetch_or(&value.active_cpu_mask, 1U << arch::cpu::current_id(), __ATOMIC_RELEASE);
         __asm__ volatile("dsb ishst\n\tmsr ttbr0_el1, %0\n\tisb" : : "r"(ttbr) : "memory");
+        /*
+         * A bootstrap address-space slot can be destroyed, reloaded with a
+         * different ELF, and then scheduled on a CPU that previously executed
+         * the old image at the same VA/ASID.  The loader CPU cleans the new
+         * bytes to PoU and broadcasts IC IALLUIS, but architectural completion
+         * of that broadcast does not provide a convenient per-PE reuse
+         * handshake for this bounded bootstrap scheduler.  Invalidate the
+         * local instruction cache after installing TTBR0 and before returning
+         * to PL3 so every target CPU observes the replacement image.
+         *
+         * This conservative whole-cache operation belongs only to the current
+         * bounded bootstrap loader.  The production process/address-space
+         * manager must replace it with generation-tracked residency and
+         * targeted cross-CPU synchronization.
+         */
+        __asm__ volatile("ic iallu\n\tdsb nsh\n\tisb" : : : "memory");
     }
 
     inline void invalidate_asid(u16 asid) noexcept {

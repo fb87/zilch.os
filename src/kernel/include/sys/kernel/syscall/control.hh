@@ -3,6 +3,13 @@
 #include <sys/arch/syscall/entry.hh>
 #include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/interrupt.hh>
+
+#include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/hypervisor.hh>
+#include <abi/sys/v1/syscall_numbers.hh>
+#if CONFIG_HYPERVISOR_SELFTEST
+#include <sys/kernel/tests/hypervisor/control_models.hh>
+#endif
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/printk.hh>
@@ -12,10 +19,6 @@
 #include <sys/kernel/thread/thread.hh>
 #include <sys/platform/interrupt.hh>
 #include <sys/types.hh>
-
-#include <abi/sys/v1/control.hh>
-#include <abi/sys/v1/hypervisor.hh>
-#include <abi/sys/v1/syscall_numbers.hh>
 #if CONFIG_SELFTEST
 #include <sys/test_abi/v1/certification.hh>
 #endif
@@ -231,7 +234,7 @@ namespace sys::kernel::syscall
                     return true;
                 }
                 const word_t passed = arch::syscall::argument(frame, 1U);
-                pr_info("[ACCEPTANCE] profile=1.0 boot=root-only result=%s failures=%u\n",
+                pr_info("[ACCEPTANCE] suite=root-only boot=root-only result=%s failures=%u\n",
                         passed != 0U ? "PASS" : "FAIL", passed != 0U ? 0U : 1U);
                 set_control_result(frame,
                                    passed != 0U ? error_t::success : error_t::invalid_argument);
@@ -281,7 +284,7 @@ namespace sys::kernel::syscall
                 if (current.owner == nullptr || !current.owner->root)
                     set_control_result(frame, error_t::denied);
                 else
-                    set_control_result(frame, hypervisor::self_test());
+                    set_control_result(frame, hypervisor::test::run_all());
 #else
                 set_control_result(frame, error_t::unsupported);
 #endif

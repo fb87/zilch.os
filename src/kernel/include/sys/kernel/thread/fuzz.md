@@ -5,7 +5,7 @@ status: bring-up
 sources:
   - scheduler.hh
   - thread.hh
-  - ../../../../../../../arch/arm64/boot/user.S
+  - ../../../../../../../user/bootstrap/embedded_images.S
 ---
 
 # Deterministic user fuzz harness

@@ -8,7 +8,6 @@
 #include <sys/kernel/ipc.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
-#include <sys/kernel/scheduler_test.hh>
 #include <sys/kernel/thread.hh>
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/platform.hh>
@@ -114,9 +113,10 @@ namespace sys::kernel
                 arch::cpu::halt();
             }
 #if CONFIG_SELFTEST
-            const error_t profile_result = thread::validate_kernel_profile();
-            if (profile_result != error_t::success) {
-                pr_err("kernel profile self-test failed=%d\n", static_cast<int>(profile_result));
+            const error_t bootstrap_result = thread::validate_bootstrap_objects();
+            if (bootstrap_result != error_t::success) {
+                pr_err("kernel bootstrap self-test failed=%d\n",
+                       static_cast<int>(bootstrap_result));
                 arch::cpu::halt();
             }
             pr_info("kernel certification harness=enabled\n");

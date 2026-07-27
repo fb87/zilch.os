@@ -3,11 +3,11 @@
 #include <sys/arch/cpu.hh>
 #include <sys/arch/smp.hh>
 #include <sys/arch/syscall/entry.hh>
-#include <sys/kernel/acceptance/acceptance.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/thread/scheduler.hh>
+#include <sys/kernel/verification/hooks.hh>
 #include <sys/platform/timer.hh>
 #include <sys/types.hh>
 
@@ -70,7 +70,7 @@ namespace sys::kernel::syscall
             previous_cpu_switches[cpu] = switches;
             previous_cpu_ticks[cpu] = ticks;
         }
-        acceptance::report_final(
+        verification::report_final(
             operations, __atomic_load_n(&total_fuzz_failures, __ATOMIC_ACQUIRE), all_cpus_advanced);
     }
 

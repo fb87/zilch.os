@@ -19,10 +19,6 @@ $(out)/%.o: $(src)/%.cc
 	@mkdir -p $(dir $@)
 	@printf '  CXX     %s\n' '$@'
 	@$(CXX) $(KBUILD_CPPFLAGS) $(KBUILD_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
-ifeq ($(obj),src/arch/arm64/boot)
-$(out)/user.o: $(USER_BIN)
-endif
-
 $(out)/%.o: $(src)/%.S
 	@mkdir -p $(dir $@)
 	@printf '  AS      %s\n' '$@'

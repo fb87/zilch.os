@@ -4,16 +4,19 @@
 #include <sys/arch/irq.hh>
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/entry.hh>
-#include <sys/kernel/acceptance/acceptance.hh>
-#include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/ipc/endpoint.hh>
+#include <sys/kernel/verification/hooks.hh>
+#if CONFIG_HYPERVISOR_SELFTEST
+#include <sys/kernel/tests/hypervisor/control_models.hh>
+#endif
+#include <sys/kernel/boot/bootinfo.hh>
+#include <sys/kernel/bootstrap.hh>
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/printk.hh>
-#include <sys/kernel/profile.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/thread/thread.hh>
 #include <sys/platform/timer.hh>
@@ -36,9 +39,9 @@ namespace sys::kernel::thread
     inline volatile u64 per_cpu_switches[maximum_cpu_count]{};
 
     [[nodiscard]] inline error_t initialize_user_threads() noexcept {
-        error_t profile_result = profile::initialize_objects();
-        if (profile_result != error_t::success)
-            return profile_result;
+        error_t bootstrap_result = bootstrap::initialize_objects();
+        if (bootstrap_result != error_t::success)
+            return bootstrap_result;
 
         for (u32 index = 0U; index < ipc::endpoint_count; ++index) {
             ipc::initialize(ipc::endpoints[index]);
@@ -145,7 +148,7 @@ namespace sys::kernel::thread
         if (root_result != error_t::success)
             return root_result;
         root_result = capability::install(root_task.cspace, 14U,
-                                          object::reference(profile::root_notification.object),
+                                          object::reference(bootstrap::root_notification.object),
                                           {static_cast<u32>(capability::right_t::read) |
                                            static_cast<u32>(capability::right_t::write) |
                                            static_cast<u32>(capability::right_t::grant) |
@@ -153,7 +156,7 @@ namespace sys::kernel::thread
         if (root_result != error_t::success)
             return root_result;
         root_result = capability::install(root_task.cspace, 15U,
-                                          object::reference(profile::root_timer_interrupt.object),
+                                          object::reference(bootstrap::root_timer_interrupt.object),
                                           {static_cast<u32>(capability::right_t::read) |
                                            static_cast<u32>(capability::right_t::control)});
         if (root_result != error_t::success)
@@ -328,7 +331,7 @@ namespace sys::kernel::thread
         }
         if (result == error_t::success)
             result = capability::install(owner.cspace, 14U,
-                                         object::reference(profile::root_notification.object),
+                                         object::reference(bootstrap::root_notification.object),
                                          capability::rights(capability::right_t::write));
 
         if (result != error_t::success) {
@@ -393,7 +396,7 @@ namespace sys::kernel::thread
     }
 
 #if CONFIG_SELFTEST
-    [[nodiscard]] inline error_t validate_kernel_profile() noexcept {
+    [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
         task::task& root = user_tasks[0];
         error_t result = capability::copy(root.cspace, 16U, root.cspace, 10U,
                                           capability::rights(capability::right_t::write));
@@ -526,17 +529,17 @@ namespace sys::kernel::thread
                 static_cast<unsigned int>(memory::free_pages),
                 static_cast<unsigned int>(memory::managed_pages));
 
-        notification::signal(profile::root_notification, 1U);
-        if (notification::consume(profile::root_notification) != 1U)
+        notification::signal(bootstrap::root_notification, 1U);
+        if (notification::consume(bootstrap::root_notification) != 1U)
             return error_t::invalid_argument;
-        acceptance::mark_profile_self_tests(true, true, true);
+        verification::mark_bootstrap_self_tests(true, true, true);
         if constexpr (arch::hypervisor::active) {
-            result = hypervisor::self_test();
+            result = hypervisor::test::run_all();
             if (result != error_t::success)
                 return result;
-            pr_info("[HV-DIAG] profile=0.2 self-test=PASS operations=%llu failures=%llu\n",
-                    static_cast<unsigned long long>(hypervisor::self_test_operations),
-                    static_cast<unsigned long long>(hypervisor::self_test_failures));
+            pr_info("[HV-DIAG] suite=single-vcpu self-test=PASS operations=%llu failures=%llu\n",
+                    static_cast<unsigned long long>(hypervisor::test::operations),
+                    static_cast<unsigned long long>(hypervisor::test::failures_total));
         }
         return error_t::success;
     }
@@ -862,7 +865,7 @@ namespace sys::kernel::thread
 
         thread& value = current();
         ++value.faults;
-        acceptance::mark_fault_ipc();
+        verification::mark_fault_ipc();
         pr_warn("user fault delivered thread=%llu cpu=%u esr=%llx far=%llx pc=%llx pager=%llu\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(syndrome),

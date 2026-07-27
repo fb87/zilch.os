@@ -4,5 +4,5 @@
 
 namespace sys::abi::v1
 {
-    using Error = sys::Error;
+    using error_t = sys::error_t;
 } // namespace sys::abi::v1
