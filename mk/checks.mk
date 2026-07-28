@@ -3,7 +3,7 @@ CLANG_FORMAT ?= clang-format
 FORMAT_FILES := $(shell find include src tools tests -type f \( -name '*.cc' -o -name '*.hh' -o -name '*.tt' \))
 DOC_OUT := $(SRCTREE)/out/doc
 
-.PHONY: format format-check abi-check abi-headers-check host-tests production-gate release doc doc-check boundary-check binary-permissions-check
+.PHONY: format format-check abi-check abi-headers-check host-tests production-gate release doc doc-check boundary-check binary-permissions-check reproducible-check
 format:
 	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo 'error: $(CLANG_FORMAT) not found'; exit 1; }
 	@$(CLANG_FORMAT) -i $(filter %.cc %.hh,$(FORMAT_FILES))
@@ -27,6 +27,15 @@ boundary-check: abi-headers-check
 
 binary-permissions-check:
 	@sh $(SRCTREE)/tools/release/check_section_permissions.sh $(or $(ELF),$(SRCTREE)/out/build/arm64/qemu-arm64-virt/release/$(PROJECT).elf)
+
+reproducible-check:
+	@set -eu; root=$(SRCTREE)/out/reproducible; trap 'rm -rf "$$root"' EXIT HUP INT TERM; \
+	for target in "arm64 qemu-arm64-virt" "amd64 qemu-amd64-q35"; do \
+		set -- $$target; arch=$$1; platform=$$2; \
+		SOURCE_DATE_EPOCH=0 LC_ALL=C TZ=UTC $(MAKE) BUILD_VARIANT=release ARCH=$$arch PLATFORM=$$platform O=$$root/$$arch/a clean all; \
+		SOURCE_DATE_EPOCH=0 LC_ALL=C TZ=UTC $(MAKE) BUILD_VARIANT=release ARCH=$$arch PLATFORM=$$platform O=$$root/$$arch/b clean all; \
+		$(SRCTREE)/tools/release/check_reproducible_build.sh $$root/$$arch/a $$root/$$arch/b $$arch; \
+	done
 
 host-tests: abi-check abi-headers-check
 	@echo 'Host tests: PASS'

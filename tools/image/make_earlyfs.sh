@@ -19,4 +19,8 @@ if [ "$guest_test" != "-" ]; then
     install -m 0755 "$guest_test" "$stage/guests/test-arm64.elf"
 fi
 install -m 0644 "$manifest" "$stage/etc/system.toml"
-tar -C "$stage" -cf "$output" .
+tar \
+    --sort=name \
+    --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    --owner=0 --group=0 --numeric-owner \
+    -C "$stage" -cf "$output" .

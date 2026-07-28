@@ -1,3 +1,12 @@
+## 0154 - Verify reproducible release artifacts
+
+- Make early filesystem archives deterministic by fixing entry order, epoch,
+  and numeric ownership.
+- Add a reproducibility gate that performs clean fixed-epoch ARM64 and AMD64
+  release builds and compares release artifacts.
+- Close TST-036 with passing evidence; linker map paths are normalized only for
+  comparison while binaries and archives remain byte-for-byte checked.
+
 ## 0153 - Add IRQ timing and binary hardening evidence
 
 - Add release ELF W+X, executable-text, and writable-rodata section auditing.
