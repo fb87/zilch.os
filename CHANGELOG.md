@@ -1,3 +1,9 @@
+## 0155 - Record static-analysis tool readiness
+
+- Add a static-analysis tool inventory gate and deviation report.
+- Track missing `scan-build` and `clang-tidy` explicitly as release blockers
+  for TST-031 and TST-032 rather than implying unverified cleanliness.
+
 ## 0154 - Verify reproducible release artifacts
 
 - Make early filesystem archives deterministic by fixing entry order, epoch,

@@ -577,8 +577,8 @@ Every completed requirement must link to:
 
 ## 12.5 Static verification
 
-- [ ] **TST-031** Clang static analyzer clean or deviations documented.
-- [ ] **TST-032** clang-tidy safety profile clean or deviations documented.
+- [-] **TST-031** Clang static analyzer clean or deviations documented; the required `scan-build` tool is not installed in the current certification environment, and `static-analysis-tools-check` records the release-blocking deviation.
+- [-] **TST-032** clang-tidy safety profile clean or deviations documented; the required `clang-tidy` tool is not installed in the current certification environment, and `static-analysis-tools-check` records the release-blocking deviation.
 - [ ] **TST-033** Undefined-behavior checks run on portable code.
 - [ ] **TST-034** Stack usage measured and bounded.
 - [x] **TST-035** Release ELF section flags are audited for W+X sections, executable text, and non-writable rodata on both supported build profiles.
