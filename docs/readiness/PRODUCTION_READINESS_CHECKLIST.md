@@ -579,7 +579,7 @@ Every completed requirement must link to:
 
 - [-] **TST-031** Clang static analyzer clean or deviations documented; the required `scan-build` tool is not installed in the current certification environment, and `static-analysis-tools-check` records the release-blocking deviation.
 - [-] **TST-032** clang-tidy safety profile clean or deviations documented; the required `clang-tidy` tool is not installed in the current certification environment, and `static-analysis-tools-check` records the release-blocking deviation.
-- [ ] **TST-033** Undefined-behavior checks run on portable code.
+- [x] **TST-033** UBSan runs over the portable ABI layout test with recovery disabled; architecture-specific freestanding kernel code remains outside host sanitizer scope.
 - [ ] **TST-034** Stack usage measured and bounded.
 - [x] **TST-035** Release ELF section flags are audited for W+X sections, executable text, and non-writable rodata on both supported build profiles.
 - [x] **TST-036** Reproducible release builds are verified byte-for-byte for ARM64 and AMD64 ELF, raw image, userspace ELF/map, and early filesystem artifacts with a fixed source epoch; map paths are normalized before comparison.

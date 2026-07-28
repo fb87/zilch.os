@@ -1,3 +1,8 @@
+## 0156 - Add portable ABI UBSan gate
+
+- Add a Clang UBSan compile/run gate for the portable ABI layout test.
+- Close TST-033 while explicitly limiting scope to host-portable ABI code.
+
 ## 0155 - Record static-analysis tool readiness
 
 - Add a static-analysis tool inventory gate and deviation report.

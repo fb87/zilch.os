@@ -3,7 +3,7 @@ CLANG_FORMAT ?= clang-format
 FORMAT_FILES := $(shell find include src tools tests -type f \( -name '*.cc' -o -name '*.hh' -o -name '*.tt' \))
 DOC_OUT := $(SRCTREE)/out/doc
 
-.PHONY: format format-check abi-check abi-headers-check host-tests production-gate release doc doc-check boundary-check binary-permissions-check reproducible-check static-analysis-tools-check
+.PHONY: format format-check abi-check abi-headers-check ubsan-check host-tests production-gate release doc doc-check boundary-check binary-permissions-check reproducible-check static-analysis-tools-check
 format:
 	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo 'error: $(CLANG_FORMAT) not found'; exit 1; }
 	@$(CLANG_FORMAT) -i $(filter %.cc %.hh,$(FORMAT_FILES))
@@ -18,6 +18,9 @@ abi-check:
 
 abi-headers-check:
 	@CXX=$(CXX) $(SRCTREE)/tools/abi/check_headers.sh $(SRCTREE)
+
+ubsan-check:
+	@CXX=$(CXX) $(SRCTREE)/tools/abi/check_ubsan.sh $(SRCTREE)
 
 boundary-check: abi-headers-check
 	@sh $(SRCTREE)/tools/release/check_source_boundaries.sh $(SRCTREE)
