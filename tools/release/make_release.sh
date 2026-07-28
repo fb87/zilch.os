@@ -22,7 +22,7 @@ need()
     [ -f "$1" ] || { echo "error: missing release input: $1" >&2; exit 1; }
 }
 
-for target in arm64/qemu-arm64-virt amd64/qemu-amd64-q35; do
+for target in arm64 amd64; do
     need "$build/$target/$project.elf"
     need "$build/$target/$project.bin"
     need "$build/$target/$project.map"
@@ -55,8 +55,8 @@ copy_target()
     cp "$src/src/image/manifests/minimal.toml" "$out/manifest.toml"
 }
 
-copy_target arm64/qemu-arm64-virt arm64-qemu-virt
-copy_target amd64/qemu-amd64-q35 amd64-qemu-q35
+copy_target arm64 arm64-qemu-virt
+copy_target amd64 amd64-qemu-q35
 cp "$src/tools/run/run.sh" "$stage/run.sh"
 chmod 0755 "$stage/run.sh"
 

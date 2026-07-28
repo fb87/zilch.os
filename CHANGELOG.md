@@ -1,3 +1,9 @@
+## 0157 - Bound release stack usage
+
+- Emit compiler `.su` records for freestanding C++ objects.
+- Enforce an 8 KiB per-function stack bound in ARM64 and AMD64 release gates.
+- Close TST-034 while retaining runtime guard-page and canary checks.
+
 ## 0156 - Add portable ABI UBSan gate
 
 - Add a Clang UBSan compile/run gate for the portable ABI layout test.
