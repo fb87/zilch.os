@@ -36,6 +36,13 @@ namespace sys::printk
         z,
     };
 
+    // RT and exception paths enqueue structured records without taking the
+    // console lock or changing interrupt state.
+    inline void defer(kernel::emergency::event kind, u64 argument0 = 0U, u64 argument1 = 0U,
+                      u64 argument2 = 0U, u64 argument3 = 0U, u64 argument4 = 0U) noexcept {
+        kernel::emergency::append(kind, argument0, argument1, argument2, argument3, argument4);
+    }
+
     inline void putc(char value) noexcept {
         platform::console::putc(value);
     }

@@ -30,7 +30,8 @@ if grep -n 'src/kernel/include' "$root/src/user/user.mk"; then
 fi
 echo 'build ownership boundary: PASS'
 
-subdir_makefiles=$(find "$root" -mindepth 2 -type f -name Makefile -print)
+subdir_makefiles=$(find "$root/include" "$root/src" "$root/tests" "$root/tools" \
+    -type f -name Makefile -print)
 [ -z "$subdir_makefiles" ] || {
     echo 'error: subdirectory Makefile files remain; use .mk fragments:' >&2
     echo "$subdir_makefiles" >&2

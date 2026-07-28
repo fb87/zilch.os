@@ -1,3 +1,8 @@
+## 0158 - Add RT-safe deferred logging
+
+- Add `printk::defer` for lock-free structured records from RT/exception paths.
+- Close SCH-018 while retaining formatted asynchronous draining as OBS-003.
+
 ## 0157 - Bound release stack usage
 
 - Emit compiler `.su` records for freestanding C++ objects.

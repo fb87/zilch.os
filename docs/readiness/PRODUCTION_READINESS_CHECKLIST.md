@@ -249,7 +249,7 @@ Every completed requirement must link to:
 - [x] **SCH-015** Every active blocking kernel spinlock has a documented global rank; equal-rank CSpace locks use increasing address order and releases are strict LIFO.
 - [x] **SCH-016** Generation-safe lock-order instrumentation records and reports the maximum hold duration in architectural timer ticks.
 - [ ] **SCH-017** IRQ-disabled sections measured and bounded.
-- [ ] **SCH-018** Logging has RT-safe deferred path.
+- [x] **SCH-018** Logging has an RT-safe structured deferred path through `printk::defer`; formatted asynchronous draining remains OBS-003.
 - [x] **SCH-019** Active CPUs retain a one-tick scheduling quantum while idle CPUs program the next timeout deadline or a bounded one-second housekeeping deadline.
 - [ ] **SCH-020** Interrupt latency target defined and met.
 - [ ] **SCH-021** Preemption latency target defined and met.
