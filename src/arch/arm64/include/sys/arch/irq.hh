@@ -5,7 +5,6 @@
 namespace sys::arch::irq
 {
     using irq_state_t = v1::irq_state_t;
-
     [[nodiscard]] inline irq_state_t save_and_disable() noexcept {
         word_t state;
         __asm__ volatile("mrs %0, daif\n"

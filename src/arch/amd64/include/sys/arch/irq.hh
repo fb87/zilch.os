@@ -5,7 +5,6 @@
 namespace sys::arch::irq
 {
     using irq_state_t = v1::irq_state_t;
-
     [[nodiscard]] inline irq_state_t save_and_disable() noexcept {
         word_t flags;
         __asm__ volatile("pushfq\npopq %0\ncli" : "=r"(flags)::"memory");

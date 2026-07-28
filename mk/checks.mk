@@ -3,7 +3,7 @@ CLANG_FORMAT ?= clang-format
 FORMAT_FILES := $(shell find include src tools tests -type f \( -name '*.cc' -o -name '*.hh' -o -name '*.tt' \))
 DOC_OUT := $(SRCTREE)/out/doc
 
-.PHONY: format format-check abi-check abi-headers-check host-tests production-gate release doc doc-check boundary-check
+.PHONY: format format-check abi-check abi-headers-check host-tests production-gate release doc doc-check boundary-check binary-permissions-check
 format:
 	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo 'error: $(CLANG_FORMAT) not found'; exit 1; }
 	@$(CLANG_FORMAT) -i $(filter %.cc %.hh,$(FORMAT_FILES))
@@ -25,6 +25,9 @@ boundary-check: abi-headers-check
 	@$(SRCTREE)/tools/release/check_user_kernel_boundary.sh $(SRCTREE)
 	@$(SRCTREE)/tools/release/check_build_boundaries.sh $(SRCTREE)
 
+binary-permissions-check:
+	@sh $(SRCTREE)/tools/release/check_section_permissions.sh $(or $(ELF),$(SRCTREE)/out/build/arm64/qemu-arm64-virt/release/$(PROJECT).elf)
+
 host-tests: abi-check abi-headers-check
 	@echo 'Host tests: PASS'
 
@@ -33,11 +36,13 @@ production-gate: abi-check boundary-check
 	@$(MAKE) BUILD_VARIANT=release ARCH=arm64 PLATFORM=qemu-arm64-virt O=out/release/arm64 clean
 	@$(MAKE) BUILD_VARIANT=release ARCH=arm64 PLATFORM=qemu-arm64-virt O=out/release/arm64 all
 	@$(SRCTREE)/tools/release/check_production_elf.sh $(SRCTREE)/out/release/arm64/$(PROJECT).elf
+	@sh $(SRCTREE)/tools/release/check_section_permissions.sh $(SRCTREE)/out/release/arm64/$(PROJECT).elf
 
 release: format-check production-gate
 	@$(MAKE) BUILD_VARIANT=release ARCH=amd64 PLATFORM=qemu-amd64-q35 O=out/release/amd64 clean
 	@$(MAKE) BUILD_VARIANT=release ARCH=amd64 PLATFORM=qemu-amd64-q35 O=out/release/amd64 all
 	@$(SRCTREE)/tools/release/check_production_elf.sh $(SRCTREE)/out/release/amd64/$(PROJECT).elf
+	@sh $(SRCTREE)/tools/release/check_section_permissions.sh $(SRCTREE)/out/release/amd64/$(PROJECT).elf
 	@$(SRCTREE)/tools/release/make_release.sh $(SRCTREE) $(SRCTREE)/out/release $(PROJECT) $(VERSION)
 
 doc:

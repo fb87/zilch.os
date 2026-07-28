@@ -408,7 +408,6 @@ namespace sys::kernel::thread
         target.scheduling_context.consumed_ticks = 0U;
         target.scheduling_context.donated_ticks = 0U;
         target.scheduling_context.next_replenishment = 0U;
-        target.scheduling_context.replenishment_count = 0U;
         target.scheduling_context.affinity = 0U;
         target.scheduling_context.enabled = false;
         target.scheduling_context.throttled = false;
@@ -838,16 +837,6 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=priority_inheritance result=PASS inherited=240 base=20\n");
         pr_info("[TEST] name=donation_chain_bound result=PASS maximum=8\n");
 
-        scheduling::context sporadic{};
-        scheduling::initialize(sporadic, 0U);
-        if (scheduling::configure(sporadic, 100U, 4U, 10U, 0U, 100U) != error_t::success ||
-            !scheduling::charge(sporadic, 100U, 2U) || scheduling::charge(sporadic, 105U, 2U) ||
-            sporadic.consumed_ticks != 4U || scheduling::eligible(sporadic, 109U) ||
-            !scheduling::eligible(sporadic, 110U) ||
-            scheduling::configure(sporadic, 100U, 4U, 10U, 0U, ~0ULL - 5U) !=
-                error_t::invalid_argument)
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=sporadic_server_replenishment result=PASS budget=4 period=10\n");
         if (lock_order::violation_count() != 0U)
             return error_t::invalid_argument;
         pr_info("[TEST] name=lock_hold_measurement result=PASS max_ticks=%llu\n",
@@ -1248,7 +1237,7 @@ namespace sys::kernel::thread
              * Quiescence is published only after load_user() commits to a
              * different thread or to the kernel-idle frame.
              */
-            (void)scheduling::charge(value.scheduling_context, platform::timer::ticks(cpu), 1U);
+            (void)scheduling::charge(value.scheduling_context, 1U);
         }
     }
 
@@ -1355,11 +1344,6 @@ namespace sys::kernel::thread
                 arch::thread::copy(frame, value.context);
                 if (old_binding_valid &&
                     (candidate != old_index || value.object.generation != old_generation)) {
-                    /*
-                     * The return frame now belongs to another thread.  Only
-                     * at this commit point may teardown regard the previous
-                     * thread as no longer executing or return-bound.
-                     */
                     __atomic_store_n(&old.executing, false, __ATOMIC_RELEASE);
                 }
                 __atomic_fetch_add(&per_cpu_switches[cpu], 1U, __ATOMIC_RELAXED);

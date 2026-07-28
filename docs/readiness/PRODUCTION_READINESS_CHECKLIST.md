@@ -237,8 +237,8 @@ Every completed requirement must link to:
 
 - [x] **SCH-007** Scheduling-context objects exist.
 - [-] **SCH-008** Bounded budget charging/throttling and validated quiescent reconfiguration exist; RT stress evidence remains open.
-- [x] **SCH-009** Bounded replenishment exists; configuration rejects zero budget, zero period, budget greater than period, and deadlines that overflow the logical timebase.
-- [x] **SCH-010** Sporadic-server semantics use bounded, individually timed replenishment slices and are covered by certification.
+- [-] **SCH-009** Bounded periodic replenishment exists; configuration rejects zero budget, zero period, budget greater than period, and deadlines that overflow the logical timebase; sporadic-server conformance remains open.
+- [ ] **SCH-010** Sporadic-server semantics documented and tested.
 - [x] **SCH-011** Scheduling-context budget and effective priority donation are integrated with synchronous IPC and deterministic unwind.
 - [x] **SCH-012** Donation chains propagate budget and inherited priority and reject depth beyond eight.
 - [x] **SCH-013** A lower-priority server executes at the caller's inherited priority until reply, cancellation, timeout, exit, or teardown.
@@ -581,7 +581,7 @@ Every completed requirement must link to:
 - [ ] **TST-032** clang-tidy safety profile clean or deviations documented.
 - [ ] **TST-033** Undefined-behavior checks run on portable code.
 - [ ] **TST-034** Stack usage measured and bounded.
-- [ ] **TST-035** Binary section permissions audited.
+- [x] **TST-035** Release ELF section flags are audited for W+X sections, executable text, and non-writable rodata on both supported build profiles.
 - [ ] **TST-036** Reproducible build verified.
 - [ ] **TST-037** Coverage report generated and reviewed.
 

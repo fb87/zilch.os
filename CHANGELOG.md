@@ -1,11 +1,18 @@
+## 0153 - Add IRQ timing and binary hardening evidence
+
+- Add release ELF W+X, executable-text, and writable-rodata section auditing.
+- Run the binary permission audit for both ARM64 and AMD64 release paths.
+- Close TST-035 with explicit limitations documented; SCH-017 remains open.
+
 ## 0152 - Enforce sporadic budgets and measure lock holds
 
-- Track each charged scheduling slice with a bounded timed replenishment queue.
-- Reject overflowed scheduling deadlines and certify staggered replenishment.
+- Experimental per-slice replenishment was reverted after it exposed a
+  fault-service liveness regression; the stable periodic model remains.
+- Reject overflowed scheduling deadlines and retain existing budget validation.
 - Record maximum ranked-lock hold duration in timer ticks and report it during
   certification.
-- Close SCH-009, SCH-010, and SCH-016; SCH-017 remains open for IRQ-disabled
-  section timing.
+- SCH-010 and SCH-017 remain open; SCH-016 lock-hold measurement remains
+  certified.
 
 ## 0151 - Program per-CPU tickless deadlines
 
