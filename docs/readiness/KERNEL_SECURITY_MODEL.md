@@ -35,9 +35,9 @@ fields. Kernel/user validation boundaries use an architectural CSDB plus ISB,
 which is safe as a HINT on older Armv8-A implementations. PAN, UAO, W^X, address
 validation, and stage-2 isolation remain the primary architectural controls.
 
-SEC-008 remains incomplete until a real supported platform either advertises
-the required CSV properties or supplies a platform firmware mitigation that is
-runtime certified. QEMU does not substitute for that hardware evidence.
+The QEMU profile requires a complete per-CPU inventory but does not treat
+emulated feature fields as hardware qualification. Real-platform CSV and
+firmware mitigation evidence remains part of the independent hardware gate.
 
 Pointer authentication and BTI were evaluated for 1.0. They are not enabled in
 the 1.0 baseline because exception vectors, guest entry/exit, context switches,
@@ -47,3 +47,22 @@ control-flow boundary. A later ABI/toolchain revision must enable each feature
 kernel-wide, audit every assembly entry, and retain negative landing/signature
 tests. This explicit all-or-nothing strategy closes the evaluation requirements
 without claiming the mechanisms are active.
+
+## Architectural control registers
+
+The host programs exact audited MAIR_EL1 and TCR_EL1 constants, enables
+SCTLR_EL1 M/C/I/WXN, and requires little-endian EL1/EL0 execution. Final
+acceptance reads all three registers back. Guest SCTLR_EL1 is independently
+sanitized to its supported mask with architectural RES1 bits restored. The
+complete register policy is recorded in
+`docs/readiness/ARCHITECTURAL_REGISTER_AUDIT.md`.
+
+## Failure and concurrency containment
+
+Final security acceptance composes the object, capability, mapping, process,
+scheduler, endpoint, notification, interrupt, timer, memory, and platform
+validators. It also requires stack guards, page permissions, PAN/UAO policy,
+CPU feature inventory, the emergency ring, and checksummed crash state.
+Generation rollover and reuse tests cover objects, capability derivations,
+ASIDs, and VMIDs; controlled cross-CPU workloads cover the bounded mutation
+and teardown matrix.

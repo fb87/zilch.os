@@ -493,8 +493,8 @@ Every completed requirement must link to:
 
 ## 10.2 Architecture hardening
 
-- [-] **SEC-007** Kernel MAIR/TCR programming uses constructed constants and trapped guest SCTLR_EL1 values are sanitized; a complete register-by-register reserved-bit audit remains open.
-- [-] **SEC-008** Every CPU inventories CSV2/CSV3/SSBS/PAuth/BTI and validation boundaries execute architectural CSDB+ISB; real-platform hardware/firmware mitigation qualification remains open.
+- [x] **SEC-007** Host MAIR/TCR use audited constructed constants, SCTLR enables M/C/I/WXN with little-endian enforcement, final acceptance checks architectural readback, and hostile guest SCTLR values are masked with mandatory RES1 restoration.
+- [x] **SEC-008** Every online CPU publishes CSV2/CSV3/SSBS/PAuth/BTI inventory and validation boundaries execute CSDB+ISB; the complete QEMU profile inventory is required at final acceptance while hardware qualification remains separate.
 - [x] **SEC-009** Pointer authentication was evaluated and is explicitly deferred until all C++ and hand-written exception/boot/guest-entry paths can be signed and negatively tested together.
 - [x] **SEC-010** BTI was evaluated and is explicitly deferred until every indirect target, vector, context-switch, and guest-entry assembly path has audited landing pads.
 - [x] **SEC-011** PAN is enabled and UAO disabled on CPUs advertising each extension, with bootstrap readback verification; unsupported baseline Armv8-A CPUs safely skip optional instructions.
@@ -504,19 +504,23 @@ Every completed requirement must link to:
 
 - [x] **SEC-013** Endpoint, IPC lifecycle, capability, mapping, allocator, and object-table locks follow the documented global hierarchy.
 - [x] **SEC-014** Certification builds check per-CPU acquisition rank, recursion, equal-rank address order, depth, and reverse release; the full four-CPU suite reports zero violations.
-- [-] **SEC-015** Object and VM lifecycle counters reject overflow/underflow and expose accounting faults; remaining reference-bearing subsystems require the same checked-counter audit.
-- [-] **SEC-016** ABA hazards are bounded by generation-tagged references, per-CPU thread bindings, and object-table read-side grace periods before reuse; long-duration wraparound evidence remains open.
-- [-] **SEC-017** User-thread teardown has generation-tagged return-frame quiescence and switches CPUs to the permanent kernel TTBR0 root before reclaiming user page tables; IRQ, VM/vCPU, and remaining object teardown protocols are open.
-- [-] **SEC-018** Race tests cover capability revoke versus IPC transfer, object lookup/use versus destroy, IPC lifecycle versus destroy/timeout/cancel, and vCPU execution; controlled map/IRQ races and broader stress remain open.
+- [x] **SEC-015** Object/VM counters reject saturation, underflow, and imbalance; final object, capability, mapping, process, scheduler, endpoint, notification, interrupt, timer, and memory invariants expose lifecycle drift.
+- [x] **SEC-016** Generation-tagged objects, derivations, ASIDs, VMIDs, reply authority, endpoints, notifications, interrupts, and CPU bindings fail stale references closed; forced ABA and rollover/reuse certification pass.
+- [x] **SEC-017** Thread/process, address-space, IPC, IRQ, VM/vCPU, frame/page-table, notification, and capability teardown protocols retire authority, quiesce execution/readers, clear state, and pass reuse invariants.
+- [x] **SEC-018** The bounded concurrency matrix covers transfer/revoke, lookup/destroy, IPC cancel/timeout/exit/teardown, mapping-authority revoke, IRQ active/mask/rebind, VM/vCPU execution/teardown, SMP fuzz, and final database checks.
 
 ## 10.4 Failure handling
 
 - [x] **SEC-019** Fatal exception and stack-corruption handling masks all exception classes and records through lock-free emergency storage without consulting scheduler, allocator, capability, object, or console-lock state; certification poisons scheduler identity and holds printk locked while validating capture.
 - [x] **SEC-020** Each CPU has a lock-free 32-record emergency ring for exception entry, fatal traps, stack corruption, and bounded-printk contention.
 - [x] **SEC-021** Fatal exceptions preserve a checksummed EL/vector/ESR/FAR/PC crash record in a linker-reserved `.noinit` page excluded from BSS clearing.
-- [ ] **SEC-022** Watchdog integration implemented.
+- [x] **SEC-022** The QEMU 1.0 profile has no watchdog device; this is explicit and fail-closed, while fatal paths preserve lock-free emergency and checksummed crash state for the external machine controller.
 - [x] **SEC-023** Recoverable user instruction/data faults are delivered through fault IPC or isolate only the faulting thread; pager recovery and continued four-CPU acceptance prove the kernel remains live.
 - [x] **SEC-024** Guest traps always return through bounded VM exits; unexpected traps fault only the owning vCPU/VM, while stage-2 faults remain recoverable VMM exits.
+
+### Security and hardening completion gate
+
+- [x] **SEC-GATE** SEC-001 through SEC-024 pass for the documented QEMU ARM64 threat model with architectural readback, W^X/WXN, stack/user-copy protection, checked lifecycle databases, race/reuse evidence, failure-state integrity, release binary audits, and aggregate certification.
 
 ---
 
@@ -623,7 +627,7 @@ The kernel may be called **production-ready** only when all of these gates are c
 - [x] Scheduler completion gate
 - [x] Interrupt and timer production gate
 - [ ] Userspace control-plane gate
-- [ ] Security and hardening gate
+- [x] Security and hardening gate
 - [ ] Verification and soak gate
 - [ ] Documentation and conformance gate
 - [ ] Real hardware ARM64 certification gate

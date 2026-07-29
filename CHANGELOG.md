@@ -1,3 +1,15 @@
+## 0173 - Complete bounded security and hardening
+
+- Enable host SCTLR WXN and validate exact MAIR/TCR plus required
+  SCTLR/endian controls at final acceptance.
+- Compose architecture features, permissions, stack guards, PAN/UAO,
+  subsystem lifecycle databases, emergency storage, and crash-record integrity
+  into fail-closed security invariants.
+- Add an aggregate security gate spanning authority, pager, mapping, race,
+  hypervisor, SMP, teardown, reuse, and rollback workloads.
+- Document the architectural register audit and close SEC-001 through SEC-024
+  for the QEMU ARM64 threat model.
+
 ## 0172 - Complete interrupts, timers, and virtual-platform support
 
 - Restrict userspace interrupt objects to the supported SPI inventory and

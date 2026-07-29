@@ -205,18 +205,21 @@ namespace sys::arch
                              : "memory");
         }
 
+        inline constexpr u64 kernel_mair = 0xffULL | (0x04ULL << 8U);
+        inline constexpr u64 kernel_tcr =
+            16ULL | (1ULL << 8U) | (1ULL << 10U) | (3ULL << 12U) | (1ULL << 23U) | (2ULL << 32U);
+        inline constexpr u64 kernel_sctlr_required =
+            1ULL | (1ULL << 2U) | (1ULL << 12U) | (1ULL << 19U);
+
         inline void initialize_cpu() noexcept {
-            const u64 mair = 0xffULL | (0x04ULL << 8U);
-            const u64 tcr = 16ULL | (1ULL << 8U) | (1ULL << 10U) | (3ULL << 12U) | (1ULL << 23U) |
-                            (2ULL << 32U);
             __asm__ volatile("msr mair_el1, %0\n\tmsr tcr_el1, %1\n\tisb"
                              :
-                             : "r"(mair), "r"(tcr)
+                             : "r"(kernel_mair), "r"(kernel_tcr)
                              : "memory");
             activate(reinterpret_cast<paddr_t>(&kernel_l0));
             u64 sctlr;
             __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-            sctlr |= 1ULL | (1ULL << 2U) | (1ULL << 12U);
+            sctlr |= kernel_sctlr_required;
             __asm__ volatile("msr sctlr_el1, %0\n\tisb" : : "r"(sctlr) : "memory");
             /*
              * The kernel has no implicit privileged access to EL0 mappings.
@@ -242,6 +245,18 @@ namespace sys::arch
                 __asm__ volatile("mrs %0, S3_0_C4_C2_4" : "=r"(uao));
             return (((features >> 20U) & 0xfU) == 0U || (pan & 1U) != 0U) &&
                    (((features >> 4U) & 0xfU) == 0U || (uao & 1U) == 0U);
+        }
+
+        [[nodiscard]] inline bool architectural_controls_valid() noexcept {
+            u64 mair{};
+            u64 tcr{};
+            u64 sctlr{};
+            __asm__ volatile("mrs %0, mair_el1\n\tmrs %1, tcr_el1\n\tmrs %2, sctlr_el1"
+                             : "=r"(mair), "=r"(tcr), "=r"(sctlr));
+            constexpr u64 endian_bits = (1ULL << 25U) | (1ULL << 24U);
+            return mair == kernel_mair && tcr == kernel_tcr &&
+                   (sctlr & kernel_sctlr_required) == kernel_sctlr_required &&
+                   (sctlr & endian_bits) == 0U;
         }
 
         inline void initialize() noexcept {

@@ -391,6 +391,9 @@ namespace sys::kernel::syscall
                     case 32U:
                         name = "interrupt_timer_platform_gate";
                         break;
+                    case 33U:
+                        name = "security_hardening_gate";
+                        break;
                     default:
                         break;
                 }
@@ -420,6 +423,14 @@ namespace sys::kernel::syscall
                 const bool platform_valid = platform::certification_valid();
                 const bool timers_valid =
                     platform::timer::database_valid(arch::smp::online_count());
+                const bool architecture_hardening_valid =
+                    arch::hardening::inventory_valid(arch::smp::online_count()) &&
+                    arch::memory::architectural_controls_valid() &&
+                    arch::memory::kernel_permissions_valid() &&
+                    arch::memory::kernel_stack_guards_valid() &&
+                    arch::memory::privilege_protection_enabled();
+                const bool failure_state_valid =
+                    emergency::verify_ring() && emergency::crash_valid();
                 const bool memory_inventory_valid = memory::physical_inventory_source !=
                                                     memory::inventory_source::platform_fallback;
                 const u64 ipc_latency_samples = interrupt::timing::latency_sample_count(
@@ -442,7 +453,8 @@ namespace sys::kernel::syscall
                     mappings_valid && objects_valid && locks_valid && endpoints_valid &&
                     notifications_valid && interrupts_valid && processes_valid &&
                     capabilities_valid && scheduler_valid && platform_valid && timers_valid &&
-                    memory_inventory_valid && scheduler_timing_valid;
+                    architecture_hardening_valid && failure_state_valid && memory_inventory_valid &&
+                    scheduler_timing_valid;
                 const bool acceptance_passed = passed != 0U && kernel_invariants;
                 pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
                         "objects=%s locks=%s endpoints=%s notifications=%s\n",
@@ -465,6 +477,10 @@ namespace sys::kernel::syscall
                 pr_info("[TEST] name=timer_database_invariants result=%s cpus=%u\n",
                         timers_valid ? "PASS" : "FAIL",
                         static_cast<unsigned int>(arch::smp::online_count()));
+                pr_info("[TEST] name=architecture_hardening_invariants result=%s\n",
+                        architecture_hardening_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=failure_state_invariants result=%s\n",
+                        failure_state_valid ? "PASS" : "FAIL");
                 pr_info("[TEST] name=ipc_latency_bound result=%s max_ticks=%llu limit_ticks=%llu "
                         "samples=%llu\n",
                         ipc_timing_valid ? "PASS" : "FAIL",
