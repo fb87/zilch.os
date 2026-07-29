@@ -86,6 +86,19 @@ namespace sys::platform::timer
         return valid_frequency(frequency) && interval_ticks() != 0U &&
                bounded_scheduler_delta(frequency, ~0ULL) != 0U;
     }
+
+    [[nodiscard]] inline bool database_valid(u32 online_cpus) noexcept {
+        if (!certification_valid() || online_cpus == 0U || online_cpus > maximum_cpu_count)
+            return false;
+        const u64 maximum = maximum_scheduler_delta(arch::timer::frequency());
+        for (u32 cpu = 0U; cpu < online_cpus; ++cpu) {
+            const u64 delta = __atomic_load_n(&programmed_delta[cpu], __ATOMIC_ACQUIRE);
+            if (__atomic_load_n(&tick_count[cpu], __ATOMIC_ACQUIRE) == 0U || delta == 0U ||
+                delta > maximum)
+                return false;
+        }
+        return true;
+    }
 } // namespace sys::platform::timer
 
 static_assert(sys::platform::timer::valid_frequency(100U));

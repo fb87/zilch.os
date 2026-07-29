@@ -13,10 +13,25 @@ namespace sys::kernel::tests::interrupt
     [[nodiscard]] inline error_t run(task::task& root,
                                      capability::cspace_t& delegated_cspace) noexcept {
         static kernel::interrupt::interrupt_t irq{};
+        static kernel::interrupt::interrupt_t level_irq{};
+        kernel::interrupt::interrupt_t duplicate{};
+        kernel::interrupt::interrupt_t reserved{};
         kernel::interrupt::initialize(irq, 40U, kernel::interrupt::trigger::edge);
+        kernel::interrupt::initialize(level_irq, 41U, kernel::interrupt::trigger::level);
+        kernel::interrupt::initialize(duplicate, 40U, kernel::interrupt::trigger::edge);
+        kernel::interrupt::initialize(reserved, platform::interrupt::virtual_timer_irq,
+                                      kernel::interrupt::trigger::level);
         error_t result = object::register_dynamic_object(irq.object, object::type_t::interrupt);
         if (result == error_t::success)
             result = kernel::interrupt::register_irq(irq);
+        if (result == error_t::success &&
+            (kernel::interrupt::register_irq(duplicate) != error_t::busy ||
+             kernel::interrupt::register_irq(reserved) != error_t::busy))
+            result = error_t::invalid_argument;
+        if (result == error_t::success)
+            result = object::register_dynamic_object(level_irq.object, object::type_t::interrupt);
+        if (result == error_t::success)
+            result = kernel::interrupt::register_irq(level_irq);
         const capability::rights_t owner_rights{static_cast<u32>(capability::right_t::read) |
                                                 static_cast<u32>(capability::right_t::write) |
                                                 static_cast<u32>(capability::right_t::grant) |
@@ -42,6 +57,12 @@ namespace sys::kernel::tests::interrupt
             kernel::interrupt::acknowledge(irq) != error_t::success ||
             kernel::interrupt::acknowledge(irq) != error_t::not_found)
             return error_t::invalid_argument;
+        result = kernel::interrupt::bind(level_irq,
+                                         object::reference(bootstrap::root_notification.object));
+        if (result != error_t::success || !kernel::interrupt::dispatch(41U) ||
+            notification::consume(bootstrap::root_notification) != (1ULL << 41U) ||
+            kernel::interrupt::acknowledge(level_irq) != error_t::success)
+            return error_t::invalid_argument;
         for (u32 event = 0U; event <= kernel::interrupt::storm_threshold; ++event)
             (void)kernel::interrupt::record_delivery(irq, 10U);
         if (!irq.stormed || !irq.masked || irq.suppressed < kernel::interrupt::storm_threshold ||
@@ -56,10 +77,14 @@ namespace sys::kernel::tests::interrupt
             return error_t::invalid_argument;
         (void)capability::delete_capability(root.cspace, 30U);
         kernel::interrupt::unregister_irq(irq);
+        kernel::interrupt::unregister_irq(level_irq);
         (void)object::unregister_object(object::reference(irq.object));
+        (void)object::unregister_object(object::reference(level_irq.object));
         irq.object = {};
+        level_irq.object = {};
         pr_info("[TEST] name=irq_ownership_delegation result=PASS irq=40 trigger=edge\n");
-        pr_info("[TEST] name=irq_ack_deactivate result=PASS delivered=2 acknowledged=2\n");
+        pr_info("[TEST] name=irq_trigger_modes result=PASS edge=40 level=41 reserved=reject\n");
+        pr_info("[TEST] name=irq_ack_deactivate result=PASS edge=2 level=1\n");
         pr_info("[TEST] name=irq_storm_containment result=PASS threshold=64 masked=1\n");
         return error_t::success;
     }

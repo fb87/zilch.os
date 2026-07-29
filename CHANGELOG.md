@@ -1,3 +1,14 @@
+## 0172 - Complete interrupts, timers, and virtual-platform support
+
+- Restrict userspace interrupt objects to the supported SPI inventory and
+  reject private, timer, IPI, duplicate, and out-of-range lines.
+- Certify exclusive edge and level delivery, notification acknowledgement,
+  explicit deactivation, delegation/revoke, and storm containment.
+- Validate the versioned QEMU platform inventory and all four per-CPU timer
+  databases at final acceptance.
+- Add the aggregate interrupt/timer/platform completion gate and reconcile
+  unsupported hardware, watchdog/power, and AMD64 runtime scope.
+
 ## 0171 - Complete bounded scheduler and real-time behavior
 
 - Add transactional affinity migration for suspended donation-free threads.

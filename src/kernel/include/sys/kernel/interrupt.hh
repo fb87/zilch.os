@@ -51,7 +51,7 @@ namespace sys::kernel::interrupt
     }
 
     [[nodiscard]] inline error_t register_irq(interrupt_t& value) noexcept {
-        if (value.irq >= maximum_irq_count)
+        if (value.irq >= maximum_irq_count || !platform::interrupt::userspace_assignable(value.irq))
             return error_t::busy;
         interrupt_t* expected = nullptr;
         if (!__atomic_compare_exchange_n(&registry[value.irq], &expected, &value, false,

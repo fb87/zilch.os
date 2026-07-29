@@ -1,6 +1,6 @@
 # Physical interrupt lifecycle
 
-Status: production kernel mechanism; platform discovery integration remains open
+Status: complete for the QEMU ARM64 1.0 platform profile
 
 ## Ownership
 
@@ -45,9 +45,14 @@ masked, stormed, window-start, and window-count state. Counter updates and state
 transitions use atomic publication because delivery and userspace acknowledge
 may execute on different CPUs.
 
-## Remaining integration
+## Platform scope
 
-Production platform description must discover external IRQ resources, create
-their objects, and delegate them through a userspace device manager. Real
-hardware edge and level devices must validate polarity, routing, and
-redelivery. Those gaps keep IRQ-002, IRQ-003, and IRQ-005 in progress.
+The fixed QEMU profile exposes userspace-assignable SPIs 32 through 1019.
+Private interrupts, the virtual timer, and kernel IPIs are rejected by the
+public interrupt-object registry. Certification uses exclusive edge IRQ 40 and
+level IRQ 41, verifies duplicate/reserved rejection, delegates attenuated
+authority through a guarded CSpace, and revokes it.
+
+Real-hardware discovery, polarity, routing, and redelivery qualification remain
+part of the independent real-hardware release gate and are not claimed by the
+virtual-platform completion gate.

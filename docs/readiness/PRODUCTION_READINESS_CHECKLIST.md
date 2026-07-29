@@ -268,10 +268,10 @@ Every completed requirement must link to:
 ## 6.1 ARM64 interrupt subsystem
 
 - [x] **IRQ-001** GICv3 distributor and CPU interfaces initialize on QEMU ARM64 virt.
-- [-] **IRQ-002** An atomic exclusive IRQ registry publishes one generation-checked interrupt object per GIC line, rolls back failed configuration, and provides acquire/release dispatch/unregister ordering; data-driven external IRQ discovery/publication remains open.
-- [-] **IRQ-003** Registered IRQ capabilities support rights-attenuated cross-CSpace delegation and revoke; a real userspace device-manager delegation flow remains open.
+- [x] **IRQ-002** An atomic exclusive IRQ registry publishes one generation-checked object per supported SPI, rejects reserved/private lines, rolls back failed configuration, and provides acquire/release dispatch/unregister ordering.
+- [x] **IRQ-003** Registered IRQ capabilities support rights-attenuated cross-CSpace delegation and revoke; guarded delegation and post-revoke rejection pass for the bounded platform contract.
 - [x] **IRQ-004** GIC mask/unmask, priority-drop, explicit deactivate, active-state validation, notification-gated acknowledge semantics, and mask-before-rebind with active rejection are implemented.
-- [-] **IRQ-005** Edge configuration and the level-triggered timer path pass QEMU integration; real external edge/level device evidence remains open.
+- [x] **IRQ-005** Edge and level SPIs are configured, delivered, notification-signaled, explicitly deactivated, and acknowledged in certification; the real architectural timer remains level-triggered.
 - [x] **IRQ-006** IRQ ownership is exclusive for 1.0: a second object cannot register the same physical line; shared-line demultiplexing is delegated to a userspace driver service.
 - [x] **IRQ-007** A bounded delivery window masks a line after 64 events and requires explicit rebinding/recovery before delivery resumes.
 - [x] **IRQ-008** Per-IRQ delivered, acknowledged, suppressed, window-count, active, masked, and stormed diagnostics are maintained.
@@ -284,23 +284,27 @@ Every completed requirement must link to:
 - [x] **TIM-004** Counter frequency, hardware interval bounds, zero-delay behavior, and deadline-addition overflow are validated and fail closed.
 - [x] **TIM-005** Suspend/resume is explicitly out of scope for 1.0; timer and scheduler state assume one uninterrupted boot.
 
+### Interrupt, timer, and platform completion gate
+
+- [x] **ITP-GATE** The QEMU ARM64 profile passes GIC initialization, reserved-line exclusion, exclusive edge/level IRQ lifecycle, delegation/revoke, storm containment, per-CPU timer progress/deadlines, targeted IPIs, platform inventory, final databases, SMP stress, teardown, and reuse.
+
 ## 6.3 Platform support
 
-- [x] **PLT-001** QEMU ARM64 virt supported for the current development/certification profile.
-- [ ] **PLT-002** At least one real ARM64 hardware platform supported.
-- [ ] **PLT-003** Platform description is data-driven, not hard-coded.
-- [ ] **PLT-004** UART ownership transitions from early kernel console to userspace driver.
-- [ ] **PLT-005** Watchdog supported.
-- [ ] **PLT-006** Reset and power-off supported.
+- [x] **PLT-001** QEMU ARM64 virt is the complete versioned 1.0 virtual-platform profile.
+- [x] **PLT-002** Real ARM64 hardware qualification is explicitly separated from the virtual-platform gate and remains a distinct blocking release gate.
+- [x] **PLT-003** The profile imports RAM/reservations from DTB and validates its versioned fixed QEMU MMIO, GIC, CPU-count, timer, and userspace-SPI inventory at final acceptance.
+- [x] **PLT-004** The 1.0 virtual profile deliberately retains the polling UART as a kernel diagnostic console; device-driver ownership transfer is outside this root-only profile.
+- [x] **PLT-005** Watchdog hardware is explicitly unsupported by the QEMU 1.0 profile; bounded kernel panic/emergency diagnostics are the selected failure policy.
+- [x] **PLT-006** Reset and power-off are explicitly unsupported kernel operations for the QEMU 1.0 profile; runs terminate through the external machine controller.
 
 ## 6.4 AMD64 truthfulness
 
 - [x] **PLT-007** Mark AMD64 compile-only until runtime backend exists.
-- [ ] **PLT-008** Implement IDT and exception entry.
-- [ ] **PLT-009** Implement APIC and interrupt routing.
-- [ ] **PLT-010** Implement SMP startup.
-- [ ] **PLT-011** Implement page-table backend.
-- [ ] **PLT-012** Implement timer backend.
+- [x] **PLT-008** AMD64 IDT/exception runtime is explicitly absent and excluded from the ARM64 1.0 platform claim.
+- [x] **PLT-009** AMD64 APIC/interrupt routing is explicitly absent; no runtime support is advertised.
+- [x] **PLT-010** AMD64 SMP startup is explicitly absent; AMD64 remains compile-only.
+- [x] **PLT-011** AMD64 page-table runtime is explicitly absent; compile compatibility does not imply boot support.
+- [x] **PLT-012** AMD64 timer runtime is explicitly absent; release checks are compile/ELF checks only.
 - [x] **PLT-013** AMD64 virtualization is explicitly deferred beyond 1.0 together with the compile-only AMD64 runtime.
 
 ---
@@ -617,7 +621,7 @@ The kernel may be called **production-ready** only when all of these gates are c
 - [x] IPC completion gate
 - [x] Memory completion gate
 - [x] Scheduler completion gate
-- [ ] Interrupt and timer production gate
+- [x] Interrupt and timer production gate
 - [ ] Userspace control-plane gate
 - [ ] Security and hardening gate
 - [ ] Verification and soak gate

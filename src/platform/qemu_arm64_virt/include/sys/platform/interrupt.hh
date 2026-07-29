@@ -15,6 +15,12 @@ namespace sys::platform::interrupt
     inline constexpr irq_id_t reschedule_ipi = 0U;
     inline constexpr irq_id_t tlb_shootdown_ipi = 1U;
     inline constexpr irq_id_t virtual_timer_irq = 27U;
+    inline constexpr irq_id_t first_userspace_irq = 32U;
+    inline constexpr irq_id_t last_userspace_irq = 1019U;
+
+    [[nodiscard]] inline constexpr bool userspace_assignable(irq_id_t irq) noexcept {
+        return irq >= first_userspace_irq && irq <= last_userspace_irq;
+    }
 
     [[nodiscard]] inline volatile u32& reg32(uintptr_t address) noexcept {
         return *reinterpret_cast<volatile u32*>(address);
@@ -172,7 +178,7 @@ namespace sys::platform::interrupt
     }
 
     [[nodiscard]] inline error_t configure(irq_id_t irq, bool edge) noexcept {
-        if (irq < 16U || irq >= spurious_irq)
+        if (!userspace_assignable(irq))
             return error_t::invalid_argument;
         const uintptr_t base =
             irq < 32U ? find_redistributor() + sgi_base_offset : distributor_base;
@@ -209,3 +215,9 @@ namespace sys::platform::interrupt
         __asm__ volatile("dsb ishst\n\tmsr ICC_SGI1R_EL1, %0\n\tisb" : : "r"(value) : "memory");
     }
 } // namespace sys::platform::interrupt
+
+static_assert(
+    !sys::platform::interrupt::userspace_assignable(sys::platform::interrupt::reschedule_ipi));
+static_assert(
+    !sys::platform::interrupt::userspace_assignable(sys::platform::interrupt::virtual_timer_irq));
+static_assert(sys::platform::interrupt::userspace_assignable(40U));

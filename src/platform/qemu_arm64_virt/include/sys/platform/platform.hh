@@ -17,4 +17,13 @@ namespace sys::platform
     };
 
     static_assert(v1::compatible(version));
+
+    [[nodiscard]] inline bool certification_valid() noexcept {
+        return firmware::boot_info.cpu_count == timer::maximum_cpu_count &&
+               interrupt::userspace_assignable(interrupt::first_userspace_irq) &&
+               !interrupt::userspace_assignable(interrupt::virtual_timer_irq) &&
+               memory::ram_base != 0U && (memory::ram_base & 0xfffU) == 0U &&
+               (interrupt::distributor_base & 0xffffU) == 0U &&
+               (interrupt::redistributor_base & 0xffffU) == 0U;
+    }
 } // namespace sys::platform

@@ -27,4 +27,13 @@ polling and report an error instead of hanging indefinitely.
 
 ## Software-generated interrupts
 
-The GICv3 CPU interface uses `ICC_SGI1R_EL1` for inter-processor interrupts. SGI 0 is the reschedule IPI and SGI 1 is the TLB-shootdown IPI. The initial implementation supports broadcast to every processing element except the sender.
+The GICv3 CPU interface uses `ICC_SGI1R_EL1` for inter-processor interrupts.
+SGI 0 is the reschedule IPI and SGI 1 is the TLB-shootdown IPI. Callers may
+broadcast to every processing element except the sender or target one of the
+four profile CPUs.
+
+## Userspace interrupt inventory
+
+Interrupt objects accept SPIs 32 through 1019. SGIs, PPIs, the architectural
+virtual timer, and the spurious range are kernel-reserved and fail registration.
+The exclusive kernel registry rejects a second owner for a live SPI.

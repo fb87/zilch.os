@@ -7,6 +7,9 @@ namespace sys::platform::interrupt
     inline constexpr irq_id_t reschedule_ipi = 0U;
     inline constexpr irq_id_t tlb_shootdown_ipi = 1U;
     inline constexpr irq_id_t virtual_timer_irq = 0U;
+    [[nodiscard]] inline constexpr bool userspace_assignable(irq_id_t) noexcept {
+        return false;
+    }
     inline void initialize_global() noexcept {}
     [[nodiscard]] inline error_t initialize_cpu() noexcept {
         return error_t::unsupported;

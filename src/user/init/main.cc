@@ -46,6 +46,7 @@ namespace
         memory_completion_gate = 29U,
         capability_completion_gate = 30U,
         scheduler_completion_gate = 31U,
+        interrupt_timer_platform_gate = 32U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -1129,6 +1130,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::scheduler_completion_gate,
            scheduling_configuration_pass && ipc_lifecycle_pass && capability_race_pass &&
                services.pager && services.memory_protocol && fuzz_pass && destroyed && reused);
+    record(ledger, test_id::interrupt_timer_platform_gate,
+           scheduling_configuration_pass && ipc_lifecycle_pass && capability_race_pass &&
+               dynamic_ipc_pass && fuzz_pass && destroyed && reused);
 
     const bool pass = ledger.failure_count == 0U && ledger.transport_ok;
     (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,

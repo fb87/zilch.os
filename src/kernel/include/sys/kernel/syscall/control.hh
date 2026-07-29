@@ -18,6 +18,7 @@
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/kernel/thread/thread.hh>
 #include <sys/platform/interrupt.hh>
+#include <sys/platform/platform.hh>
 #include <sys/types.hh>
 #if CONFIG_SELFTEST
 #include <sys/test_abi/v1/certification.hh>
@@ -387,6 +388,9 @@ namespace sys::kernel::syscall
                     case 31U:
                         name = "scheduler_completion_gate";
                         break;
+                    case 32U:
+                        name = "interrupt_timer_platform_gate";
+                        break;
                     default:
                         break;
                 }
@@ -413,6 +417,9 @@ namespace sys::kernel::syscall
                 const bool processes_valid = process_lifecycle_valid();
                 const bool capabilities_valid = capability::database_valid();
                 const bool scheduler_valid = scheduler_database_valid();
+                const bool platform_valid = platform::certification_valid();
+                const bool timers_valid =
+                    platform::timer::database_valid(arch::smp::online_count());
                 const bool memory_inventory_valid = memory::physical_inventory_source !=
                                                     memory::inventory_source::platform_fallback;
                 const u64 ipc_latency_samples = interrupt::timing::latency_sample_count(
@@ -431,11 +438,11 @@ namespace sys::kernel::syscall
                     interrupt::timing::latency_within_target(
                         interrupt::timing::latency_kind::cross_cpu_wake) &&
                     ipc_timing_valid;
-                const bool kernel_invariants = mappings_valid && objects_valid && locks_valid &&
-                                               endpoints_valid && notifications_valid &&
-                                               interrupts_valid && processes_valid &&
-                                               capabilities_valid && scheduler_valid &&
-                                               memory_inventory_valid && scheduler_timing_valid;
+                const bool kernel_invariants =
+                    mappings_valid && objects_valid && locks_valid && endpoints_valid &&
+                    notifications_valid && interrupts_valid && processes_valid &&
+                    capabilities_valid && scheduler_valid && platform_valid && timers_valid &&
+                    memory_inventory_valid && scheduler_timing_valid;
                 const bool acceptance_passed = passed != 0U && kernel_invariants;
                 pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
                         "objects=%s locks=%s endpoints=%s notifications=%s\n",
@@ -453,6 +460,11 @@ namespace sys::kernel::syscall
                 pr_info("[TEST] name=scheduler_latency_bounds result=%s limit_ticks=%llu\n",
                         scheduler_timing_valid ? "PASS" : "FAIL",
                         static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()));
+                pr_info("[TEST] name=platform_inventory_invariants result=%s\n",
+                        platform_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=timer_database_invariants result=%s cpus=%u\n",
+                        timers_valid ? "PASS" : "FAIL",
+                        static_cast<unsigned int>(arch::smp::online_count()));
                 pr_info("[TEST] name=ipc_latency_bound result=%s max_ticks=%llu limit_ticks=%llu "
                         "samples=%llu\n",
                         ipc_timing_valid ? "PASS" : "FAIL",

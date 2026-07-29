@@ -34,3 +34,6 @@ housekeeping deadline.
 timer bound. Invalid frequencies fail closed to the minimum interval.
 Absolute deadline addition saturates at `UINT64_MAX`; it never wraps a timeout
 into the past. The logical counter itself also saturates at that limit.
+
+Final certification requires every online CPU to have nonzero timer progress
+and a programmed delta within the frequency-derived architectural bound.
