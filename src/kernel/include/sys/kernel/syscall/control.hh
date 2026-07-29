@@ -56,6 +56,50 @@ namespace sys::kernel::syscall
         return true;
     }
 
+    [[nodiscard]] inline bool scheduler_database_valid() noexcept {
+        for (u32 index = 0U; index < thread::active_user_thread_count; ++index) {
+            const thread::thread& value = thread::user_threads[index];
+            if (value.object.type == object::type_t::none)
+                continue;
+            const scheduling::context& context = value.scheduling_context;
+            if (value.pinned_cpu >= thread::maximum_cpu_count ||
+                context.affinity != value.pinned_cpu || context.budget_ticks == 0U ||
+                context.period_ticks == 0U || context.budget_ticks > context.period_ticks ||
+                context.effective_priority > context.maximum_priority ||
+                context.donation_depth > scheduling::maximum_donation_depth ||
+                context.replenishment_count > scheduling::maximum_replenishments ||
+                context.consumed_ticks > context.budget_ticks)
+                return false;
+            u64 accounted{};
+            u64 previous{};
+            for (u32 entry = 0U; entry < context.replenishment_count; ++entry) {
+                if (context.replenishment_amounts[entry] == 0U ||
+                    (entry != 0U && context.replenishment_deadlines[entry] < previous) ||
+                    accounted > ~0ULL - context.replenishment_amounts[entry])
+                    return false;
+                previous = context.replenishment_deadlines[entry];
+                accounted += context.replenishment_amounts[entry];
+            }
+            if (accounted < context.consumed_ticks ||
+                (context.replenishment_count == 0U &&
+                 context.next_replenishment != scheduling::maximum_time))
+                return false;
+        }
+        for (u32 cpu = 0U; cpu < thread::maximum_cpu_count; ++cpu) {
+            if (thread::timeout_queue_counts[cpu] > thread::user_thread_count)
+                return false;
+            u64 previous{};
+            for (u32 entry = 0U; entry < thread::timeout_queue_counts[cpu]; ++entry) {
+                const thread::timeout_entry& timeout = thread::timeout_queues[cpu][entry];
+                if (timeout.thread >= thread::active_user_thread_count ||
+                    (entry != 0U && timeout.deadline < previous))
+                    return false;
+                previous = timeout.deadline;
+            }
+        }
+        return true;
+    }
+
     inline void set_control_result(arch::thread::context& frame, error_t result) noexcept {
         arch::syscall::set_result(frame, static_cast<word_t>(static_cast<s64>(result)));
     }
@@ -340,6 +384,9 @@ namespace sys::kernel::syscall
                     case 30U:
                         name = "capability_completion_gate";
                         break;
+                    case 31U:
+                        name = "scheduler_completion_gate";
+                        break;
                     default:
                         break;
                 }
@@ -365,6 +412,7 @@ namespace sys::kernel::syscall
                 const bool interrupts_valid = interrupt::database_valid();
                 const bool processes_valid = process_lifecycle_valid();
                 const bool capabilities_valid = capability::database_valid();
+                const bool scheduler_valid = scheduler_database_valid();
                 const bool memory_inventory_valid = memory::physical_inventory_source !=
                                                     memory::inventory_source::platform_fallback;
                 const u64 ipc_latency_samples = interrupt::timing::latency_sample_count(
@@ -374,10 +422,20 @@ namespace sys::kernel::syscall
                 const bool ipc_timing_valid =
                     ipc_latency_samples != 0U &&
                     ipc_latency_max <= interrupt::timing::latency_target_ticks();
-                const bool kernel_invariants =
-                    mappings_valid && objects_valid && locks_valid && endpoints_valid &&
-                    notifications_valid && interrupts_valid && processes_valid &&
-                    capabilities_valid && memory_inventory_valid && ipc_timing_valid;
+                const bool scheduler_timing_valid =
+                    interrupt::timing::within_target() &&
+                    interrupt::timing::latency_within_target(
+                        interrupt::timing::latency_kind::interrupt_service) &&
+                    interrupt::timing::latency_within_target(
+                        interrupt::timing::latency_kind::preemption_service) &&
+                    interrupt::timing::latency_within_target(
+                        interrupt::timing::latency_kind::cross_cpu_wake) &&
+                    ipc_timing_valid;
+                const bool kernel_invariants = mappings_valid && objects_valid && locks_valid &&
+                                               endpoints_valid && notifications_valid &&
+                                               interrupts_valid && processes_valid &&
+                                               capabilities_valid && scheduler_valid &&
+                                               memory_inventory_valid && scheduler_timing_valid;
                 const bool acceptance_passed = passed != 0U && kernel_invariants;
                 pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
                         "objects=%s locks=%s endpoints=%s notifications=%s\n",
@@ -390,6 +448,11 @@ namespace sys::kernel::syscall
                         processes_valid ? "PASS" : "FAIL");
                 pr_info("[TEST] name=capability_database_invariants result=%s\n",
                         capabilities_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=scheduler_database_invariants result=%s\n",
+                        scheduler_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=scheduler_latency_bounds result=%s limit_ticks=%llu\n",
+                        scheduler_timing_valid ? "PASS" : "FAIL",
+                        static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()));
                 pr_info("[TEST] name=ipc_latency_bound result=%s max_ticks=%llu limit_ticks=%llu "
                         "samples=%llu\n",
                         ipc_timing_valid ? "PASS" : "FAIL",
@@ -996,8 +1059,10 @@ namespace sys::kernel::syscall
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);
                 if (result == error_t::success) {
+                    const cpu_id_t affinity =
+                        a5 == 0U ? target->pinned_cpu : static_cast<cpu_id_t>(a5 - 1U);
                     if (a2 > scheduling::highest_priority ||
-                        target->pinned_cpu >= thread::maximum_cpu_count) {
+                        affinity >= thread::maximum_cpu_count) {
                         result = error_t::invalid_argument;
                         break;
                     }
@@ -1013,9 +1078,11 @@ namespace sys::kernel::syscall
                         target->scheduling_context.donated_ticks != 0U) {
                         result = error_t::busy;
                     } else {
-                        result = scheduling::configure(
-                            target->scheduling_context, static_cast<u8>(a2), a3, a4,
-                            target->pinned_cpu, platform::timer::ticks(target->pinned_cpu));
+                        result = scheduling::configure(target->scheduling_context,
+                                                       static_cast<u8>(a2), a3, a4, affinity,
+                                                       platform::timer::ticks(affinity));
+                        if (result == error_t::success)
+                            target->pinned_cpu = affinity;
                     }
                     thread::unlock_ipc_lifecycle();
                 }

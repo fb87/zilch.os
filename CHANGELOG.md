@@ -1,3 +1,15 @@
+## 0171 - Complete bounded scheduler and real-time behavior
+
+- Add transactional affinity migration for suspended donation-free threads.
+- Validate every live scheduling context and per-CPU timeout queue at final
+  acceptance.
+- Enforce the QEMU profile's IRQ-disabled, IRQ, preemption, cross-CPU wake, and
+  IPC service latency bounds.
+- Advance six logical hours and 21,600 sporadic-server periods without an
+  accounting, throttle, replenishment, or deadline violation.
+- Add the aggregate scheduler completion gate and close SCH-001 through
+  SCH-024.
+
 ## 0170 - Complete the bounded kernel capability system
 
 - Validate every registered CSpace and active derivation at final acceptance,

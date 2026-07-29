@@ -28,13 +28,15 @@ quantum. Long one-shot intervals advance logical time by their programmed delta.
 
 The mechanism is compiled into product builds. Lock-order instrumentation
 reports the maximum observed hold duration in architectural timer ticks.
-Measured IRQ-disabled latency limits and multi-hour real-time stress evidence
-remain required before scheduler production certification.
+Certification enforces the QEMU profile's ten-millisecond IRQ-disabled and
+service-latency limits and advances six logical hours of sporadic-server time.
+Hardware-specific limits remain part of the independent real-hardware gate.
 
 Public reconfiguration is permitted only after the target thread has been
 explicitly suspended and reached execution quiescence. The target must hold no
 reply authority or active donation. Priority is range checked before narrowing,
 budget and period pass the production `configure()` validator, and affinity is
-retained from the pinned CPU. Runnable or blocked targets return `busy`; this
+either retained or changed through the optional one-based CPU argument.
+Runnable or blocked targets return `busy`; this
 prevents a remote timer or scheduler pass from observing partially reset
 budget, replenishment, priority, or donation state.
