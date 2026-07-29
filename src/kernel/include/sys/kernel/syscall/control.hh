@@ -334,6 +334,9 @@ namespace sys::kernel::syscall
                     case 28U:
                         name = "ipc_completion_gate";
                         break;
+                    case 29U:
+                        name = "memory_completion_gate";
+                        break;
                     default:
                         break;
                 }
@@ -358,6 +361,8 @@ namespace sys::kernel::syscall
                 const bool notifications_valid = notification::database_valid();
                 const bool interrupts_valid = interrupt::database_valid();
                 const bool processes_valid = process_lifecycle_valid();
+                const bool memory_inventory_valid = memory::physical_inventory_source !=
+                                                    memory::inventory_source::platform_fallback;
                 const u64 ipc_latency_samples = interrupt::timing::latency_sample_count(
                     interrupt::timing::latency_kind::ipc_service);
                 const u64 ipc_latency_max =
@@ -365,9 +370,10 @@ namespace sys::kernel::syscall
                 const bool ipc_timing_valid =
                     ipc_latency_samples != 0U &&
                     ipc_latency_max <= interrupt::timing::latency_target_ticks();
-                const bool kernel_invariants =
-                    mappings_valid && objects_valid && locks_valid && endpoints_valid &&
-                    notifications_valid && interrupts_valid && processes_valid && ipc_timing_valid;
+                const bool kernel_invariants = mappings_valid && objects_valid && locks_valid &&
+                                               endpoints_valid && notifications_valid &&
+                                               interrupts_valid && processes_valid &&
+                                               memory_inventory_valid && ipc_timing_valid;
                 const bool acceptance_passed = passed != 0U && kernel_invariants;
                 pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
                         "objects=%s locks=%s endpoints=%s notifications=%s\n",
@@ -384,6 +390,12 @@ namespace sys::kernel::syscall
                         static_cast<unsigned long long>(ipc_latency_max),
                         static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()),
                         static_cast<unsigned long long>(ipc_latency_samples));
+                pr_info("[TEST] name=memory_inventory_invariants result=%s source=%u regions=%u "
+                        "pages=%u\n",
+                        memory_inventory_valid ? "PASS" : "FAIL",
+                        static_cast<unsigned int>(memory::physical_inventory_source),
+                        static_cast<unsigned int>(memory::physical_region_count),
+                        static_cast<unsigned int>(memory::managed_pages));
                 pr_info("[METRIC] name=irq_disabled_duration_final max_ticks=%llu "
                         "reference_ticks=%llu samples=%llu\n",
                         static_cast<unsigned long long>(interrupt::timing::maximum()),

@@ -17,7 +17,15 @@ machine=$($readelf_tool -h "$kernel" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/
 cpus=${CPUS:-4}
 memory_mb=${MEMORY_MB:-256}
 case "$machine" in
-    AArch64) exec qemu-system-aarch64 -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" "$@" ;;
+    AArch64)
+        dtb=$(mktemp)
+        trap 'rm -f "$dtb"' EXIT HUP INT TERM
+        qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on,dumpdtb=$dtb" \
+            -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -display none
+        qemu-system-aarch64 -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 \
+            -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" \
+            -device "loader,file=$dtb,addr=0x48000000,force-raw=on" "$@"
+        ;;
     *X86-64*) exec qemu-system-x86_64 -machine q35 -cpu max -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" "$@" ;;
     *) echo "error: unsupported ELF machine: $machine" >&2; exit 1 ;;
 esac

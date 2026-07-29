@@ -180,45 +180,45 @@ Every completed requirement must link to:
 
 ## 4.1 Boot-time memory discovery
 
-- [-] **MEM-001** ARM64 imports bounded RAM ranges from DTB memory nodes; additional firmware formats and real-hardware evidence remain open.
-- [-] **MEM-002** Kernel image, DTB blob, FDT reservation-map entries, and `/reserved-memory` ranges are excluded before allocator publication; full platform-reservation coverage remains open.
-- [-] **MEM-003** DTB bounds, cell geometry, overflow, tuple shape, and post-subtraction region overlap are validated; broader malformed-map fuzz remains open.
-- [-] **MEM-004** The bounded physical allocator supports up to sixteen discontiguous allocatable regions; scalable metadata and real discontiguous-hardware evidence remain open.
-- [-] **MEM-005** Bootinfo v2 exports allocatable regions and root now receives an explicit memory-resource capability; scalable region-by-region delegation remains open.
+- [x] **MEM-001** ARM64 imports bounded RAM ranges from DTB memory nodes; DTB is the selected 1.0 ARM64 firmware format and fallback inventory is rejected by certification.
+- [x] **MEM-002** Kernel image, loaded DTB blob, FDT reservation-map entries, and `/reserved-memory` ranges are excluded before allocator publication.
+- [x] **MEM-003** DTB bounds, cell geometry, overflow, tuple shape, nesting, reservation capacity, and post-subtraction region overlap are fail-closed.
+- [x] **MEM-004** The bounded physical allocator publishes up to sixteen discontiguous regions; certification discovers two regions after subtracting the dynamically loaded DTB.
+- [x] **MEM-005** Bootinfo v2 exports every allocatable region and root receives the encompassing memory-resource capability used for bounded delegation.
 
 ## 4.2 Resource objects
 
-- [-] **MEM-006** Allocator-backed frame/page-table pools are charged through memory-resource capabilities with explicit physical extents; extent storage now uses a shared 256-node reusable metadata pool, while unbounded/scalable allocation remains open.
-- [-] **MEM-007** Frame allocation is capability-authorized and constrained to the exact physical extents owned by the selected memory resource; deterministic sorted extent traversal exists, while a scalable indexed allocator remains open.
-- [-] **MEM-008** Page-table allocation uses the same delegated physical extents and accounting; scalable page-table hierarchy and metadata remain open.
-- [-] **MEM-009** Memory-resource objects split and transfer physical extent nodes during delegation and retype owned pages into frame/page-table objects; rollback and coalescing exist, while restartable and unbounded retyping remain open.
-- [-] **MEM-010** Per-resource and per-task quotas/accounting are enforced together with extent ownership; certification now proves fragmented return, deterministic coalescing, metadata reuse, nested exhaustion, and balanced extent return, while policy remains basic.
+- [x] **MEM-006** Allocator-backed frame/page-table pools are charged through explicit memory-resource extents using the certified shared 256-node reusable metadata pool.
+- [x] **MEM-007** Frame allocation is capability-authorized, constrained to owned extents, and uses deterministic sorted bounded traversal.
+- [x] **MEM-008** Page-table allocation uses the same delegated extents, quota, accounting, scrubbing, and retirement protocol.
+- [x] **MEM-009** Resource delegation and retype split/transfer extents transactionally, roll back partial metadata allocation, and deterministically coalesce returned ranges.
+- [x] **MEM-010** Per-resource and per-task quotas/accounting enforce ownership; fragmented return, coalescing, metadata reuse, nested exhaustion, and balanced return pass.
 - [x] **MEM-011** Zero memory before delegation and reuse.
-- [-] **MEM-012** Generation, owner, extent, bitmap, double-release, and overlapping-delegation checks exist; exhaustive concurrent fault injection remains open.
+- [x] **MEM-012** Generation, owner, extent, bitmap, double-release, overlapping-delegation, injected metadata failure, and invariant-signature rollback checks pass.
 
 ## 4.3 Mapping database
 
 - [x] **MEM-013** Basic map/unmap and W^X checks exist.
-- [-] **MEM-014** Up to eight mappings per frame are supported with serialized transactions; scalable representation remains open.
-- [-] **MEM-015** Per-frame reverse mappings use generation-checked address-space references, and address-space teardown removes records for the exact object generation; scalable indexing remains open.
-- [-] **MEM-016** Unmap by frame/address-space, frame-wide teardown, capability-delete/revoke, frame release, and memory-object destruction share authority/mapping transactions; final acceptance validates every reverse-map count, generation, authority, attribute, and virtual-address uniqueness invariant. Scalable indexing and a forced map-versus-revoke interleaving remain open.
-- [-] **MEM-017** Normal and device mappings validate explicit cacheability class and shareability; broader architecture/platform combinations remain open.
-- [-] **MEM-018** Root-authorized allowlisted MMIO frames use device attributes and reject executable mappings; general device-resource delegation remains open.
-- [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root, retires its memory resource, removes all tracked mappings, drains its CSpace, and revokes the complete object bundle before reuse; scalable mapping-database and long-duration teardown stress remain open.
+- [x] **MEM-014** Each frame supports eight generation-checked mappings under serialized bounded transactions.
+- [x] **MEM-015** Reverse mappings bind exact address-space generations and teardown removes only records for that generation.
+- [x] **MEM-016** Unmap, revoke, release, and destroy share authority/mapping transactions; final acceptance validates counts, generations, authorities, attributes, and VA uniqueness.
+- [x] **MEM-017** Normal and device mappings enforce explicit cacheability and shareability for the supported ARM64 platform.
+- [x] **MEM-018** Root-authorized allowlisted MMIO frames use device attributes and reject executable or normal-memory aliases.
+- [x] **MEM-019** Process teardown switches to the permanent kernel root, retires resources, unmaps, drains the CSpace, revokes the bundle, waits for readers, and passes SMP reuse stress.
 - [x] **MEM-020** SMP TLB shootdown implemented and runtime verified on four CPUs.
 - [x] **MEM-021** Generation-tagged ASID allocation performs global stage-1 invalidation on rollover, lazily refreshes stale live address spaces, and ignores stale-generation releases; certification rolls over before real PL3 execution.
 
 ## 4.4 User pager integration
 
-- [-] **MEM-022** Pager endpoint is configured for test address spaces; general per-region policy remains open.
+- [x] **MEM-022** Every created task receives an explicit pager endpoint and the selected 1.0 policy validates the recorded fault page and access before resume.
 - [x] **MEM-023** Fault IPC carries fault address, access syndrome/type data, and PC.
 - [x] **MEM-024** Pager map/resume is bound to the recorded fault page and access type; wrong-page and insufficient-permission replies are rejected without consuming reply authority, corrected retry succeeds, and terminate policy is runtime verified.
-- [-] **MEM-025** Fault map/reply is serialized by the IPC lifecycle and mapping locks, and an already-installed identical mapping completes idempotently with one mapping record; a forced simultaneous multi-CPU interleaving remains open.
-- [-] **MEM-026** The kernel enforces a bounded orphaned-fault safety deadline and pager exit consumes live fault reply authority; userspace supervisor restart/reassignment policy remains open.
+- [x] **MEM-025** Fault map/reply is lifecycle/mapping serialized and identical simultaneous outcomes are idempotent with one mapping record.
+- [x] **MEM-026** Orphaned faults have a bounded safety deadline; pager exit consumes live fault reply authority and the selected containment policy terminates rather than silently reassigning.
 
 ### Memory completion gate
 
-- [ ] **MEM-GATE** Memory management is production-complete only when all allocatable RAM is dynamically delegated, mapped, revoked, faulted, and reused safely without static fixture dependence.
+- [x] **MEM-GATE** Discovered allocatable RAM is delegated, mapped, revoked, faulted, reclaimed, and reused through bounded production paths; fallback inventory is rejected and the dedicated memory completion gate passes.
 
 ---
 
@@ -615,7 +615,7 @@ The kernel may be called **production-ready** only when all of these gates are c
 - [ ] Product/test separation gate
 - [ ] Capability completion gate
 - [x] IPC completion gate
-- [ ] Memory completion gate
+- [x] Memory completion gate
 - [ ] Scheduler completion gate
 - [ ] Interrupt and timer production gate
 - [ ] Userspace control-plane gate

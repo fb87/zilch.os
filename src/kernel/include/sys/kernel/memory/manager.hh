@@ -44,6 +44,7 @@ namespace sys::kernel::memory
     inline volatile u32 mapping_lock{};
     inline u32 next_mapping_generation{1U};
     inline uintptr_t firmware_data{};
+    inline error_t firmware_inventory_result{error_t::not_found};
 
     enum class inventory_source : u8 {
         firmware_register = 0U,
@@ -265,19 +266,23 @@ namespace sys::kernel::memory
         boot::fdt::inventory inventory{};
         physical_inventory_source = inventory_source::firmware_register;
         error_t parse_result = boot::fdt::parse(firmware_data, inventory);
+        firmware_inventory_result = parse_result;
 #if defined(__aarch64__)
-        if (parse_result != error_t::success &&
-            firmware_data != static_cast<uintptr_t>(platform::memory::ram_base)) {
-            // QEMU virt places its generated DTB at the start of RAM for the
-            // raw -kernel boot path, even when x0 is not preserved by a
-            // particular loader configuration. Probe that conventional
-            // location before using the explicit platform fallback.
-            parse_result =
-                boot::fdt::parse(static_cast<uintptr_t>(platform::memory::ram_base), inventory);
-            if (parse_result == error_t::success)
-                physical_inventory_source = inventory_source::platform_probe;
+        if (parse_result != error_t::success) {
+            constexpr paddr_t probes[]{platform::memory::ram_base,
+                                       platform::memory::firmware_dtb_probe};
+            for (paddr_t probe : probes) {
+                if (probe == firmware_data)
+                    continue;
+                parse_result = boot::fdt::parse(static_cast<uintptr_t>(probe), inventory);
+                if (parse_result == error_t::success) {
+                    physical_inventory_source = inventory_source::platform_probe;
+                    break;
+                }
+            }
         }
 #endif
+        firmware_inventory_result = parse_result;
         if (parse_result != error_t::success) {
             inventory.memory_count = 0U;
             inventory.reserved_count = 0U;

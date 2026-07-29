@@ -9,6 +9,7 @@ namespace sys::platform::memory
         static_cast<psize_t>(CONFIG_QEMU_RAM_MB) * 1024ULL * 1024ULL;
     inline constexpr paddr_t uart_base = 0x09000000ULL;
     inline constexpr psize_t uart_size = 0x1000ULL;
+    inline constexpr paddr_t firmware_dtb_probe = ram_base + 0x08000000ULL;
 
     [[nodiscard]] inline constexpr bool valid_device_page(paddr_t address) noexcept {
         return address == uart_base;

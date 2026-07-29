@@ -117,6 +117,9 @@ namespace sys::kernel
                         static_cast<unsigned int>(memory::free_pages),
                         static_cast<unsigned int>(memory::physical_region_count),
                         static_cast<unsigned long long>(memory::page_size), inventory_source);
+                pr_info("memory firmware=%llx parse=%d\n",
+                        static_cast<unsigned long long>(memory::firmware_data),
+                        static_cast<int>(memory::firmware_inventory_result));
             }
             if (user_result != error_t::success) {
                 pr_err("user object initialization failed=%d\n", static_cast<int>(user_result));

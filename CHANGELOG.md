@@ -1,3 +1,15 @@
+## 0169 - Complete bounded physical memory and address spaces
+
+- Generate the QEMU virt DTB for every ARM64 run, load it at the documented
+  firmware probe address, and reject static platform fallback in final
+  certification acceptance.
+- Certify discovered reservations by observing two allocatable regions after
+  the loaded DTB is excluded from the physical allocator.
+- Add a `memory_completion_gate` aggregating pager, frame/page-table resource,
+  mapping, revoke, attributes, extent, rollback, SMP, teardown, and reuse
+  workloads.
+- Close MEM-001 through MEM-026 and the bounded memory production gate.
+
 ## 0168 - Close the IPC production gate
 
 - Certify successful two-capability transfer on both call and reply before

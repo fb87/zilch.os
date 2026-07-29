@@ -43,6 +43,7 @@ namespace
         ipc_capability_batch = 26U,
         ipc_ool_frame_grant = 27U,
         ipc_completion_gate = 28U,
+        memory_completion_gate = 29U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -1113,6 +1114,11 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
             reused = stop_destroy_worker(1U);
     }
     record(ledger, test_id::object_destroy_reuse, destroyed && reused);
+    record(ledger, test_id::memory_completion_gate,
+           services.pager && services.memory_protocol && memory_lifecycle_pass &&
+               mapping_database_pass && authority_revoke_pass && attributes_pressure_pass &&
+               resource_delegation_pass && extent_retype_pass && extent_metadata_pass &&
+               pressure_rollback_pass && fuzz_pass && destroyed && reused);
 
     const bool pass = ledger.failure_count == 0U && ledger.transport_ok;
     (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,
