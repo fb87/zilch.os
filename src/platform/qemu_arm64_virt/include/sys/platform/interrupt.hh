@@ -14,6 +14,7 @@ namespace sys::platform::interrupt
     inline constexpr irq_id_t spurious_irq = 1023U;
     inline constexpr irq_id_t reschedule_ipi = 0U;
     inline constexpr irq_id_t tlb_shootdown_ipi = 1U;
+    inline constexpr irq_id_t virtual_gic_maintenance_irq = 25U;
     inline constexpr irq_id_t virtual_timer_irq = 27U;
     inline constexpr irq_id_t first_userspace_irq = 32U;
     inline constexpr irq_id_t last_userspace_irq = 1019U;
@@ -109,8 +110,8 @@ namespace sys::platform::interrupt
 
         const uintptr_t sgi = redistributor + sgi_base_offset;
         reg32(sgi + 0x0080U) = 0xffffffffU;
-        reg32(sgi + 0x0100U) =
-            (1U << reschedule_ipi) | (1U << tlb_shootdown_ipi) | (1U << virtual_timer_irq);
+        reg32(sgi + 0x0100U) = (1U << reschedule_ipi) | (1U << tlb_shootdown_ipi) |
+                               (1U << virtual_gic_maintenance_irq) | (1U << virtual_timer_irq);
         __asm__ volatile("dsb sy" ::: "memory");
 
         u64 value = 1U;

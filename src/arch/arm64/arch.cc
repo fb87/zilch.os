@@ -44,6 +44,8 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             const sys::kernel::interrupt::timing::latency_scope preemption_latency{
                 sys::kernel::interrupt::timing::latency_kind::preemption_service};
             const sys::u64 ticks = sys::platform::timer::handle_interrupt();
+            sys::kernel::hypervisor::poll_virtual_timers(sys::arch::cpu::current_id(),
+                                                         sys::arch::timer::counter());
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
                     sys::kernel::thread::schedule_user(*frame);
@@ -57,9 +59,14 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                 pr_info("timer interrupt active cpu=%u\n",
                         static_cast<unsigned int>(sys::arch::cpu::current_id()));
             }
+        } else if (irq == sys::platform::interrupt::virtual_gic_maintenance_irq) {
+            (void)sys::arch::hypervisor::virtual_gic_maintenance_status();
         } else if (irq == sys::platform::interrupt::reschedule_ipi) {
             sys::kernel::interrupt::timing::complete_cross_cpu_wake(sys::arch::cpu::current_id());
             sys::arch::smp::record_reschedule_ipi();
+#if CONFIG_HYPERVISOR_SELFTEST
+            sys::kernel::hypervisor::test::service_real_smp_job(sys::arch::cpu::current_id());
+#endif
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
                     sys::kernel::thread::schedule_user(*frame);
@@ -79,8 +86,9 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             irq == sys::platform::interrupt::reschedule_ipi) {
             const sys::cpu_id_t cpu = sys::arch::cpu::current_id();
             const sys::u64 now = sys::platform::timer::ticks(cpu);
+            const sys::u64 thread_deadline = sys::kernel::thread::next_timer_deadline(cpu, now);
             sys::platform::timer::program_deadline(
-                cpu, sys::kernel::thread::next_timer_deadline(cpu, now));
+                cpu, sys::kernel::hypervisor::next_virtual_timer_deadline(cpu, thread_deadline));
         }
         if (irq < 1020U) {
             sys::platform::interrupt::complete(irq);

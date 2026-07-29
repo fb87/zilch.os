@@ -7,6 +7,28 @@ namespace sys::arch::hypervisor
     inline constexpr bool available = true;
     inline constexpr bool active = false;
 
+    [[nodiscard]] inline constexpr u64 sanitize_guest_pstate(u64 value) noexcept {
+        return value;
+    }
+    [[nodiscard]] inline constexpr u64 sanitize_guest_sctlr_el1(u64 value) noexcept {
+        return value;
+    }
+    [[nodiscard]] inline constexpr u64 sanitize_guest_tcr_el1(u64 value) noexcept {
+        return value;
+    }
+    [[nodiscard]] inline constexpr u64 sanitize_guest_cpacr_el1(u64 value) noexcept {
+        return value;
+    }
+    [[nodiscard]] inline constexpr u64 sanitize_guest_cntkctl_el1(u64 value) noexcept {
+        return value;
+    }
+    [[nodiscard]] inline bool virtual_gic_hardware_available() noexcept {
+        return false;
+    }
+    [[nodiscard]] inline bool consume_virtual_irq_acknowledgement() noexcept {
+        return false;
+    }
+
     [[nodiscard]] inline error_t initialize() noexcept {
         return error_t::unsupported;
     }

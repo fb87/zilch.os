@@ -14,5 +14,6 @@ the guest leaves.
 - Architecture-specific EL2 execution remains under `src/arch/*`.
 - Userspace guest binaries remain under `src/user/guests/`.
 - Bounded verification models remain under `tests/`.
-- Expiry is currently evaluated when the vCPU enters. Waking a descheduled
-  vCPU exactly at its virtual deadline remains scheduler work.
+- Dynamic vCPU deadlines participate in per-CPU host deadline programming.
+  Timer interrupt polling queues a single virtual event and transitions a
+  blocked vCPU back to runnable before its next entry.

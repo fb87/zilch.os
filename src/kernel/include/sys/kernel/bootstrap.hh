@@ -15,24 +15,32 @@ namespace sys::kernel::bootstrap
 
     [[nodiscard]] inline error_t initialize_objects() noexcept {
         error_t result = memory::initialize_objects();
-        if (result != error_t::success)
+        if (result != error_t::success) {
+            pr_err("bootstrap memory objects failed=%d\n", static_cast<int>(result));
             return result;
+        }
         notification::initialize(root_notification);
         result =
             object::register_object(root_notification.object, object::bootstrap_id::notification,
                                     object::type_t::notification);
-        if (result != error_t::success)
+        if (result != error_t::success) {
+            pr_err("bootstrap notification failed=%d\n", static_cast<int>(result));
             return result;
+        }
         interrupt::initialize(root_timer_interrupt, 27U);
         root_timer_interrupt.notification = object::reference(root_notification.object);
         result = object::register_object(root_timer_interrupt.object,
                                          object::bootstrap_id::timer_interrupt,
                                          object::type_t::interrupt);
-        if (result != error_t::success)
+        if (result != error_t::success) {
+            pr_err("bootstrap interrupt failed=%d\n", static_cast<int>(result));
             return result;
+        }
         result = hypervisor::initialize();
         if (result == error_t::unsupported)
             return error_t::success;
+        if (result != error_t::success)
+            pr_err("bootstrap hypervisor failed=%d\n", static_cast<int>(result));
         return result;
     }
 } // namespace sys::kernel::bootstrap

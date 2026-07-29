@@ -13,16 +13,18 @@ USER_COMMON_SOURCES := \
     src/user/lib/libsys/syscall.cc \
     src/user/lib/libruntime/runtime.cc \
     src/user/runtime/startup/process_entry.cc
-USER_PROGRAMS := init memory-server pager-client memory-client
+USER_PROGRAMS := init memory-server pager-client memory-client control-plane
 USER_init_SOURCE := src/user/init/main.cc
 USER_memory-server_SOURCE := src/user/servers/memory/main.cc
 USER_pager-client_SOURCE := src/user/tests/pager_client/main.cc
 USER_memory-client_SOURCE := src/user/tests/memory_client/main.cc
+USER_control-plane_SOURCE := src/user/servers/control_plane/main.cc
 USER_ELF := $(USER_OBJDIR)/init.elf
 USER_BIN := $(USER_OBJDIR)/init.bin
 MEMORY_SERVER_BIN := $(USER_OBJDIR)/memory-server.bin
 PAGER_CLIENT_BIN := $(USER_OBJDIR)/pager-client.bin
 MEMORY_CLIENT_BIN := $(USER_OBJDIR)/memory-client.bin
+CONTROL_PLANE_BIN := $(USER_OBJDIR)/control-plane.bin
 USER_PROGRAM_ELFS := $(addprefix $(USER_OBJDIR)/,$(addsuffix .elf,$(USER_PROGRAMS)))
 USER_PROGRAM_BINS := $(USER_PROGRAM_ELFS:.elf=.bin)
 USER_COMMON_OBJECTS := $(addprefix $(USER_OBJDIR)/common/,$(USER_COMMON_SOURCES:.cc=.o))
@@ -63,6 +65,10 @@ $(USER_OBJDIR)/pager-client/%.o: $(SRCTREE)/%.cc
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 $(USER_OBJDIR)/memory-client/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/control-plane/%.o: $(SRCTREE)/%.cc
 	@mkdir -p $(dir $@)
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

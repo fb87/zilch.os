@@ -14,6 +14,7 @@ mkdir -p "$profiles"
   -fsanitize=address,undefined -fno-sanitize-recover=all \
   -fprofile-instr-generate -fcoverage-mapping \
   -I"$root/include" -I"$root/include/abi" \
+  -I"$root/src/user/include" \
   -I"$root/src/kernel/include" -I"$root/src/arch/amd64/include" \
   "$root/tests/host/kernel_logic.cc" -o "$binary"
 
@@ -30,6 +31,7 @@ if command -v clang-tidy >/dev/null 2>&1; then
   clang-tidy --checks='-*,clang-analyzer-*' --warnings-as-errors='clang-analyzer-*' \
     "$root/tests/host/kernel_logic.cc" -- \
     -std=c++20 -I"$root/include" -I"$root/include/abi" \
+    -I"$root/src/user/include" \
     -I"$root/src/kernel/include" -I"$root/src/arch/amd64/include"
 fi
 echo "Host kernel logic ASan/UBSan/property/coverage: PASS"

@@ -262,7 +262,8 @@ namespace sys::kernel::syscall
                     break;
                 }
                 (void)memory::unmap_authority(source_slot.derivation, true);
-                (void)capability::revoke_descendants_locked(source_slot.derivation);
+                const u32 revoked = capability::revoke_descendants_locked(source_slot.derivation);
+                (void)revoked;
                 authority_result = error_t::success;
                 break;
             }
@@ -396,6 +397,36 @@ namespace sys::kernel::syscall
                         break;
                     case 34U:
                         name = "kernel_core_1_0_gate";
+                        break;
+                    case 35U:
+                        name = "userspace_control_plane_graph";
+                        break;
+                    case 36U:
+                        name = "hypervisor_dynamic_lifecycle";
+                        break;
+                    case 37U:
+                        name = "hypervisor_vm_create";
+                        break;
+                    case 38U:
+                        name = "hypervisor_vcpu_create";
+                        break;
+                    case 39U:
+                        name = "hypervisor_vm_parent_busy";
+                        break;
+                    case 40U:
+                        name = "hypervisor_vcpu_destroy";
+                        break;
+                    case 41U:
+                        name = "hypervisor_vcpu_stale";
+                        break;
+                    case 42U:
+                        name = "hypervisor_vm_destroy";
+                        break;
+                    case 43U:
+                        name = "hypervisor_vm_stale";
+                        break;
+                    case 44U:
+                        name = "hypervisor_vm_reuse";
                         break;
                     default:
                         break;
@@ -638,7 +669,7 @@ namespace sys::kernel::syscall
                 if (current.owner == nullptr || !current.owner->root)
                     set_control_result(frame, error_t::denied);
                 else
-                    set_control_result(frame, hypervisor::test::run_all());
+                    set_control_result(frame, hypervisor::test::run_runtime_acceptance());
 #else
                 set_control_result(frame, error_t::unsupported);
 #endif
@@ -1154,20 +1185,58 @@ namespace sys::kernel::syscall
                         break;
                     case abi::v1::hypervisor_operation::stage2_map:
                         result = resolve_vm(current, a2, capability::right_t::control, vm);
-                        if (result == error_t::success)
-                            result = hypervisor::stage2_map(*vm, a3, a4, hypervisor::page_size,
-                                                            static_cast<u32>(a5));
+                        if (result == error_t::success) {
+                            memory::frame* source = nullptr;
+                            result = resolve_frame(current, static_cast<capability_id_t>(a4),
+                                                   capability::right_t::read, source);
+                            if (result == error_t::success) {
+                                constexpr u32 device =
+                                    static_cast<u32>(hypervisor::stage2_permission::device);
+                                const bool requests_device = (static_cast<u32>(a5) & device) != 0U;
+                                if (source->device != requests_device)
+                                    result = error_t::denied;
+                                else
+                                    result = hypervisor::stage2_map(
+                                        *vm, a3, source->physical_address, hypervisor::page_size,
+                                        static_cast<u32>(a5));
+                            }
+                        }
                         break;
                     case abi::v1::hypervisor_operation::stage2_unmap:
                         result = resolve_vm(current, a2, capability::right_t::control, vm);
                         if (result == error_t::success)
                             result = hypervisor::stage2_unmap(*vm, a3);
                         break;
+                    case abi::v1::hypervisor_operation::stage2_tracking_query:
+                    case abi::v1::hypervisor_operation::stage2_tracking_clear: {
+                        result = resolve_vm(current, a2, capability::right_t::read, vm);
+                        u64 flags{};
+                        if (result == error_t::success)
+                            result = hypervisor::stage2_tracking(
+                                *vm, a3,
+                                hv_operation ==
+                                    abi::v1::hypervisor_operation::stage2_tracking_clear,
+                                flags);
+                        frame.x[1] = flags;
+                        break;
+                    }
                     case abi::v1::hypervisor_operation::vcpu_configure:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
                         if (result == error_t::success)
                             result = hypervisor::configure_vcpu(*vcpu, a3, a4, a5);
                         break;
+                    case abi::v1::hypervisor_operation::vcpu_state_read:
+                    case abi::v1::hypervisor_operation::vcpu_state_write: {
+                        result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                        u64 value = a4;
+                        if (result == error_t::success)
+                            result = hypervisor::vcpu_state_access(
+                                *vcpu, static_cast<u32>(a3),
+                                hv_operation == abi::v1::hypervisor_operation::vcpu_state_write,
+                                value);
+                        frame.x[1] = value;
+                        break;
+                    }
                     case abi::v1::hypervisor_operation::virtual_irq_inject:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
                         if (result == error_t::success)
@@ -1175,14 +1244,70 @@ namespace sys::kernel::syscall
                         break;
                     case abi::v1::hypervisor_operation::vcpu_suspend:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
-                        if (result == error_t::success) {
-                            if (vcpu->running)
-                                result = error_t::busy;
-                            else {
-                                vcpu->state = hypervisor::vm_state::stopped;
-                                result = error_t::success;
-                            }
+                        if (result == error_t::success)
+                            result = hypervisor::pause_vcpu(*vcpu);
+                        break;
+                    case abi::v1::hypervisor_operation::vcpu_resume:
+                        result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                        if (result == error_t::success)
+                            result = hypervisor::resume_vcpu(*vcpu);
+                        break;
+                    case abi::v1::hypervisor_operation::vcpu_stop:
+                        result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                        if (result == error_t::success)
+                            result = hypervisor::stop_vcpu(*vcpu);
+                        break;
+                    case abi::v1::hypervisor_operation::vm_create: {
+                        if (current.owner == nullptr) {
+                            result = error_t::denied;
+                            break;
                         }
+                        result = hypervisor::create_vm(a3, vm);
+                        if (result != error_t::success)
+                            break;
+                        const capability::rights_t rights{
+                            static_cast<u32>(capability::right_t::read) |
+                            static_cast<u32>(capability::right_t::write) |
+                            static_cast<u32>(capability::right_t::grant) |
+                            static_cast<u32>(capability::right_t::control)};
+                        result = capability::install(current.owner->cspace,
+                                                     static_cast<capability_id_t>(a2),
+                                                     object::reference(vm->object), rights);
+                        if (result != error_t::success)
+                            (void)hypervisor::destroy_vm(*vm);
+                        break;
+                    }
+                    case abi::v1::hypervisor_operation::vcpu_create: {
+                        if (current.owner == nullptr) {
+                            result = error_t::denied;
+                            break;
+                        }
+                        result = resolve_vm(current, a2, capability::right_t::control, vm);
+                        if (result == error_t::success)
+                            result = hypervisor::create_vcpu(*vm, static_cast<u32>(a4), vcpu);
+                        if (result != error_t::success)
+                            break;
+                        const capability::rights_t rights{
+                            static_cast<u32>(capability::right_t::read) |
+                            static_cast<u32>(capability::right_t::write) |
+                            static_cast<u32>(capability::right_t::execute) |
+                            static_cast<u32>(capability::right_t::control)};
+                        result = capability::install(current.owner->cspace,
+                                                     static_cast<capability_id_t>(a3),
+                                                     object::reference(vcpu->object), rights);
+                        if (result != error_t::success)
+                            (void)hypervisor::destroy_vcpu(*vcpu);
+                        break;
+                    }
+                    case abi::v1::hypervisor_operation::vcpu_destroy:
+                        result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
+                        if (result == error_t::success)
+                            result = hypervisor::destroy_vcpu(*vcpu);
+                        break;
+                    case abi::v1::hypervisor_operation::vm_destroy:
+                        result = resolve_vm(current, a2, capability::right_t::control, vm);
+                        if (result == error_t::success)
+                            result = hypervisor::destroy_vm(*vm);
                         break;
                     case abi::v1::hypervisor_operation::vcpu_run: {
                         result = resolve_vcpu(current, a2, capability::right_t::execute, vcpu);
@@ -1193,6 +1318,7 @@ namespace sys::kernel::syscall
                             frame.x[2] = exit.syndrome;
                             frame.x[3] = exit.fault_address;
                             frame.x[4] = exit.guest_pc;
+                            frame.x[5] = exit.qualification;
                         }
                         break;
                     }

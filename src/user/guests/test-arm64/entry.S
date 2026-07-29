@@ -42,6 +42,10 @@
 .endm
 
 sys_arm64_guest_image_start:
+    movz x18, #0x534d
+    movk x18, #0x5054, lsl #16
+    cmp x19, x18
+    b.eq guest_smp_entry
     /* Earliest possible progress marker: MMU off, vectors not installed. */
     guest_putc '>'
     b guest_main
@@ -85,6 +89,10 @@ guest_current_sync:
 
 /* HCR_EL2.VI injects a virtual IRQ directly into this vector. */
 guest_current_irq:
+    movz x18, #0x534d
+    movk x18, #0x5054, lsl #16
+    cmp x19, x18
+    b.eq guest_smp_irq
     mov x0, #GUEST_HVC_IRQ_ACK
     hvc #0
     guest_report REPORT_TIMER
@@ -349,6 +357,73 @@ guest_stage1_enabled:
     msr elr_el1, x0
     mov x0, #0
     msr spsr_el1, x0
+    eret
+
+/*
+ * Real SMP certification stream.  x19 contains "SMPT", x20 is the vCPU ID,
+ * and x22 is the number of participants in this VM.  All synchronization and
+ * interrupt accounting below is performed by guest instructions in shared
+ * guest RAM.
+ */
+.org 0x3000
+guest_smp_entry:
+    mov sp, #GUEST_EL1_STACK
+    mov x0, #0x800
+    msr vbar_el1, x0
+    isb
+
+    mov x2, #0x5000
+1:
+    ldaxr w3, [x2]
+    add w3, w3, #1
+    stlxr w4, w3, [x2]
+    cbnz w4, 1b
+2:
+    ldar w3, [x2]
+    cmp w3, w22
+    b.lo 2b
+
+    mov x0, #GUEST_HVC_REPORT
+    mov x1, #1
+    lsl x1, x1, x20
+    hvc #0
+
+    /* First WFI is a bounded host scheduling exit. */
+    wfi
+
+    /* The resumed stream accepts one host-injected virtual interrupt. */
+    msr daifclr, #2
+    isb
+    wfi
+
+guest_smp_after_irq:
+    mov x0, #GUEST_HVC_REPORT
+    mov x1, #0x100
+    lsl x1, x1, x20
+    hvc #0
+    mov x0, #GUEST_HVC_SHUTDOWN
+    hvc #0
+4:
+    wfe
+    b 4b
+
+/*
+ * Current-EL IRQ slot is VBAR + 0x280.  Acknowledge the virtual source,
+ * increment a shared guest counter, and skip the interrupted WFI.
+ */
+.org 0x3280
+guest_smp_irq:
+    mov x0, #GUEST_HVC_IRQ_ACK
+    hvc #0
+    mov x2, #0x5008
+5:
+    ldaxr w3, [x2]
+    add w3, w3, #1
+    stlxr w4, w3, [x2]
+    cbnz w4, 5b
+    mrs x5, elr_el1
+    add x5, x5, #4
+    msr elr_el1, x5
     eret
 
 .org 0x4000

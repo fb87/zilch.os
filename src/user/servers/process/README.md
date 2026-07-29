@@ -1,4 +1,5 @@
-# process
+# Process service
 
-Reserved for the corresponding userspace component. It must communicate through
-the versioned native ABI and capability-protected IPC.
+Role `0x200` owns process-image and lifecycle policy. The current vertical slice
+validates its bounded quota/restart policy and participates in the real PL3
+service graph. Path-based ELF loading and crash-report IPC remain open.

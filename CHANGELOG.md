@@ -1,3 +1,10 @@
+## 0182 - Complete the Hypervisor core
+
+- Add allocator-backed executable dynamic stage-2 hierarchies, access/dirty tracking, and race-safe VM transactions.
+- Add complete bounded vCPU state access, sanitization, virtual-GIC hardware/fallback state, maintenance handling, timers, MMIO exits, and system-register emulation.
+- Add a production userspace VMM orchestration layer.
+- Replace modeled completion evidence with real four-CPU/four-vCPU and concurrent two-VM EL2 certification.
+
 ## 0175 - Add portable host verification
 
 - Build real capability and scheduling headers into a native host test.
@@ -790,3 +797,50 @@
 - Extended `thread_exit` with optional notification selector and badge arguments.
 - Memory pressure clients now publish completion and terminate in one kernel transition.
 - Retained teardown diagnostics now include the exact returned error code.
+
+## 0176 - Userspace control-plane graph
+
+- Replace the inert production root task with a five-role PL3 management graph.
+- Add stable process, device, console, domain, and supervisor role identifiers.
+- Keep dependency, quota, privilege, and restart policy in userspace.
+- Add readiness/failure health signaling and retained root lifecycle authority.
+- Certify independent ELF loading, four-CPU execution, and complete graph teardown.
+
+## 0177 - Production memory-service integration
+
+- Launch the independently linked memory server as part of the production graph.
+- Add a persistent production allocation/query/release/grant request loop.
+- Require a distinct memory-service readiness bit before root considers the graph healthy.
+- Preserve certification pager/pressure policy behind the self-test boundary.
+- Reclaim resource-backed frames when reply capability transfer fails.
+
+## 0178 - Capability-isolated control-plane health IPC
+
+- Create and delegate a private endpoint for each core PL3 service.
+- Add stable health and policy-description operations to the userspace ABI.
+- Continuously probe every service from production root after readiness.
+- Move graph selectors away from bootstrap VM/vCPU capability slots.
+- Certify health RPC, task teardown, endpoint destruction, and final invariants.
+
+## 0179 - Controlled service restart
+
+- Add orderly stop and role-specific atomic exit notifications.
+- Enforce bounded per-role restart admission in userspace policy.
+- Certify process-bundle teardown and recreation on the existing private endpoint.
+- Require replacement readiness, health RPC, and final lifecycle invariants.
+
+## 0180 - Hypervisor userspace exit and mapping ABI
+
+- Return reason, ESR, FAR, guest PC, and qualification from `vcpu_run`.
+- Expose pause, resume, and stop through the production lifecycle state machine.
+- Replace raw host-address stage-2 mapping with frame-capability authorization.
+- Validate supported normal/device permissions and reject invalid combinations.
+- Freeze the userspace exit result at six machine words.
+
+## 0181 - Dynamic hypervisor objects
+
+- Add capability-authorized bounded VM and vCPU create/destroy operations.
+- Allocate a VMID generation and dedicated stage-2 root per dynamic VM.
+- Track parent vCPU counts and reject destruction while children remain.
+- Revoke authority, unregister generations, scrub state, and safely reuse slots.
+- Add eight independently reported PL3 lifecycle and stale-capability checks.

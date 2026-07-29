@@ -162,6 +162,247 @@ namespace sys::kernel::hypervisor::test
     inline virtual_machine_t model_multivcpu_vm_b{};
     inline virtual_cpu_t model_multivcpu_vcpus_a[maximum_vcpus_per_vm]{};
     inline virtual_cpu_t model_multivcpu_vcpus_b[2]{};
+    inline virtual_cpu_t real_smp_vcpus[maximum_vcpus_per_vm]{};
+    inline virtual_cpu_t* real_smp_job_vcpus[maximum_vcpus_per_vm]{};
+    inline exit_record real_smp_exits[maximum_vcpus_per_vm]{};
+    inline error_t real_smp_status[maximum_vcpus_per_vm]{};
+    inline u32 real_smp_vcpu_for_cpu[maximum_vcpus_per_vm]{};
+    inline volatile u32 real_smp_claimed_mask{};
+    inline volatile u32 real_smp_done_mask{};
+    inline volatile bool real_smp_active{};
+
+    inline void service_real_smp_job(cpu_id_t cpu) noexcept {
+        if (!__atomic_load_n(&real_smp_active, __ATOMIC_ACQUIRE) || cpu >= maximum_vcpus_per_vm)
+            return;
+        const u32 bit = 1U << cpu;
+        if ((__atomic_fetch_or(&real_smp_claimed_mask, bit, __ATOMIC_ACQ_REL) & bit) != 0U)
+            return;
+        const u32 vcpu_index = real_smp_vcpu_for_cpu[cpu];
+        real_smp_exits[vcpu_index] = {};
+        auto* vcpu = real_smp_job_vcpus[vcpu_index];
+        real_smp_status[vcpu_index] =
+            vcpu == nullptr ? error_t::success : run(*vcpu, real_smp_exits[vcpu_index]);
+        __atomic_fetch_or(&real_smp_done_mask, bit, __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline bool dispatch_real_smp_phase(bool migrate) noexcept {
+        __atomic_store_n(&real_smp_claimed_mask, 0U, __ATOMIC_RELEASE);
+        __atomic_store_n(&real_smp_done_mask, 0U, __ATOMIC_RELEASE);
+        for (u32 cpu = 0U; cpu < maximum_vcpus_per_vm; ++cpu)
+            real_smp_vcpu_for_cpu[cpu] =
+                migrate ? (cpu + maximum_vcpus_per_vm - 1U) % maximum_vcpus_per_vm : cpu;
+        __atomic_store_n(&real_smp_active, true, __ATOMIC_RELEASE);
+        for (cpu_id_t cpu = 1U; cpu < maximum_vcpus_per_vm; ++cpu)
+            platform::interrupt::send_ipi(cpu, platform::interrupt::reschedule_ipi);
+        service_real_smp_job(0U);
+        constexpr u32 all_cpus = (1U << maximum_vcpus_per_vm) - 1U;
+        u32 spins = 0U;
+        while (__atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE) != all_cpus &&
+               spins++ < 100000000U)
+            arch::cpu::relax();
+        __atomic_store_n(&real_smp_active, false, __ATOMIC_RELEASE);
+        return __atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE) == all_cpus;
+    }
+
+    [[nodiscard]] inline bool real_smp_acceptance() noexcept {
+        if (prepare_bootstrap_guest() != error_t::success)
+            return false;
+        *reinterpret_cast<volatile u32*>(&guest_ram[0x5000]) = 0U;
+        *reinterpret_cast<volatile u32*>(&guest_ram[0x5008]) = 0U;
+        constexpr u64 smp_magic = 0x5054534dULL;
+        constexpr u64 guest_reset_pstate = 0x3c5U;
+        for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index) {
+            auto& vcpu = real_smp_vcpus[index];
+            scrub_bytes(&vcpu, sizeof(vcpu));
+            vcpu.id = 0x100U + index;
+            vcpu.logical_id = index;
+            vcpu.virtual_machine = object::reference(bootstrap_vm.object);
+            vcpu.state = vm_state::configured;
+            vcpu.lifecycle = vcpu_state::configured;
+            if (configure_vcpu(vcpu, 0U, guest_reset_pstate,
+                               0xf000U - static_cast<u64>(index) * 0x1000U) != error_t::success)
+                return false;
+            vcpu.context.x[19] = smp_magic;
+            vcpu.context.x[20] = index;
+            vcpu.context.x[22] = maximum_vcpus_per_vm;
+            vcpu.context.sctlr_el1 = arch::hypervisor::sanitize_guest_sctlr_el1(0U);
+            real_smp_job_vcpus[index] = &vcpu;
+        }
+        if (!dispatch_real_smp_phase(false)) {
+            pr_err("[HV-REAL-SMP] phase=entry done=%x result=FAIL\n",
+                   __atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE));
+            return false;
+        }
+        for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index) {
+            if (real_smp_status[index] != error_t::success ||
+                real_smp_exits[index].reason != abi::v1::vm_exit_reason::wait) {
+                pr_err(
+                    "[HV-REAL-SMP] phase=entry vcpu=%u status=%d reason=%u pc=%llx result=FAIL\n",
+                    index, static_cast<int>(real_smp_status[index]),
+                    static_cast<unsigned int>(real_smp_exits[index].reason),
+                    static_cast<unsigned long long>(real_smp_exits[index].guest_pc));
+                return false;
+            }
+            if (inject_irq(real_smp_vcpus[index], static_cast<u16>(index)) != error_t::success)
+                return false;
+        }
+        if (!dispatch_real_smp_phase(true)) {
+            pr_err("[HV-REAL-SMP] phase=migrate done=%x result=FAIL\n",
+                   __atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE));
+            return false;
+        }
+        bool interrupt_boundary_exit = true;
+        for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index)
+            interrupt_boundary_exit = interrupt_boundary_exit &&
+                                      real_smp_exits[index].reason == abi::v1::vm_exit_reason::wait;
+        if (interrupt_boundary_exit && !dispatch_real_smp_phase(false)) {
+            pr_err("[HV-REAL-SMP] phase=interrupt-reentry done=%x result=FAIL\n",
+                   __atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE));
+            return false;
+        }
+        u32 migrated = 0U;
+        for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index) {
+            const u64 reports = 0x100ULL << index;
+            if (real_smp_status[index] != error_t::success ||
+                real_smp_exits[index].reason != abi::v1::vm_exit_reason::shutdown ||
+                (real_smp_exits[index].qualification & reports) != reports) {
+                pr_err("[HV-REAL-SMP] phase=migrate vcpu=%u status=%d reason=%u reports=%llx "
+                       "required=%llx pc=%llx result=FAIL\n",
+                       index, static_cast<int>(real_smp_status[index]),
+                       static_cast<unsigned int>(real_smp_exits[index].reason),
+                       static_cast<unsigned long long>(real_smp_exits[index].qualification),
+                       static_cast<unsigned long long>(reports),
+                       static_cast<unsigned long long>(real_smp_exits[index].guest_pc));
+                return false;
+            }
+            if (real_smp_vcpus[index].migration_count != 0U)
+                ++migrated;
+        }
+        const u32 barrier = *reinterpret_cast<volatile u32*>(&guest_ram[0x5000]);
+        const u32 irqs = *reinterpret_cast<volatile u32*>(&guest_ram[0x5008]);
+        if (barrier != maximum_vcpus_per_vm || irqs != maximum_vcpus_per_vm ||
+            migrated != maximum_vcpus_per_vm) {
+            pr_err("[HV-REAL-SMP] barrier=%u irqs=%u migrations=%u result=FAIL\n", barrier, irqs,
+                   migrated);
+            return false;
+        }
+        pr_info("[HV-REAL-SMP] physical-cpus=4 guest-streams=4 barrier=%u irqs=%u "
+                "migrations=%u result=PASS\n",
+                barrier, irqs, migrated);
+        pr_info("[TEST] name=hypervisor_real_smp_execution result=PASS\n");
+        return true;
+    }
+
+    alignas(page_size) inline u8 real_multivm_ram[2][guest_ram_size]{};
+
+    [[nodiscard]] inline bool prepare_real_vm(virtual_machine_t*& vm, virtual_cpu_t*& first,
+                                              virtual_cpu_t*& second, u32 tag) noexcept {
+        if (create_vm(0x2000U * (tag + 1U), vm) != error_t::success)
+            return false;
+        const u64 image_size =
+            static_cast<u64>(sys_arm64_guest_image_end - sys_arm64_guest_image_start);
+        for (u64 offset = 0U; offset < guest_ram_size; ++offset)
+            real_multivm_ram[tag][offset] = 0U;
+        for (u64 offset = 0U; offset < image_size; ++offset)
+            real_multivm_ram[tag][offset] = sys_arm64_guest_image_start[offset];
+        const paddr_t ram = reinterpret_cast<paddr_t>(&real_multivm_ram[tag][0]);
+        if (stage2_map(*vm, 0U, ram, 4U * page_size,
+                       static_cast<u32>(stage2_permission::read) |
+                           static_cast<u32>(stage2_permission::execute)) != error_t::success ||
+            stage2_map(*vm, 4U * page_size, ram + 4U * page_size, guest_ram_size - 4U * page_size,
+                       static_cast<u32>(stage2_permission::read) |
+                           static_cast<u32>(stage2_permission::write)) != error_t::success)
+            return false;
+        if (create_vcpu(*vm, 0U, first) != error_t::success ||
+            create_vcpu(*vm, 1U, second) != error_t::success)
+            return false;
+        virtual_cpu_t* pair[2]{first, second};
+        constexpr u64 smp_magic = 0x5054534dULL;
+        for (u32 index = 0U; index < 2U; ++index) {
+            if (configure_vcpu(*pair[index], 0U, 0x3c5U,
+                               0xf000U - static_cast<u64>(index) * 0x1000U) != error_t::success)
+                return false;
+            pair[index]->context.x[19] = smp_magic;
+            pair[index]->context.x[20] = index;
+            pair[index]->context.x[22] = 2U;
+        }
+        for (u64 offset = 0U; offset < image_size; offset += 64U) {
+            const paddr_t address = ram + offset;
+            __asm__ volatile("dc cvau, %0" ::"r"(address) : "memory");
+        }
+        __asm__ volatile("dsb ish; ic iallu; dsb ish; isb" ::: "memory");
+        return true;
+    }
+
+    inline void cleanup_real_vm(virtual_machine_t* vm, virtual_cpu_t* first,
+                                virtual_cpu_t* second) noexcept {
+        if (first != nullptr)
+            (void)destroy_vcpu(*first);
+        if (second != nullptr)
+            (void)destroy_vcpu(*second);
+        if (vm != nullptr) {
+            (void)stage2_unmap(*vm, 0U);
+            (void)stage2_unmap(*vm, 4U * page_size);
+            (void)destroy_vm(*vm);
+        }
+    }
+
+    [[nodiscard]] inline bool real_multivm_acceptance() noexcept {
+        virtual_machine_t* vm_a = nullptr;
+        virtual_machine_t* vm_b = nullptr;
+        virtual_cpu_t* a0 = nullptr;
+        virtual_cpu_t* a1 = nullptr;
+        virtual_cpu_t* b0 = nullptr;
+        virtual_cpu_t* b1 = nullptr;
+        if (!prepare_real_vm(vm_a, a0, a1, 0U) || !prepare_real_vm(vm_b, b0, b1, 1U)) {
+            cleanup_real_vm(vm_a, a0, a1);
+            cleanup_real_vm(vm_b, b0, b1);
+            return false;
+        }
+        real_smp_job_vcpus[0] = a0;
+        real_smp_job_vcpus[1] = a1;
+        real_smp_job_vcpus[2] = b0;
+        real_smp_job_vcpus[3] = b1;
+        if (!dispatch_real_smp_phase(false)) {
+            cleanup_real_vm(vm_a, a0, a1);
+            cleanup_real_vm(vm_b, b0, b1);
+            return false;
+        }
+        bool passed = true;
+        for (u32 index = 0U; index < 4U; ++index)
+            passed = passed && real_smp_status[index] == error_t::success &&
+                     real_smp_exits[index].reason == abi::v1::vm_exit_reason::wait;
+        const u32 barrier_a = *reinterpret_cast<volatile u32*>(&real_multivm_ram[0][0x5000]);
+        const u32 barrier_b = *reinterpret_cast<volatile u32*>(&real_multivm_ram[1][0x5000]);
+        passed = passed && barrier_a == 2U && barrier_b == 2U && mappings_isolated(*vm_a, *vm_b);
+
+        /* Crash one VM through an unmapped IPA and prove the peer remains runnable. */
+        a0->context.pc = guest_ipa_limit - page_size;
+        a0->state = vm_state::runnable;
+        a0->lifecycle = vcpu_state::runnable;
+        exit_record crash{};
+        const error_t crash_status = run(*a0, crash);
+        passed = passed && crash_status == error_t::success &&
+                 (crash.reason == abi::v1::vm_exit_reason::stage2_fault ||
+                  crash.reason == abi::v1::vm_exit_reason::unexpected) &&
+                 b0->state == vm_state::runnable && b1->state == vm_state::runnable &&
+                 vm_b->state != vm_state::faulted;
+        a0->state = vm_state::stopped;
+        a0->lifecycle = vcpu_state::stopped;
+        cleanup_real_vm(vm_a, a0, a1);
+        cleanup_real_vm(vm_b, b0, b1);
+        for (u32 index = 0U; index < maximum_vcpus_per_vm; ++index)
+            real_smp_job_vcpus[index] = &real_smp_vcpus[index];
+        if (passed) {
+            pr_info("[HV-REAL-MULTIVM] vms=2 vcpus=4 barriers=2,2 crash-isolation=PASS "
+                    "result=PASS\n");
+            pr_info("[TEST] name=hypervisor_real_multivm_isolation result=PASS\n");
+        } else {
+            pr_err("[HV-REAL-MULTIVM] barrier-a=%u barrier-b=%u crash-reason=%u result=FAIL\n",
+                   barrier_a, barrier_b, static_cast<unsigned int>(crash.reason));
+        }
+        return passed;
+    }
 
     enum class guest_cpu_boot_state : u8 { off, starting, online, parked, halted };
 
@@ -747,6 +988,7 @@ namespace sys::kernel::hypervisor::test
             if (!condition) {
                 ++failures;
                 diagnose(vm, checkpoint, error_t::invalid_argument);
+                pr_err("[HV-CHECK] checkpoint=%u result=FAIL\n", checkpoint);
             }
         };
         virtual_timer_state timer{};
@@ -826,10 +1068,27 @@ namespace sys::kernel::hypervisor::test
                          diagnostic_kind::expected_error, error_t::denied,
                          "stage2_wx") == error_t::denied,
               13U);
+        check(!valid_stage2_permissions(0U) &&
+                  !valid_stage2_permissions(static_cast<u32>(stage2_permission::write)) &&
+                  !valid_stage2_permissions(static_cast<u32>(stage2_permission::read) |
+                                            static_cast<u32>(stage2_permission::device) |
+                                            static_cast<u32>(stage2_permission::execute)) &&
+                  !valid_stage2_permissions(1U << 31U) &&
+                  valid_stage2_permissions(static_cast<u32>(stage2_permission::read) |
+                                           static_cast<u32>(stage2_permission::device)),
+              122U);
         check(stage2_map(vm, 1U, 0x48001000U, page_size, static_cast<u32>(stage2_permission::read),
                          diagnostic_kind::expected_error, error_t::invalid_argument,
                          "stage2_unaligned") == error_t::invalid_argument,
               14U);
+        u64 tracking_flags{};
+        check(stage2_tracking(vm, 0U, false, tracking_flags) == error_t::success &&
+                  (tracking_flags & 1U) != 0U && (tracking_flags & 2U) == 0U,
+              125U);
+        check(stage2_tracking(vm, 0U, true, tracking_flags) == error_t::success &&
+                  stage2_tracking(vm, 0U, false, tracking_flags) == error_t::success &&
+                  (tracking_flags & 3U) == 0U,
+              126U);
         check(configure_vcpu(vcpu, 0U, 0x5U, 0x8000U) == error_t::success, 15U);
         check(inject_irq(vcpu, 27U) == error_t::success, 16U);
         check(stage2_unmap(vm, 0U) == error_t::success, 17U);
@@ -868,6 +1127,34 @@ namespace sys::kernel::hypervisor::test
         check(vic.deactivate(3U) == error_t::success, 43U);
         check(vic.acknowledge(acknowledged_irq) == error_t::success && acknowledged_irq == 5U, 44U);
         check(vic.deactivate(5U) == error_t::success, 45U);
+        vic.reset();
+        check(vic.configure(40U, virtual_irq_trigger::edge, 0x90U) == error_t::success &&
+                  vic.configure(41U, virtual_irq_trigger::level, 0x20U) == error_t::success &&
+                  classify_virtual_irq(3U) == virtual_irq_class::sgi &&
+                  classify_virtual_irq(20U) == virtual_irq_class::ppi &&
+                  classify_virtual_irq(40U) == virtual_irq_class::spi,
+              127U);
+        check(vic.inject(40U) == error_t::success && vic.inject(41U) == error_t::success &&
+                  vic.acknowledge(acknowledged_irq) == error_t::success &&
+                  acknowledged_irq == 41U && vic.inject(41U, false) == error_t::success &&
+                  vic.deactivate(41U) == error_t::success &&
+                  vic.acknowledge(acknowledged_irq) == error_t::success &&
+                  acknowledged_irq == 40U && vic.deactivate(40U) == error_t::success &&
+                  vic.pending == 0U && vic.active == 0U && vic.maintenance_events != 0U,
+              128U);
+        virtual_timer_state timer_stress{};
+        bool timer_stress_pass = true;
+        for (u32 iteration = 0U; iteration < 1024U; ++iteration) {
+            timer_stress.synchronize(1U, iteration * 4U + 2U);
+            timer_stress_pass = timer_stress_pass && !timer_stress.expire(iteration * 4U + 1U) &&
+                                timer_stress.expire(iteration * 4U + 2U) &&
+                                !timer_stress.expire(iteration * 4U + 3U);
+            timer_stress.acknowledge();
+            timer_stress.synchronize(0U, 0U);
+        }
+        check(timer_stress_pass && timer_stress.expirations == 1024U &&
+                  timer_stress.cancellations == 0U && !timer_stress.pending,
+              129U);
 
         virtual_cpu_t& lifecycle_vcpu = model_basic_lifecycle_vcpu;
         lifecycle_vcpu.lifecycle = vcpu_state::runnable;
@@ -901,7 +1188,10 @@ namespace sys::kernel::hypervisor::test
             teardown_vcpus[index].context.ttbr0_el1 = 0xdead0000ULL + index;
             teardown_vcpus[index].context.tpidr_el0 = 0x12340000ULL + index;
             teardown_vcpus[index].timer = {0xffff0000ULL + index, true};
-            teardown_vcpus[index].interrupt_state = {1ULL << index, 2ULL << index, 4ULL << index};
+            teardown_vcpus[index].interrupt_state.reset();
+            teardown_vcpus[index].interrupt_state.pending = 1ULL << index;
+            teardown_vcpus[index].interrupt_state.active = 2ULL << index;
+            teardown_vcpus[index].interrupt_state.masked = 4ULL << index;
             teardown_vcpus[index].last_exit.syndrome = 0xbad00000ULL + index;
             teardown_vcpus[index].last_diagnostic.value = 0xabad1deaULL + index;
         }
@@ -945,6 +1235,15 @@ namespace sys::kernel::hypervisor::test
         pr_info("[HV-MODEL-M] multi-vm-isolation result=PASS vms=2 execution=modeled\n");
         pr_info("[HV-N] vm-teardown-vmid-reuse result=PASS\n");
         pr_info("[HV-MODEL-0.3] multi-vcpu-multivm-lifecycle result=PASS execution=modeled\n");
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t run_runtime_acceptance() noexcept {
+        const error_t baseline = run_all();
+        if (baseline != error_t::success)
+            return baseline;
+        if (!real_smp_acceptance() || !real_multivm_acceptance())
+            return error_t::invalid_argument;
         return error_t::success;
     }
 } // namespace sys::kernel::hypervisor::test

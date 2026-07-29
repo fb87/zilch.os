@@ -6,6 +6,93 @@
 
 namespace sys::kernel::hypervisor
 {
+    inline constexpr u32 vcpu_state_field_count = 48U;
+
+    [[nodiscard]] inline error_t vcpu_state_access(virtual_cpu_t& vcpu, u32 field, bool write,
+                                                   u64& value) noexcept {
+        if (vcpu.running || field >= vcpu_state_field_count)
+            return vcpu.running ? error_t::busy : error_t::invalid_argument;
+        if (field < 31U) {
+            if (write)
+                vcpu.context.x[field] = value;
+            else
+                value = vcpu.context.x[field];
+            return error_t::success;
+        }
+        u64* target = nullptr;
+        switch (field) {
+            case 31U:
+                target = &vcpu.context.pc;
+                break;
+            case 32U:
+                target = &vcpu.context.pstate;
+                break;
+            case 33U:
+                target = &vcpu.context.sp_el0;
+                break;
+            case 34U:
+                target = &vcpu.context.sp_el1;
+                break;
+            case 35U:
+                target = &vcpu.context.elr_el1;
+                break;
+            case 36U:
+                target = &vcpu.context.spsr_el1;
+                break;
+            case 37U:
+                target = &vcpu.context.sctlr_el1;
+                break;
+            case 38U:
+                target = &vcpu.context.tcr_el1;
+                break;
+            case 39U:
+                target = &vcpu.context.ttbr0_el1;
+                break;
+            case 40U:
+                target = &vcpu.context.ttbr1_el1;
+                break;
+            case 41U:
+                target = &vcpu.context.mair_el1;
+                break;
+            case 42U:
+                target = &vcpu.context.vbar_el1;
+                break;
+            case 43U:
+                target = &vcpu.context.tpidr_el0;
+                break;
+            case 44U:
+                target = &vcpu.context.tpidr_el1;
+                break;
+            case 45U:
+                target = &vcpu.context.cntv_ctl_el0;
+                break;
+            case 46U:
+                target = &vcpu.context.cntv_cval_el0;
+                break;
+            case 47U:
+                target = &vcpu.context.contextidr_el1;
+                break;
+            default:
+                return error_t::invalid_argument;
+        }
+        if (!write) {
+            value = *target;
+            return error_t::success;
+        }
+        if (field == 31U && !aligned(value))
+            return error_t::invalid_argument;
+        if (field == 32U)
+            value = arch::hypervisor::sanitize_guest_pstate(value);
+        else if (field == 37U)
+            value = arch::hypervisor::sanitize_guest_sctlr_el1(value);
+        else if (field == 38U)
+            value = arch::hypervisor::sanitize_guest_tcr_el1(value);
+        else if ((field == 39U || field == 40U || field == 42U) && !aligned(value))
+            return error_t::invalid_argument;
+        *target = value;
+        return error_t::success;
+    }
+
     [[nodiscard]] inline constexpr bool fatal_guest_exit(abi::v1::vm_exit_reason reason) noexcept {
         return reason == abi::v1::vm_exit_reason::unexpected;
     }
@@ -15,8 +102,12 @@ namespace sys::kernel::hypervisor
         if (!aligned(pc) || !aligned(sp))
             return error_t::invalid_argument;
         vcpu.context.pc = pc;
-        vcpu.context.pstate = pstate;
+        vcpu.context.pstate = arch::hypervisor::sanitize_guest_pstate(pstate);
         vcpu.context.sp_el1 = sp;
+        vcpu.context.sctlr_el1 = arch::hypervisor::sanitize_guest_sctlr_el1(0U);
+        vcpu.context.tcr_el1 = arch::hypervisor::sanitize_guest_tcr_el1(0U);
+        vcpu.context.cpacr_el1 = arch::hypervisor::sanitize_guest_cpacr_el1(0U);
+        vcpu.context.cntkctl_el1 = arch::hypervisor::sanitize_guest_cntkctl_el1(0U);
         vcpu.interrupt_state.reset();
         vcpu.timer.reset();
         vcpu.virtual_irq_pending = false;
@@ -36,29 +127,94 @@ namespace sys::kernel::hypervisor
         return error_t::success;
     }
 
+    inline void prepare_virtual_gic(virtual_cpu_t& vcpu) noexcept {
+        auto& state = vcpu.interrupt_state;
+        /*
+         * Do not enable the list-register interface until the guest has
+         * installed an EL1 vector base and completed one bounded entry.  An
+         * early pending LR would otherwise vector through uninitialized guest
+         * exception state before its bootstrap masks are established.
+         */
+        state.hardware_active = arch::hypervisor::virtual_gic_hardware_available() &&
+                                vcpu.run_generation > 1U && vcpu.context.vbar_el1 != 0U &&
+                                vcpu.virtual_irq >= 16U;
+        vcpu.context.ich_hcr_el2 = state.hardware_active ? 1U : 0U;
+        vcpu.context.ich_vmcr_el2 = (static_cast<u64>(state.priority_mask) << 24U) |
+                                    (static_cast<u64>(state.binary_point & 7U) << 18U) |
+                                    (1ULL << 1U);
+        for (u32 index = 0U; index < 16U; ++index)
+            vcpu.context.ich_lr_el2[index] = 0U;
+        if (!state.hardware_active)
+            return;
+        u16 irq{};
+        const u64 deliverable = state.pending & ~state.masked;
+        if (deliverable == 0U)
+            return;
+        irq = static_cast<u16>(__builtin_ctzll(deliverable));
+        const u64 priority =
+            state.priority[irq] == 0U ? default_virtual_irq_priority : state.priority[irq];
+        constexpr u64 group1 = 1ULL << 60U;
+        constexpr u64 pending = 1ULL << 62U;
+        vcpu.context.ich_lr_el2[0] = static_cast<u64>(irq) | (priority << 48U) | group1 | pending;
+    }
+
+    inline void complete_virtual_gic(virtual_cpu_t& vcpu) noexcept {
+        if (!vcpu.interrupt_state.hardware_active)
+            return;
+        const u64 lr = vcpu.context.ich_lr_el2[0];
+        const u16 irq = static_cast<u16>(lr & 0xffffffffU);
+        const u64 state = (lr >> 62U) & 3U;
+        if (irq >= maximum_virtual_irqs)
+            return;
+        const u64 bit = 1ULL << irq;
+        if (state == 0U) {
+            vcpu.interrupt_state.pending &= ~bit;
+            vcpu.interrupt_state.active &= ~bit;
+        } else if (state == 1U) {
+            vcpu.interrupt_state.pending |= bit;
+            vcpu.interrupt_state.active &= ~bit;
+        } else if (state == 2U) {
+            vcpu.interrupt_state.pending &= ~bit;
+            vcpu.interrupt_state.active |= bit;
+        } else {
+            vcpu.interrupt_state.pending |= bit;
+            vcpu.interrupt_state.active |= bit;
+        }
+    }
+
     [[nodiscard]] inline error_t run(virtual_cpu_t& vcpu, exit_record& exit) noexcept {
         auto* vm_header = object::resolve(vcpu.virtual_machine);
         if (vm_header == nullptr || vm_header->type != object::type_t::virtual_machine)
             return error_t::not_found;
         auto& vm = *reinterpret_cast<virtual_machine_t*>(vm_header);
+        lock_vm(vm);
         const error_t vmid_result = ensure_vmid(vm);
-        if (vmid_result != error_t::success)
+        if (vmid_result != error_t::success) {
+            unlock_vm(vm);
             return vmid_result;
-        if (vcpu.state != vm_state::runnable || vm.mapping_count == 0U)
+        }
+        if (vcpu.state != vm_state::runnable || vm.mapping_count == 0U) {
+            unlock_vm(vm);
             return error_t::invalid_argument;
+        }
         vcpu.timer.synchronize(vcpu.context.cntv_ctl_el0, vcpu.context.cntv_cval_el0);
         if (vcpu.timer.expire(virtual_counter(arch::timer::counter(), vm.counter_offset))) {
             const error_t timer_irq = vcpu.interrupt_state.inject(27U);
-            if (timer_irq != error_t::success)
+            if (timer_irq != error_t::success) {
+                unlock_vm(vm);
                 return timer_irq;
+            }
             vcpu.virtual_irq = 27U;
             __atomic_store_n(&vcpu.virtual_irq_pending, true, __ATOMIC_RELEASE);
         }
-        if (__atomic_exchange_n(&vcpu.running, true, __ATOMIC_ACQ_REL))
+        if (__atomic_exchange_n(&vcpu.running, true, __ATOMIC_ACQ_REL)) {
+            unlock_vm(vm);
             return error_t::busy;
+        }
         if (vm.run_entries == ~static_cast<u64>(0U)) {
             ++vm.accounting_faults;
             __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
+            unlock_vm(vm);
             return error_t::invalid_argument;
         }
         ++vm.run_entries;
@@ -70,19 +226,33 @@ namespace sys::kernel::hypervisor
         if (vcpu.run_generation > 1U && vcpu.previous_host_cpu != vcpu.host_cpu)
             ++vcpu.migration_count;
         vcpu.lifecycle = vcpu_state::running;
+        vcpu.context.pstate = arch::hypervisor::sanitize_guest_pstate(vcpu.context.pstate);
+        vcpu.context.sctlr_el1 = arch::hypervisor::sanitize_guest_sctlr_el1(vcpu.context.sctlr_el1);
+        vcpu.context.tcr_el1 = arch::hypervisor::sanitize_guest_tcr_el1(vcpu.context.tcr_el1);
+        vcpu.context.cpacr_el1 = arch::hypervisor::sanitize_guest_cpacr_el1(vcpu.context.cpacr_el1);
+        vcpu.context.cntkctl_el1 =
+            arch::hypervisor::sanitize_guest_cntkctl_el1(vcpu.context.cntkctl_el1);
         const bool pending_irq = __atomic_load_n(&vcpu.virtual_irq_pending, __ATOMIC_ACQUIRE);
+        prepare_virtual_gic(vcpu);
+        unlock_vm(vm);
         const error_t result = arch::hypervisor::run_guest(vm.vmid, vm.stage_2_root, vcpu.context,
                                                            exit, vm.counter_offset, pending_irq);
-        if (pending_irq && result == error_t::success) {
+        if (pending_irq && result == error_t::success &&
+            arch::hypervisor::consume_virtual_irq_acknowledgement()) {
             __atomic_store_n(&vcpu.virtual_irq_pending, false, __ATOMIC_RELEASE);
             vcpu.interrupt_state.reset();
             vcpu.timer.acknowledge();
         }
         vcpu.timer.synchronize(vcpu.context.cntv_ctl_el0, vcpu.context.cntv_cval_el0);
+        complete_virtual_gic(vcpu);
         vcpu.last_exit = exit;
         emergency::trace(emergency::event::vm_exit, vcpu.id, static_cast<u64>(exit.reason),
                          exit.syndrome, exit.qualification, exit.guest_pc);
-        --vm.active_vcpus;
+        lock_vm(vm);
+        if (vm.active_vcpus == 0U)
+            ++vm.accounting_faults;
+        else
+            --vm.active_vcpus;
         if (vm.run_exits == ~static_cast<u64>(0U)) {
             ++vm.accounting_faults;
         } else {
@@ -90,6 +260,7 @@ namespace sys::kernel::hypervisor
         }
         audit(vm, audit_action::run_exit, vcpu.id);
         __atomic_store_n(&vcpu.running, false, __ATOMIC_RELEASE);
+        unlock_vm(vm);
         const bool fatal_exit = result != error_t::success || fatal_guest_exit(exit.reason);
         vcpu.lifecycle = fatal_exit ? vcpu_state::faulted : vcpu_state::runnable;
         if (fatal_exit) {

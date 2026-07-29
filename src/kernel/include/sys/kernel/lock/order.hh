@@ -7,6 +7,8 @@
 namespace sys::kernel::lock_order
 {
     enum class rank : u16 {
+        hypervisor_pool = 5U,
+        hypervisor_object = 6U,
         endpoint = 10U,
         ipc_lifecycle = 20U,
         scheduler_timeout = 25U,

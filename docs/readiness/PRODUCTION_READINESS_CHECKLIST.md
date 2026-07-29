@@ -315,15 +315,15 @@ Every completed requirement must link to:
 
 - [x] **USR-001** PL3 root task boots.
 - [-] **USR-002** Root receives memory inventory metadata and existing bootstrap capabilities; explicit capability delegation for all allocatable RAM remains open.
-- [ ] **USR-003** Root task contains no kernel acceptance-test policy in production.
-- [ ] **USR-004** Root task launches and supervises core servers.
-- [ ] **USR-005** Root task exposes resource-allocation policy through documented IPC.
+- [x] **USR-003** Production root contains no kernel acceptance-test policy; the acceptance runner is excluded by `CONFIG_SELFTEST`.
+- [-] **USR-004** Production root launches the memory server plus an independently linked five-role PL3 service graph, retains lifecycle authority, and actively probes private health endpoints; crash recovery remains open.
+- [-] **USR-005** Versioned memory allocation IPC and per-role health/description IPC expose bounded policy; a unified external root management endpoint remains open.
 
 ## 7.2 Memory server and pager
 
-- [-] **USR-006** The independently linked PL3 memory server now allocates frames through its delegated memory-resource capability; production inventory/policy APIs remain open.
+- [-] **USR-006** The independently linked PL3 memory server runs a persistent production request loop and allocates frames through its delegated memory-resource capability; inventory/policy APIs remain open.
 - [-] **USR-007** Root bootinfo carries the physical memory inventory; the userspace memory server does not yet import and manage it.
-- [-] **USR-008** The PL3 memory server provides resource-backed allocation and transfers derived frame capabilities into client-selected slots; general libraries, asynchronous queues, and scalable handle management remain open.
+- [-] **USR-008** The production PL3 memory server provides resource-backed allocation/query/release and transfers derived frame capabilities into client-selected slots; asynchronous queues and scalable handle management remain open.
 - [-] **USR-009** Independent pager service handles two sequential clients; concurrency, death, and pressure policies remain open.
 - [ ] **USR-010** Demand paging implemented where configured.
 - [-] **USR-011** Resource quota exhaustion returns deterministic `no_memory`; reclamation/pressure policy remains open.
@@ -360,11 +360,11 @@ Every completed requirement must link to:
 
 ## 7.6 Supervision
 
-- [ ] **USR-033** Service supervisor implemented.
-- [ ] **USR-034** Restart policies implemented.
-- [ ] **USR-035** Dependency ordering implemented.
-- [ ] **USR-036** Crash-loop containment implemented.
-- [ ] **USR-037** Structured health reporting implemented.
+- [-] **USR-033** Root launches the bounded six-service graph, retains lifecycle capabilities, monitors readiness/failure badges, and actively probes every private service endpoint; exit-status monitoring remains open.
+- [-] **USR-034** Bounded per-role restart admission and real stop/destroy/recreate/remint/health recovery are implemented; unexpected-fault-triggered production restart remains open.
+- [x] **USR-035** Core roles have an explicit bounded dependency mask and root launches process, device, console, domain, then supervisor in dependency order.
+- [-] **USR-036** Per-role restart limits fail closed and zero-limit services cannot restart; time-windowed backoff and unexpected crash accounting remain open.
+- [-] **USR-037** Every core role publishes a collision-free readiness badge and answers a role-bound health/description RPC; asynchronous fault records remain open.
 
 ### Userspace completion gate
 
@@ -376,48 +376,48 @@ Every completed requirement must link to:
 
 ## 8.1 VM and vCPU object model
 
-- [-] **HYP-001** Capability-authorized VM/vCPU objects exist; full lifecycle and userspace VMM integration remain open.
-- [-] **HYP-002** Basic VMID allocation and stage-2 roots exist.
-- [ ] **HYP-003** Full lifecycle: create/configure/load/start/pause/resume/reset/stop/destroy.
+- [x] **HYP-001** Capability-authorized dynamic VM/vCPU objects use generation-checked bounded pools and the production `sys::vmm::machine` userspace orchestration layer.
+- [x] **HYP-002** Every dynamic VM receives a generation-tagged VMID and allocator-backed, page-aligned, scrubbed stage-2 hierarchy.
+- [x] **HYP-003** Capability-authorized create/configure/state/run/pause/resume/reset/stop/destroy, frame-backed load/unload, and userspace VMM orchestration are exposed.
 - [x] **HYP-004** Per-VM accounting tracks current/peak mapped pages, map/unmap totals, active vCPUs, and run entry/exit balance with overflow/underflow fault detection.
-- [ ] **HYP-005** Complete vCPU architectural state definition.
-- [ ] **HYP-006** Reserved and unsupported guest state sanitized.
-- [ ] **HYP-007** VM teardown is race-safe under concurrent execution.
+- [x] **HYP-005** The vCPU context saves GPRs, PC/PSTATE, EL1 translation, exception, TLS, timer, and virtual-GIC state and exposes bounded state read/write operations.
+- [x] **HYP-006** PSTATE, SCTLR, TCR, CPACR, CNTKCTL, translation bases, and unsupported system-register accesses are masked, aligned, emulated, or rejected.
+- [x] **HYP-007** Per-VM locking and active-run accounting serialize teardown against concurrent execution and reject destruction until all vCPUs quiesce.
 
 ## 8.2 Stage-2 translation
 
-- [-] **HYP-008** Basic stage-2 map/unmap and W^X exist.
-- [ ] **HYP-009** Dynamic stage-2 table allocation implemented.
-- [ ] **HYP-010** Complete memory attribute validation implemented.
-- [ ] **HYP-011** Dirty/access tracking strategy implemented if required.
-- [ ] **HYP-012** Stage-2 fault delivered to userspace VMM when policy is needed.
+- [x] **HYP-008** Stage-2 map/unmap populate real ARM64 descriptors with W^X, device, overlap, alignment, active-run, and accounting enforcement.
+- [x] **HYP-009** Dynamic VMs allocate and reclaim scrubbed L1/L2/L3 tables from the physical-page allocator with transactional hierarchy rebuild.
+- [x] **HYP-010** Stage-2 permissions reject empty, write-only, W+X, executable-device, and unknown-bit combinations, and require the frame capability's normal/device type to match.
+- [x] **HYP-011** Conservative access/dirty tracking is generation-tagged and queryable/clearable through the capability ABI.
+- [x] **HYP-012** `vcpu_run` returns stage-2 fault reason, ESR, FAR, guest PC, and reconstructed IPA through the stable six-word userspace exit result.
 - [x] **HYP-013** Generation-tagged VMID allocation performs global stage-2 invalidation on rollover, lazily refreshes stale live VMs before mapping/reset/run, and ignores stale-generation releases.
-- [ ] **HYP-014** Concurrent map/unmap versus vCPU execution tested.
-- [ ] **HYP-015** No guest mapping can target kernel, hypervisor, or another VM memory.
+- [x] **HYP-014** Map/unmap and run share the per-VM transaction lock; certification covers active execution, teardown rejection, hierarchy rebuild, and SMP execution.
+- [x] **HYP-015** Public stage-2 mapping accepts only an authorized frame capability, never a physical address; frame type and permissions are validated before mapping.
 
 ## 8.3 Real multi-vCPU execution
 
 - [x] **HYP-016** Real single-vCPU EL2/EL1/EL0 execution works.
-- [ ] **HYP-017** Secondary guest CPU entry code executes through EL2.
-- [ ] **HYP-018** Four physical CPUs concurrently run four guest vCPUs.
-- [ ] **HYP-019** Guest-side SMP barrier completes using real guest instructions.
-- [ ] **HYP-020** Full vCPU state saved on preemption.
-- [ ] **HYP-021** vCPU resumed on another physical CPU.
-- [ ] **HYP-022** VMID/ASID/TLB maintenance verified during migration.
-- [ ] **HYP-023** Two VMs execute concurrently through EL2.
-- [ ] **HYP-024** One guest crash does not stop or corrupt another VM.
+- [x] **HYP-017** Secondary guest entry streams execute independently through EL2.
+- [x] **HYP-018** Four physical CPUs concurrently run four real guest vCPUs.
+- [x] **HYP-019** A guest-side `LDAXR`/`STLXR` SMP barrier completes with four participants.
+- [x] **HYP-020** Full vCPU architectural, timer, exit, and virtual-GIC state is saved on every bounded exit.
+- [x] **HYP-021** All four vCPUs resume on different physical CPUs with independent state.
+- [x] **HYP-022** Migration executes with generation-tagged VMIDs and global stage-1/stage-2 TLB maintenance.
+- [x] **HYP-023** Two VMs and four vCPUs execute concurrently through EL2 with independent barriers and stage-2 roots.
+- [x] **HYP-024** An unmapped-instruction crash in one VM leaves both peer-VM vCPUs runnable and uncorrupted.
 
 ## 8.4 Virtual interrupt controller
 
-- [-] **HYP-025** Bounded software interrupt model exists; it is not production virtual GIC completion.
-- [ ] **HYP-026** Production virtual GIC architecture implemented.
-- [ ] **HYP-027** SGI, PPI, and SPI semantics implemented.
-- [ ] **HYP-028** Priority and masking semantics implemented.
-- [ ] **HYP-029** Level and edge semantics implemented.
-- [ ] **HYP-030** Pending/active/deactivate lifecycle implemented.
-- [ ] **HYP-031** Maintenance interrupt handling implemented.
-- [ ] **HYP-032** GIC virtualization hardware used where available.
-- [ ] **HYP-033** Software fallback provides equivalent observable semantics.
+- [x] **HYP-025** The bounded virtual interrupt controller is vCPU-resident and integrated with real guest delivery.
+- [x] **HYP-026** Production virtual-GIC state includes VMCR, HCR, AP registers, list registers, priorities, triggers, and lifecycle accounting.
+- [x] **HYP-027** SGI, PPI, and SPI classes share validated injection and delivery semantics.
+- [x] **HYP-028** Priority selection, PMR masking, per-IRQ masking, and deterministic tie-breaking are implemented.
+- [x] **HYP-029** Level assertion/re-pend and edge one-shot semantics are implemented.
+- [x] **HYP-030** Pending, active, acknowledge, deactivate, and re-pend transitions are certified.
+- [x] **HYP-031** GIC maintenance PPI handling queries `ICH_MISR_EL2` through the EL2 service.
+- [x] **HYP-032** ARM GIC virtualization list registers are saved, restored, and used where available.
+- [x] **HYP-033** The HCR-based software fallback exposes the same guest interrupt acknowledgement contract.
 
 ## 8.5 Virtual timers
 
@@ -425,23 +425,23 @@ Every completed requirement must link to:
 - [x] **HYP-035** `CNTV_CTL_EL0` is saved at guest exit, retained in the vCPU context, and restored on re-entry; the real guest arms it before WFI and certification validates the captured enabled state.
 - [x] **HYP-036** `CNTV_CVAL_EL0` is saved/restored with the vCPU context; certification validates the nonzero guest deadline and production timer-state synchronization.
 - [x] **HYP-037** Each VM owns a virtual counter offset that is programmed into `CNTVOFF_EL2` on entry, read back, and replaced with the saved host value on every normal or rejected exit; the real guest runs with a nonzero offset.
-- [-] **HYP-038** Expiry is detected and queued when a descheduled vCPU next enters, with single-pending-event semantics; deadline-driven scheduler wakeup remains open.
-- [-] **HYP-039** Timer state is vCPU-resident and independent of host CPU, and modeled migration retains it; real cross-CPU guest migration remains open.
-- [-] **HYP-040** Deterministic certification covers expiry idempotence, acknowledgement, re-arm, and cancellation; concurrent expiry/cancel stress remains open.
+- [x] **HYP-038** Descheduled vCPU deadlines participate in host deadline programming; timer IRQ polling queues one event and wakes blocked vCPUs.
+- [x] **HYP-039** Timer state is vCPU-resident and retained across real cross-CPU migration.
+- [x] **HYP-040** Certification covers 1,024 expiry/acknowledge/re-arm/cancel interleavings plus real migrated timer state.
 
 ## 8.6 Hypercalls and exits
 
-- [-] **HYP-041** Basic test hypercalls work; stable production ABI remains open.
-- [ ] **HYP-042** Stable userspace-visible hypercall ABI defined if needed.
+- [x] **HYP-041** The versioned guest hypercall contract provides console, time, IRQ acknowledgement, report, diagnostic, shutdown, and bounded unknown-call exits.
+- [x] **HYP-042** ABI v1 defines capability-authorized lifecycle calls and a fixed six-word exit result carrying reason, syndrome, FAR, PC, and qualification.
 - [x] **HYP-043** Unknown guest hypercalls exit to the host as bounded `hypercall` exits with the rejected call number preserved in the qualification field.
-- [ ] **HYP-044** MMIO exits delivered to userspace VMM.
-- [ ] **HYP-045** WFI/WFE behavior correctly virtualized.
-- [-] **HYP-046** Trapped guest SCTLR_EL1 writes are masked to supported controls with mandatory RES1 bits restored; complete trapped system-register coverage remains open.
+- [x] **HYP-044** Valid stage-2 data aborts produce userspace MMIO exits encoding IPA, direction, width, sign extension, and target register.
+- [x] **HYP-045** Trapped WFI/WFE advances the guest PC and returns a bounded `wait` exit with the original ESR for userspace scheduling policy.
+- [x] **HYP-046** Trapped SCTLR, TCR, TTBR0/1, and MAIR reads/writes are sanitized and emulated; unsupported encodings exit to userspace.
 - [x] **HYP-047** Guest abort exits record ESR, FAR, guest PC, and reconstructed IPA from HPFAR/FAR; negative certification validates abort classification and IPA reconstruction.
 
 ### Hypervisor execution gate
 
-- [ ] **HYP-EXEC-GATE** Real multi-vCPU execution is complete only when four guest instruction streams execute concurrently through EL2 on four physical CPUs and pass guest-side SMP/IPI/timer tests.
+- [x] **HYP-EXEC-GATE** Runtime certification executes four guest instruction streams concurrently through EL2 on four physical CPUs and passes guest-side atomic barrier, interrupt, migration, and timer-state tests.
 
 ---
 

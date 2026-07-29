@@ -11,6 +11,8 @@
 namespace sys::kernel::hypervisor
 {
     inline constexpr u32 maximum_stage2_mappings = 16U;
+    inline constexpr u32 maximum_stage2_table_pages = 33U;
+    inline constexpr u32 stage2_entries_per_table = 512U;
     inline constexpr u64 page_size = 4096U;
     inline constexpr u64 guest_ipa_limit = 1ULL << 32U;
     inline constexpr u32 diagnostic_magic = 0x48563031U; // HV01
@@ -35,6 +37,9 @@ namespace sys::kernel::hypervisor
         u64 size{};
         u32 permissions{};
         bool valid{};
+        bool accessed{};
+        bool dirty{};
+        u32 tracking_generation{};
     };
 
     struct diagnostic_record {
@@ -61,9 +66,13 @@ namespace sys::kernel::hypervisor
         vm_state state{vm_state::inactive};
         u8 reserved{};
         paddr_t stage_2_root{};
+        paddr_t stage2_table_addresses[maximum_stage2_table_pages]{};
+        u32 stage2_table_capacity{};
+        u32 stage2_table_pages{};
         stage2_mapping mappings[maximum_stage2_mappings]{};
         u32 mapping_count{};
         u32 active_vcpus{};
+        u32 vcpu_count{};
         u64 mapped_pages{};
         u64 peak_mapped_pages{};
         u64 map_operations{};
@@ -132,6 +141,21 @@ namespace sys::kernel::hypervisor
         u64 tpidr_el1{};
         u64 cntv_ctl_el0{};
         u64 cntv_cval_el0{};
+        u64 actlr_el1{};
+        u64 cpacr_el1{};
+        u64 contextidr_el1{};
+        u64 afsr0_el1{};
+        u64 afsr1_el1{};
+        u64 esr_el1{};
+        u64 far_el1{};
+        u64 par_el1{};
+        u64 cntkctl_el1{};
+        u64 ich_hcr_el2{};
+        u64 ich_vmcr_el2{};
+        u64 ich_ap0r0_el2{};
+        u64 ich_ap1r0_el2{};
+        u64 ich_lr_el2[16]{};
+        u64 report_mask{};
     };
 
     struct exit_record {

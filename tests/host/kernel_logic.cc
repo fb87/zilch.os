@@ -1,3 +1,4 @@
+#include <sys/control_plane.hh>
 #include <sys/kernel/capability.hh>
 #include <sys/kernel/scheduling/context.hh>
 
@@ -57,8 +58,35 @@ namespace
         revoke_donation(receiver, donor);
         return receiver.effective_priority == receiver.priority && receiver.donation_depth == 0U;
     }
+
+    bool control_plane_properties() {
+        const sys::word_t first =
+            static_cast<sys::word_t>(sys::abi::v1::control_plane_role::process);
+        sys::word_t readiness = 0U;
+        for (sys::word_t index = 0U; index < sys::abi::v1::control_plane_role_count; ++index) {
+            const sys::word_t role = first + index;
+            const auto policy = sys::control_plane::policy_for(role);
+            if (!sys::control_plane::valid(policy))
+                return false;
+            if (policy.restart_limit != 0U &&
+                (!sys::control_plane::may_restart(policy, 0U) ||
+                 sys::control_plane::may_restart(policy, policy.restart_limit)))
+                return false;
+            const sys::word_t badge = sys::abi::v1::control_plane_ready_badge(role);
+            const sys::word_t exit_badge = sys::abi::v1::control_plane_exit_badge(role);
+            if (badge == 0U || exit_badge == 0U || (readiness & badge) != 0U ||
+                (readiness & exit_badge) != 0U)
+                return false;
+            readiness |= badge;
+        }
+        const auto invalid = sys::control_plane::policy_for(first - 1U);
+        return !sys::control_plane::valid(invalid) &&
+               sys::abi::v1::control_plane_ready_badge(first - 1U) == 0U &&
+               (readiness & sys::abi::v1::memory_service_ready_badge) == 0U &&
+               readiness == (1U << sys::abi::v1::control_plane_role_count) - 1U;
+    }
 } // namespace
 
 int main() {
-    return capability_properties() && scheduling_properties() ? 0 : 1;
+    return capability_properties() && scheduling_properties() && control_plane_properties() ? 0 : 1;
 }

@@ -1,3 +1,5 @@
+#include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/hypervisor.hh>
 #include <abi/sys/v1/ipc.hh>
 #include <abi/sys/v1/syscall.hh>
 
@@ -120,6 +122,33 @@ sys::abi::v1::ipc_result sys_ipc_exchange_raw(sys::word_t endpoint, sys::word_t 
 #else
     result.status = sys_ipc_invoke_raw(endpoint, operation, message0, message1, message2, message3,
                                        transfer_descriptor, timeout_descriptor);
+#endif
+    return result;
+}
+
+sys::abi::v1::vm_exit_result sys_hypervisor_invoke_raw(sys::word_t operation, sys::word_t selector,
+                                                       sys::word_t argument0, sys::word_t argument1,
+                                                       sys::word_t argument2) noexcept {
+    sys::abi::v1::vm_exit_result result{};
+#if defined(__aarch64__)
+    register sys::word_t x0 asm("x0") =
+        static_cast<sys::word_t>(sys::abi::v1::control_operation::hypervisor_invoke);
+    register sys::word_t x1 asm("x1") = operation;
+    register sys::word_t x2 asm("x2") = selector;
+    register sys::word_t x3 asm("x3") = argument0;
+    register sys::word_t x4 asm("x4") = argument1;
+    register sys::word_t x5 asm("x5") = argument2;
+    register sys::word_t x8 asm("x8") = static_cast<sys::word_t>(sys::abi::v1::syscall::control);
+    asm volatile("svc #0"
+                 : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4), "+r"(x5)
+                 : "r"(x8)
+                 : "memory");
+    result = {x0, static_cast<sys::abi::v1::vm_exit_reason>(x1), x2, x3, x4, x5};
+#else
+    result.status =
+        sys_invoke_raw(static_cast<sys::word_t>(sys::abi::v1::syscall::control),
+                       static_cast<sys::word_t>(sys::abi::v1::control_operation::hypervisor_invoke),
+                       operation, selector, argument0, argument1, argument2);
 #endif
     return result;
 }

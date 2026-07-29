@@ -5,7 +5,10 @@
 #if CONFIG_SELFTEST
 #include <sys/certification.hh>
 #include <sys/control.hh>
+#include <sys/control_plane.hh>
+#include <sys/control_plane_certification.hh>
 #include <sys/hypervisor.hh>
+#include <sys/hypervisor_lifecycle_certification.hh>
 #include <sys/ipc.hh>
 #include <sys/test_abi/v1/certification.hh>
 #include <sys/types.hh>
@@ -49,6 +52,16 @@ namespace
         interrupt_timer_platform_gate = 32U,
         security_hardening_gate = 33U,
         kernel_core_1_0_gate = 34U,
+        userspace_control_plane_graph = 35U,
+        hypervisor_dynamic_lifecycle = 36U,
+        hypervisor_vm_create = 37U,
+        hypervisor_vcpu_create = 38U,
+        hypervisor_vm_busy = 39U,
+        hypervisor_vcpu_destroy = 40U,
+        hypervisor_vcpu_stale = 41U,
+        hypervisor_vm_destroy = 42U,
+        hypervisor_vm_stale = 43U,
+        hypervisor_vm_reuse = 44U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -817,7 +830,11 @@ namespace
         constexpr sys::word_t frame_selector = 16U;
         constexpr sys::word_t derived_selector = 17U;
         constexpr sys::word_t root_space_selector = 3U;
-        constexpr sys::word_t address = 0x20006000U;
+        /*
+         * Keep the authority probe above the certification image's loadable
+         * segments and below the fixed bootstrap stack page.
+         */
+        constexpr sys::word_t address = 0x2000e000U;
         constexpr sys::word_t read_write = 3U;
         constexpr sys::word_t cap_write = 1U << 1U;
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
@@ -1145,6 +1162,17 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
                scheduling_configuration_pass && services.pager && services.memory_protocol &&
                dynamic_ipc_pass && memory_lifecycle_pass && mapping_database_pass &&
                authority_revoke_pass && pressure_rollback_pass && fuzz_pass && destroyed && reused);
+    record(ledger, test_id::userspace_control_plane_graph,
+           sys::control_plane_certification::run(create_service_process, destroy_service_process,
+                                                 wait_for_badges));
+    const sys::word_t hypervisor_lifecycle = sys::hypervisor_lifecycle_certification::run();
+    record(ledger, test_id::hypervisor_dynamic_lifecycle,
+           hypervisor_lifecycle == sys::hypervisor_lifecycle_certification::complete_mask);
+    for (sys::word_t stage = 0U; stage < 8U; ++stage)
+        record(
+            ledger,
+            static_cast<test_id>(static_cast<sys::word_t>(test_id::hypervisor_vm_create) + stage),
+            (hypervisor_lifecycle & (1U << stage)) != 0U);
 
     const bool pass = ledger.failure_count == 0U && ledger.transport_ok;
     (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,
@@ -1154,8 +1182,10 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
 }
 
 #else
+#include <sys/root_graph.hh>
 #include <sys/types.hh>
+
 extern "C" int main(sys::word_t, sys::word_t) noexcept {
-    return 0;
+    return sys::root_graph::supervise();
 }
 #endif
