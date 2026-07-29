@@ -32,6 +32,7 @@ namespace sys::kernel::hypervisor
         if constexpr (!arch::hypervisor::active)
             return error_t::unsupported;
         bootstrap_vm.id = 0U;
+        bootstrap_vm.counter_offset = 0U;
         error_t vmid_result = allocate_vmid(bootstrap_vm.vmid, bootstrap_vm.vmid_generation);
         if (vmid_result != error_t::success)
             return vmid_result;
@@ -77,6 +78,7 @@ namespace sys::kernel::hypervisor
         vcpu.lifecycle = vcpu_state::stopped;
         vcpu.state = vm_state::stopped;
         vcpu.interrupt_state.reset();
+        vcpu.timer.reset();
         vcpu.virtual_irq_pending = false;
         if (auto* header = object::resolve(vcpu.virtual_machine); header != nullptr)
             audit(*reinterpret_cast<virtual_machine_t*>(header), audit_action::stop, vcpu.id);
@@ -108,6 +110,7 @@ namespace sys::kernel::hypervisor
         vm.vmid = 0U;
         vm.vmid_generation = 0U;
         vm.stage_2_root = 0U;
+        vm.counter_offset = 0U;
         vm.state = vm_state::inactive;
         audit(vm, audit_action::teardown, count);
         return release_vmid(old_vmid, old_vmid_generation);

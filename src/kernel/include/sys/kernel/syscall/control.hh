@@ -25,6 +25,37 @@
 
 namespace sys::kernel::syscall
 {
+    [[nodiscard]] inline bool process_lifecycle_valid() noexcept {
+        for (u32 index = 0U; index < thread::user_thread_count; ++index) {
+            const thread::thread& value = thread::user_threads[index];
+            const task::task& owner = thread::user_tasks[index];
+            const thread::state current = thread::load_state(value);
+            if (value.object.type == object::type_t::none) {
+                if (current != thread::state::inactive || value.owner != nullptr ||
+                    owner.object.type != object::type_t::none ||
+                    value.address_space.object.type != object::type_t::none ||
+                    value.scheduling_context.object.type != object::type_t::none)
+                    return false;
+                continue;
+            }
+            if (value.object.type != object::type_t::thread || value.owner != &owner ||
+                owner.object.type != object::type_t::task ||
+                value.address_space.object.type != object::type_t::address_space ||
+                value.scheduling_context.object.type != object::type_t::scheduling_context ||
+                value.pinned_cpu >= thread::maximum_cpu_count ||
+                value.scheduling_context.affinity >= thread::maximum_cpu_count ||
+                value.scheduling_context.donation_depth > scheduling::maximum_donation_depth ||
+                value.scheduling_context.replenishment_count > scheduling::maximum_replenishments ||
+                current == thread::state::inactive)
+                return false;
+            if (value.reply.valid && (value.reply.caller >= thread::user_thread_count ||
+                                      thread::user_threads[value.reply.caller].object.generation !=
+                                          value.reply.generation))
+                return false;
+        }
+        return true;
+    }
+
     inline void set_control_result(arch::thread::context& frame, error_t result) noexcept {
         arch::syscall::set_result(frame, static_cast<word_t>(static_cast<s64>(result)));
     }
@@ -311,13 +342,67 @@ namespace sys::kernel::syscall
                 const word_t failures = arch::syscall::argument(frame, 2U);
                 const word_t failure_mask = arch::syscall::argument(frame, 3U);
                 const word_t transport_ok = arch::syscall::argument(frame, 4U);
+                const bool mappings_valid = memory::mapping_database_valid();
+                const bool objects_valid = object::accounting_valid();
+                const bool locks_valid = lock_order::violation_count() == 0U;
+                const bool endpoints_valid = ipc::database_valid();
+                const bool notifications_valid = notification::database_valid();
+                const bool interrupts_valid = interrupt::database_valid();
+                const bool processes_valid = process_lifecycle_valid();
+                const bool kernel_invariants = mappings_valid && objects_valid && locks_valid &&
+                                               endpoints_valid && notifications_valid &&
+                                               interrupts_valid && processes_valid;
+                const bool acceptance_passed = passed != 0U && kernel_invariants;
+                pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
+                        "objects=%s locks=%s endpoints=%s notifications=%s\n",
+                        kernel_invariants ? "PASS" : "FAIL", mappings_valid ? "PASS" : "FAIL",
+                        objects_valid ? "PASS" : "FAIL", locks_valid ? "PASS" : "FAIL",
+                        endpoints_valid ? "PASS" : "FAIL", notifications_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=interrupt_lifetime_invariants result=%s\n",
+                        interrupts_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=process_lifecycle_invariants result=%s\n",
+                        processes_valid ? "PASS" : "FAIL");
+                pr_info("[METRIC] name=irq_disabled_duration_final max_ticks=%llu "
+                        "reference_ticks=%llu samples=%llu\n",
+                        static_cast<unsigned long long>(interrupt::timing::maximum()),
+                        static_cast<unsigned long long>(interrupt::timing::target_ticks()),
+                        static_cast<unsigned long long>(interrupt::timing::sample_count()));
+                pr_info("[METRIC] name=interrupt_latency max_ticks=%llu reference_ticks=%llu "
+                        "samples=%llu\n",
+                        static_cast<unsigned long long>(interrupt::timing::latency_max(
+                            interrupt::timing::latency_kind::interrupt_service)),
+                        static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()),
+                        static_cast<unsigned long long>(interrupt::timing::latency_sample_count(
+                            interrupt::timing::latency_kind::interrupt_service)));
+                pr_info("[METRIC] name=preemption_latency max_ticks=%llu reference_ticks=%llu "
+                        "samples=%llu\n",
+                        static_cast<unsigned long long>(interrupt::timing::latency_max(
+                            interrupt::timing::latency_kind::preemption_service)),
+                        static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()),
+                        static_cast<unsigned long long>(interrupt::timing::latency_sample_count(
+                            interrupt::timing::latency_kind::preemption_service)));
+                pr_info("[METRIC] name=cross_cpu_wake_latency max_ticks=%llu "
+                        "reference_ticks=%llu samples=%llu\n",
+                        static_cast<unsigned long long>(interrupt::timing::latency_max(
+                            interrupt::timing::latency_kind::cross_cpu_wake)),
+                        static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()),
+                        static_cast<unsigned long long>(interrupt::timing::latency_sample_count(
+                            interrupt::timing::latency_kind::cross_cpu_wake)));
+                pr_info("[METRIC] name=ipc_latency max_ticks=%llu reference_ticks=%llu "
+                        "samples=%llu\n",
+                        static_cast<unsigned long long>(interrupt::timing::latency_max(
+                            interrupt::timing::latency_kind::ipc_service)),
+                        static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()),
+                        static_cast<unsigned long long>(interrupt::timing::latency_sample_count(
+                            interrupt::timing::latency_kind::ipc_service)));
                 pr_info("[ACCEPTANCE] suite=root-only boot=root-only result=%s failures=%llu "
                         "failure_mask=%llx transport=%s\n",
-                        passed != 0U ? "PASS" : "FAIL", static_cast<unsigned long long>(failures),
+                        acceptance_passed ? "PASS" : "FAIL",
+                        static_cast<unsigned long long>(failures),
                         static_cast<unsigned long long>(failure_mask),
                         transport_ok != 0U ? "PASS" : "FAIL");
-                set_control_result(frame,
-                                   passed != 0U ? error_t::success : error_t::invalid_argument);
+                set_control_result(frame, acceptance_passed ? error_t::success
+                                                            : error_t::invalid_argument);
                 return true;
             }
             case test_abi::v1::control_operation::memory_server_protocol_detail: {
@@ -753,6 +838,7 @@ namespace sys::kernel::syscall
                 break;
             }
             case abi::v1::control_operation::frame_allocate: {
+                const capability::authority_guard authority_transaction{};
                 memory::frame* target_frame = nullptr;
                 result = resolve_frame(current, a1, capability::right_t::control, target_frame);
                 if (result == error_t::success) {
@@ -763,6 +849,7 @@ namespace sys::kernel::syscall
                 break;
             }
             case abi::v1::control_operation::frame_release: {
+                const capability::authority_guard authority_transaction{};
                 memory::frame* target_frame = nullptr;
                 result = resolve_frame(current, a1, capability::right_t::control, target_frame);
                 if (result == error_t::success)

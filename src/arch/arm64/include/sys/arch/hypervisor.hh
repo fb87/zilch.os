@@ -97,6 +97,8 @@ namespace sys::arch::hypervisor
     inline u64 saved_hcr[maximum_cpu_count]{};
     inline u64 saved_vttbr[maximum_cpu_count]{};
     inline u64 saved_vtcr[maximum_cpu_count]{};
+    inline u64 saved_cntvoff[maximum_cpu_count]{};
+    inline u64 requested_counter_offset[maximum_cpu_count]{};
     inline u64 guest_report_mask[maximum_cpu_count]{};
     inline bool guest_mmu_enable_armed[maximum_cpu_count]{};
     inline guest_context_layout saved_host_el1[maximum_cpu_count]{};
@@ -181,9 +183,14 @@ namespace sys::arch::hypervisor
 
     template <typename Context, typename Exit>
     [[nodiscard]] inline error_t run_guest(u16 vmid, paddr_t stage2_root, Context& context,
-                                           Exit& exit, bool virtual_irq_pending = false) noexcept {
+                                           Exit& exit, u64 counter_offset,
+                                           bool virtual_irq_pending = false) noexcept {
         static_assert(sizeof(Context) == sizeof(guest_context_layout));
         static_assert(sizeof(Exit) == sizeof(exit_layout));
+        const cpu_id_t id = cpu::current_id();
+        if (id >= maximum_cpu_count)
+            return error_t::invalid_argument;
+        requested_counter_offset[id] = counter_offset;
         const u64 run_flags = static_cast<u64>(vmid) | (virtual_irq_pending ? (1ULL << 16U) : 0U);
         const u64 result = call(call_id::guest_run, run_flags, stage2_root,
                                 reinterpret_cast<u64>(&context), reinterpret_cast<u64>(&exit));
@@ -366,10 +373,10 @@ namespace sys::arch::hypervisor
             exit->qualification = guest_fault_ipa(syndrome, exit->fault_address, hpfar);
         }
         load_el1_system_state(saved_host_el1[id]);
-        __asm__ volatile(
-            "msr hcr_el2, %0; msr vttbr_el2, %1; msr vtcr_el2, %2; isb" ::"r"(saved_hcr[id]),
-            "r"(saved_vttbr[id]), "r"(saved_vtcr[id])
-            : "memory");
+        __asm__ volatile("msr hcr_el2, %0; msr vttbr_el2, %1; msr vtcr_el2, %2; "
+                         "msr cntvoff_el2, %3; isb" ::"r"(saved_hcr[id]),
+                         "r"(saved_vttbr[id]), "r"(saved_vtcr[id]), "r"(saved_cntvoff[id])
+                         : "memory");
         guest_active[id] = false;
         active_context[id] = nullptr;
         active_exit[id] = nullptr;
@@ -594,9 +601,10 @@ namespace sys::arch::hypervisor
                 active_context[id] = context;
                 active_exit[id] = exit;
                 guest_active[id] = true;
-                __asm__ volatile("mrs %0, hcr_el2; mrs %1, vttbr_el2; mrs %2, vtcr_el2"
-                                 : "=r"(saved_hcr[id]), "=r"(saved_vttbr[id]),
-                                   "=r"(saved_vtcr[id]));
+                __asm__ volatile("mrs %0, hcr_el2; mrs %1, vttbr_el2; mrs %2, vtcr_el2; "
+                                 "mrs %3, cntvoff_el2"
+                                 : "=r"(saved_hcr[id]), "=r"(saved_vttbr[id]), "=r"(saved_vtcr[id]),
+                                   "=r"(saved_cntvoff[id]));
                 save_el1_system_state(saved_host_el1[id]);
                 const u64 run_flags = frame.x[1];
                 const u64 vmid = run_flags & 0xffffU;
@@ -627,25 +635,33 @@ namespace sys::arch::hypervisor
                     hcr |= 1ULL << 7U;
                 __asm__ volatile("dsb ishst; tlbi vmalls12e1is; dsb ish; "
                                  "msr vtcr_el2, %0; msr vttbr_el2, %1; msr hcr_el2, %2; "
-                                 "isb" ::"r"(vtcr),
-                                 "r"(vttbr), "r"(hcr)
+                                 "msr cntvoff_el2, %3; isb" ::"r"(vtcr),
+                                 "r"(vttbr), "r"(hcr), "r"(requested_counter_offset[id])
                                  : "memory");
                 u64 programmed_vtcr = 0U;
                 u64 programmed_vttbr = 0U;
                 u64 programmed_hcr = 0U;
-                __asm__ volatile("mrs %0, vtcr_el2; mrs %1, vttbr_el2; mrs %2, hcr_el2"
+                u64 programmed_cntvoff = 0U;
+                __asm__ volatile("mrs %0, vtcr_el2; mrs %1, vttbr_el2; mrs %2, hcr_el2; "
+                                 "mrs %3, cntvoff_el2"
                                  : "=r"(programmed_vtcr), "=r"(programmed_vttbr),
-                                   "=r"(programmed_hcr));
+                                   "=r"(programmed_hcr), "=r"(programmed_cntvoff));
                 if (programmed_vtcr != vtcr || programmed_vttbr != vttbr ||
-                    (programmed_hcr & 1ULL) == 0U) {
+                    (programmed_hcr & 1ULL) == 0U ||
+                    programmed_cntvoff != requested_counter_offset[id]) {
                     if (exit != nullptr) {
                         exit->reason = abi::v1::vm_exit_reason::unexpected;
                         exit->syndrome = programmed_vtcr;
                         exit->fault_address = programmed_vttbr;
                         exit->guest_pc = context->pc;
-                        exit->qualification = programmed_hcr;
+                        exit->qualification = programmed_cntvoff;
                     }
                     load_el1_system_state(saved_host_el1[id]);
+                    __asm__ volatile("msr hcr_el2, %0; msr vttbr_el2, %1; msr vtcr_el2, %2; "
+                                     "msr cntvoff_el2, %3; isb" ::"r"(saved_hcr[id]),
+                                     "r"(saved_vttbr[id]), "r"(saved_vtcr[id]),
+                                     "r"(saved_cntvoff[id])
+                                     : "memory");
                     guest_active[id] = false;
                     active_context[id] = nullptr;
                     active_exit[id] = nullptr;

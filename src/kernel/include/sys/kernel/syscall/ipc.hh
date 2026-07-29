@@ -330,6 +330,11 @@ namespace sys::kernel::syscall
             return true;
         }
         ipc::lock(*endpoint);
+        if (endpoint->retiring) {
+            ipc::unlock(*endpoint);
+            set_error(frame, error_t::not_found);
+            return true;
+        }
         object::reference_t sender_reference{};
         while (ipc::dequeue_sender(*endpoint, sender_reference)) {
             thread::thread* sender_pointer = resolve_thread_reference(sender_reference);
@@ -406,6 +411,14 @@ namespace sys::kernel::syscall
         current.waiting_endpoint = selector;
         current.ipc_badge = endpoint_badge;
         ipc::lock(*endpoint);
+        if (endpoint->retiring) {
+            current.ipc_timeout_active = false;
+            current.transfer = {};
+            current.ipc_badge = 0U;
+            ipc::unlock(*endpoint);
+            set_error(frame, error_t::not_found);
+            return true;
+        }
         if (endpoint->receiver.type != object::type_t::none) {
             const object::reference_t receiver_reference = endpoint->receiver;
             endpoint->receiver = {};
@@ -489,24 +502,31 @@ namespace sys::kernel::syscall
             set_error(frame, error_t::not_found);
             return true;
         }
-        if (target.owner != nullptr && target.waiting_endpoint < capability::cspace_slot_count) {
-            ipc::endpoint* endpoint = nullptr;
+        const capability_id_t waited_selector = target.waiting_endpoint;
+        ipc::endpoint* waited_endpoint = nullptr;
+        if (target.owner != nullptr && waited_selector < capability::cspace_slot_count) {
             capability::badge_t ignored_badge{};
             const capability::right_t endpoint_right =
                 target_state == thread::state::blocked_receive ? capability::right_t::read
                                                                : capability::right_t::write;
             if (target_state != thread::state::blocked_reply &&
-                resolve_endpoint(target, target.waiting_endpoint, endpoint_right, endpoint,
+                resolve_endpoint(target, waited_selector, endpoint_right, waited_endpoint,
                                  ignored_badge) == error_t::success) {
-                (void)ipc::cancel_thread(*endpoint, object::reference(target.object));
+                ipc::lock(*waited_endpoint);
             }
         }
         thread::lock_ipc_lifecycle();
-        if (thread::load_state(target) != target_state) {
+        if (thread::load_state(target) != target_state ||
+            target.waiting_endpoint != waited_selector ||
+            (target_state != thread::state::blocked_reply && waited_endpoint == nullptr)) {
             thread::unlock_ipc_lifecycle();
+            if (waited_endpoint != nullptr)
+                ipc::unlock(*waited_endpoint);
             set_error(frame, error_t::not_found);
             return true;
         }
+        if (waited_endpoint != nullptr)
+            (void)ipc::cancel_thread_locked(*waited_endpoint, object::reference(target.object));
         for (u32 index = 0U; index < thread::active_user_thread_count; ++index) {
             thread::thread& server = thread::user_threads[index];
             if (server.reply.valid && server.reply.caller == target.id &&
@@ -524,6 +544,8 @@ namespace sys::kernel::syscall
         (void)thread::wake(target);
         ipc::remote_reschedule(target.pinned_cpu, arch::cpu::current_id());
         thread::unlock_ipc_lifecycle();
+        if (waited_endpoint != nullptr)
+            ipc::unlock(*waited_endpoint);
         set_error(frame, error_t::success);
         return true;
     }
@@ -536,6 +558,8 @@ namespace sys::kernel::syscall
             set_error(frame, error_t::unsupported);
             return true;
         }
+        const interrupt::timing::latency_scope ipc_latency{
+            interrupt::timing::latency_kind::ipc_service};
 
 #if CONFIG_SELFTEST
         if (arch::syscall::argument(frame, 6U) == test_abi::v1::fuzz_magic) {

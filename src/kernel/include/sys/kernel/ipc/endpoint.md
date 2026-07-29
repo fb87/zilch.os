@@ -22,9 +22,26 @@ pinned SMP user-scheduler bring-up.
 
 ## Scope
 
-The milestone supports register-only `call`, `receive`, and `reply_receive`.
-Capability transfer, IPC buffers, cancellation, timeout, and migration are
-intentionally deferred.
+The production path supports register-only `call`, `receive`, `reply`,
+`reply_receive`, cancellation, bounded timeouts, scheduling-context donation,
+and one transactional capability transfer. Bounded out-of-line messages and
+multi-capability transfer remain open.
+
+## Cancellation transaction
+
+Cancellation follows the endpoint-to-IPC-lifecycle lock order. It snapshots
+the blocked state and endpoint selector, locks that endpoint, then locks the
+lifecycle transaction and revalidates both values before removing queue
+membership or reply authority. This prevents a completed operation from being
+mistaken for a later wait that happens to reuse the same thread state.
+
+Dynamic endpoint destruction uses a separate retirement transaction. It locks
+the endpoint, acquires capability authority, revalidates the exact control
+capability, verifies the queue is empty, and publishes `retiring` before
+revoking every capability. Call and receive recheck retirement after acquiring
+the endpoint lock, covering operations that resolved the object immediately
+before revoke. Authority and the endpoint lock are released before unregister
+waits for pre-existing object readers.
 
 ## Remote context ownership
 

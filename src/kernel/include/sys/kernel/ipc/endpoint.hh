@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/interrupt/timing.hh>
 #include <sys/kernel/lock/order.hh>
 #include <sys/kernel/object.hh>
 #include <sys/kernel/object/table.hh>
@@ -25,6 +26,7 @@ namespace sys::kernel::ipc
         u32 sender_count{};
         object::reference_t receiver{};
         volatile u32 allocated{};
+        bool retiring{};
     };
 
     inline endpoint endpoints[endpoint_count]{};
@@ -36,6 +38,7 @@ namespace sys::kernel::ipc
         value.sender_tail = 0U;
         value.sender_count = 0U;
         value.receiver = {};
+        value.retiring = false;
     }
 
     inline void lock(endpoint& value) noexcept {
@@ -75,13 +78,14 @@ namespace sys::kernel::ipc
 
     [[nodiscard]] inline bool validate(const endpoint& value) noexcept {
         return value.sender_count <= endpoint_capacity && value.sender_head < endpoint_capacity &&
-               value.sender_tail < endpoint_capacity;
+               value.sender_tail < endpoint_capacity &&
+               (!value.retiring ||
+                (value.sender_count == 0U && value.receiver.type == object::type_t::none));
     }
 
-    inline u32 cancel_thread(endpoint& value,
-                             const object::reference_t& thread_reference) noexcept {
+    inline u32 cancel_thread_locked(endpoint& value,
+                                    const object::reference_t& thread_reference) noexcept {
         u32 cancelled = 0U;
-        lock(value);
         if (value.receiver.id == thread_reference.id &&
             value.receiver.generation == thread_reference.generation &&
             value.receiver.type == thread_reference.type) {
@@ -104,6 +108,13 @@ namespace sys::kernel::ipc
         for (u32 index = 0U; index < retained_count; ++index) {
             (void)enqueue_sender(value, retained[index]);
         }
+        return cancelled;
+    }
+
+    inline u32 cancel_thread(endpoint& value,
+                             const object::reference_t& thread_reference) noexcept {
+        lock(value);
+        const u32 cancelled = cancel_thread_locked(value, thread_reference);
         unlock(value);
         return cancelled;
     }
@@ -164,12 +175,26 @@ namespace sys::kernel::ipc
         if (&value < dynamic_endpoints || &value >= dynamic_endpoints + dynamic_endpoint_count)
             return error_t::denied;
         lock(value);
+        capability::authority_guard authority_transaction{};
+        header = nullptr;
+        result = capability::lookup(owner.cspace, selector, object::type_t::endpoint,
+                                    capability::right_t::control, header);
+        if (result != error_t::success || header != &value.object) {
+            authority_transaction.release();
+            unlock(value);
+            return result == error_t::success ? error_t::not_found : result;
+        }
         const bool busy = value.receiver.type != object::type_t::none || value.sender_count != 0U;
-        unlock(value);
-        if (busy)
+        if (busy || value.retiring) {
+            authority_transaction.release();
+            unlock(value);
             return error_t::busy;
+        }
+        value.retiring = true;
         const object::reference_t reference = object::reference(value.object);
-        capability::revoke_reference(reference);
+        capability::revoke_reference_locked(reference);
+        authority_transaction.release();
+        unlock(value);
         result = object::unregister_object(reference);
         if (result != error_t::success)
             return result;
@@ -179,8 +204,32 @@ namespace sys::kernel::ipc
         return error_t::success;
     }
 
+    [[nodiscard]] inline bool database_valid() noexcept {
+        for (endpoint& value : endpoints) {
+            lock(value);
+            const bool valid = validate(value);
+            unlock(value);
+            if (!valid)
+                return false;
+        }
+        for (endpoint& value : dynamic_endpoints) {
+            lock(value);
+            const bool allocated = __atomic_load_n(&value.allocated, __ATOMIC_ACQUIRE) != 0U;
+            const bool valid =
+                validate(value) && (allocated ? value.object.type == object::type_t::endpoint
+                                              : value.object.type == object::type_t::none &&
+                                                    !value.retiring && value.sender_count == 0U &&
+                                                    value.receiver.type == object::type_t::none);
+            unlock(value);
+            if (!valid)
+                return false;
+        }
+        return true;
+    }
+
     inline void remote_reschedule(cpu_id_t target, cpu_id_t current) noexcept {
         if (target != current) {
+            interrupt::timing::begin_cross_cpu_wake(target);
             platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
         }
     }

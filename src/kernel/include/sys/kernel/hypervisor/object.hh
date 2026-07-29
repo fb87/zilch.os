@@ -70,6 +70,7 @@ namespace sys::kernel::hypervisor
         u64 unmap_operations{};
         u64 run_entries{};
         u64 run_exits{};
+        u64 counter_offset{};
         u64 accounting_faults{};
         diagnostic_record last_diagnostic{};
     };

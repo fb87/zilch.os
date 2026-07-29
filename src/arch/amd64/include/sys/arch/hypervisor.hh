@@ -24,7 +24,8 @@ namespace sys::arch::hypervisor
     }
     inline void invalidate_stage2(u16) noexcept {}
     template <typename Context, typename Exit>
-    [[nodiscard]] inline error_t run_guest(u16, paddr_t, Context&, Exit&, bool = false) noexcept {
+    [[nodiscard]] inline error_t run_guest(u16, paddr_t, Context&, Exit&, u64,
+                                           bool = false) noexcept {
         return error_t::unsupported;
     }
 

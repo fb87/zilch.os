@@ -95,6 +95,7 @@ namespace sys::kernel::hypervisor::test
         bootstrap_vcpu.context.spsr_el1 = guest_reset_pstate;
         bootstrap_vcpu.context.cntv_ctl_el0 = 0U;
         bootstrap_vcpu.context.cntv_cval_el0 = 0U;
+        bootstrap_vm.counter_offset = 0x1000U;
         return error_t::success;
     }
 
@@ -116,8 +117,19 @@ namespace sys::kernel::hypervisor::test
             diagnose(bootstrap_vm, 31U, error_t::invalid_argument, exit.guest_pc, exit.syndrome);
             return error_t::invalid_argument;
         }
+        if ((bootstrap_vcpu.context.cntv_ctl_el0 & 1U) == 0U ||
+            bootstrap_vcpu.context.cntv_cval_el0 == 0U || !bootstrap_vcpu.timer.armed ||
+            bootstrap_vcpu.timer.deadline != bootstrap_vcpu.context.cntv_cval_el0) {
+            diagnose(bootstrap_vm, 33U, error_t::invalid_argument,
+                     bootstrap_vcpu.context.cntv_ctl_el0, bootstrap_vcpu.context.cntv_cval_el0);
+            return error_t::invalid_argument;
+        }
         pr_info("[HV-G] guest-mmu-vectors result=PASS pc=%llx\n",
                 static_cast<unsigned long long>(exit.guest_pc));
+        pr_info("[HV-GT] virtual-timer-state result=PASS ctl=%llx cval=%llx offset=%llx\n",
+                static_cast<unsigned long long>(bootstrap_vcpu.context.cntv_ctl_el0),
+                static_cast<unsigned long long>(bootstrap_vcpu.context.cntv_cval_el0),
+                static_cast<unsigned long long>(bootstrap_vm.counter_offset));
         const error_t inject_result = inject_irq(bootstrap_vcpu, 27U);
         if (inject_result != error_t::success)
             return inject_result;
@@ -737,6 +749,20 @@ namespace sys::kernel::hypervisor::test
                 diagnose(vm, checkpoint, error_t::invalid_argument);
             }
         };
+        virtual_timer_state timer{};
+        timer.synchronize(1U, 100U);
+        check(timer.armed && !timer.pending && !timer.expire(99U) && timer.expire(100U) &&
+                  timer.pending && !timer.expire(101U) && timer.expirations == 1U,
+              123U);
+        timer.acknowledge();
+        timer.synchronize(1U, 200U);
+        timer.synchronize(0U, 200U);
+        check(!timer.armed && !timer.pending && timer.cancellations == 1U && !timer.expire(300U) &&
+                  virtual_counter(0x5000U, 0x1000U) == 0x4000U,
+              124U);
+        pr_info("[TEST] name=virtual_timer_lifecycle result=PASS expirations=%u "
+                "cancellations=%u generations=%u\n",
+                timer.expirations, timer.cancellations, timer.generation);
         check(arch::hypervisor::known_guest_hypercall(
                   static_cast<u64>(abi::v1::guest_hypercall::console_write)) &&
                   arch::hypervisor::known_guest_hypercall(

@@ -117,11 +117,11 @@ Every completed requirement must link to:
 - [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
 - [x] **CAP-010** Mint creates a rights-attenuated, badged derivation; delivery, wrong-right rejection, post-accept deletion semantics, and generation-tagged per-task endpoint badges are certified.
 - [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
-- [-] **CAP-012** Single-capability delete, atomic lookup snapshots, and exception-scoped lookup/use quiescence exist; generalized non-exception readers and long-duration interleaving evidence remain open.
+- [-] **CAP-012** Single-capability delete, atomic lookup snapshots, exception-scoped lookup/use quiescence, and process-wide CSpace retirement exist; generalized non-exception readers and long-duration interleaving evidence remain open.
 - [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
-- [-] **CAP-014** Public capability mutation/revoke APIs acquire the authority lock by construction; control, IPC transfer, and map/unmap use explicit locked transaction primitives. Scalable locking and complete concurrent mutation stress remain open.
-- [-] **CAP-015** Frame destruction waits for mapping quiescence, capability revoke removes descendant mappings, and object unregister waits for pre-existing remote exception readers; per-object scalable reclamation remains open.
-- [-] **CAP-016** Generation checks, reusable derivation records, and an object-table read-side grace period prevent bounded stale-reference reuse. Long-duration ABA evidence remains open.
+- [-] **CAP-014** Public capability mutation/revoke APIs acquire the authority lock by construction; control, IPC transfer, map/unmap, and complete process-bundle retirement use explicit locked transaction primitives. Scalable locking and complete concurrent mutation stress remain open.
+- [-] **CAP-015** Frame and process-bundle destruction serialize capability-authorized mappings, drain task-local derivations and attachments, revoke every object reference, then release authority before waiting for pre-existing remote readers; per-object scalable reclamation remains open.
+- [x] **CAP-016** Object references and derivation records are generation tagged; inactive derivations cannot be reused while live children reference their exact generation, generation wrap retires the record, and deterministic certification forces a deleted-ancestor index-reuse attempt before the existing four-CPU object destroy/reuse workload.
 
 ## 2.3 Capability transfer
 
@@ -145,10 +145,10 @@ Every completed requirement must link to:
 - [x] **IPC-002** Synchronous call implemented.
 - [-] **IPC-003** One-shot reply authority is serialized against cancellation, timeout, server exit, and teardown; scalable locking and race stress remain open.
 - [-] **IPC-004** Reply-receive and reply-only operations exist; complete atomicity/race evidence remains open.
-- [-] **IPC-005** Endpoint cancellation removes blocked senders/receivers with state-appropriate endpoint authority and serializes completion; forced interleaving fuzz remains open.
-- [-] **IPC-006** Teardown cancellation serializes blocked state and reply authority, and blocked-destroy endpoint reuse passes; broader quiescence proof remains open.
+- [-] **IPC-005** Endpoint cancellation holds the endpoint and IPC lifecycle locks together, revalidates the exact blocked state and waited-on selector, then removes and completes the wait atomically; broader forced interleaving fuzz remains open.
+- [-] **IPC-006** Teardown cancellation serializes blocked state, endpoint membership, and reply authority; endpoint destroy publishes a retiring state under endpoint-to-authority locks and stale resolved call/receive operations fail closed. Blocked-destroy and object reuse pass, while broader quiescence proof remains open.
 - [-] **IPC-007** Bounded IPC timeout expiration returns deterministic error-only completions, removes write-only callers, and never spins in IRQ context. Complete timeout ABI and race stress remain open.
-- [-] **IPC-008** Basic notification signal/wait and dynamic lifecycle exist; full binding policy remains open.
+- [-] **IPC-008** Notification signal/consume and dynamic lifecycle exist; destruction revokes under authority and waits for pre-existing readers before reuse, with final database invariants. Full waiter/binding policy remains open.
 - [-] **IPC-009** Single-capability transfer works on calls and replies, including receiver-selected destinations for the memory-server protocol; multi-capability atomic transfer remains open.
 - [ ] **IPC-010** Bounded out-of-line message strategy implemented.
 
@@ -201,10 +201,10 @@ Every completed requirement must link to:
 - [x] **MEM-013** Basic map/unmap and W^X checks exist.
 - [-] **MEM-014** Up to eight mappings per frame are supported with serialized transactions; scalable representation remains open.
 - [-] **MEM-015** Per-frame reverse mappings use generation-checked address-space references, and address-space teardown removes records for the exact object generation; scalable indexing remains open.
-- [-] **MEM-016** Unmap by frame/address-space, frame-wide teardown, and capability-delete/revoke-driven unmapping exist with serialized authority transactions; scalable indexing and controlled race evidence remain open.
+- [-] **MEM-016** Unmap by frame/address-space, frame-wide teardown, capability-delete/revoke, frame release, and memory-object destruction share authority/mapping transactions; final acceptance validates every reverse-map count, generation, authority, attribute, and virtual-address uniqueness invariant. Scalable indexing and a forced map-versus-revoke interleaving remain open.
 - [-] **MEM-017** Normal and device mappings validate explicit cacheability class and shareability; broader architecture/platform combinations remain open.
 - [-] **MEM-018** Root-authorized allowlisted MMIO frames use device attributes and reject executable mappings; general device-resource delegation remains open.
-- [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root and removes all tracked frame mappings before clearing user page tables; stress and scalable mapping-database evidence remain open.
+- [-] **MEM-019** Transactional process teardown switches CPUs to the permanent kernel root, retires its memory resource, removes all tracked mappings, drains its CSpace, and revokes the complete object bundle before reuse; scalable mapping-database and long-duration teardown stress remain open.
 - [x] **MEM-020** SMP TLB shootdown implemented and runtime verified on four CPUs.
 - [x] **MEM-021** Generation-tagged ASID allocation performs global stage-1 invalidation on rollover, lazily refreshes stale live address spaces, and ignores stale-generation releases; certification rolls over before real PL3 execution.
 
@@ -248,13 +248,13 @@ Every completed requirement must link to:
 
 - [x] **SCH-015** Every active blocking kernel spinlock has a documented global rank; equal-rank CSpace locks use increasing address order and releases are strict LIFO.
 - [x] **SCH-016** Generation-safe lock-order instrumentation records and reports the maximum hold duration in architectural timer ticks.
-- [ ] **SCH-017** IRQ-disabled sections measured and bounded.
+- [-] **SCH-017** Scoped IRQ-disabled logging and scheduler timeout-queue sections retain per-CPU samples and maximum architectural-counter duration; stable real-hardware bounds remain open because QEMU host scheduling makes elapsed-time limits nondeterministic.
 - [x] **SCH-018** Logging has an RT-safe structured deferred path through `printk::defer`; formatted asynchronous draining remains OBS-003.
 - [x] **SCH-019** Active CPUs retain a one-tick scheduling quantum while idle CPUs program the next timeout deadline or a bounded one-second housekeeping deadline.
-- [ ] **SCH-020** Interrupt latency target defined and met.
-- [ ] **SCH-021** Preemption latency target defined and met.
-- [ ] **SCH-022** Cross-CPU wake latency target defined and met.
-- [ ] **SCH-023** IPC latency target defined and met.
+- [-] **SCH-020** IRQ handler service duration is measured per CPU through full certification; a stable real-hardware interrupt-latency target remains open.
+- [-] **SCH-021** Timer-driven preemption service duration is measured per CPU; a stable real-hardware preemption-latency target remains open.
+- [-] **SCH-022** Cross-CPU wake request-to-reschedule-IPI receipt is measured with generation-independent per-CPU handoff timestamps; a stable real-hardware target remains open.
+- [-] **SCH-023** IPC syscall service duration is measured per CPU across the pager, memory-server, lifecycle, and SMP workloads; a stable real-hardware target remains open.
 - [ ] **SCH-024** Multi-hour RT stress test passes without deadline violation.
 
 ### Scheduler completion gate
@@ -268,9 +268,9 @@ Every completed requirement must link to:
 ## 6.1 ARM64 interrupt subsystem
 
 - [x] **IRQ-001** GICv3 distributor and CPU interfaces initialize on QEMU ARM64 virt.
-- [-] **IRQ-002** An exclusive IRQ registry binds one generation-checked interrupt object to each GIC line; data-driven external IRQ discovery/publication remains open.
+- [-] **IRQ-002** An atomic exclusive IRQ registry publishes one generation-checked interrupt object per GIC line, rolls back failed configuration, and provides acquire/release dispatch/unregister ordering; data-driven external IRQ discovery/publication remains open.
 - [-] **IRQ-003** Registered IRQ capabilities support rights-attenuated cross-CSpace delegation and revoke; a real userspace device-manager delegation flow remains open.
-- [x] **IRQ-004** GIC mask/unmask, priority-drop, explicit deactivate, active-state validation, and notification-gated acknowledge semantics are implemented.
+- [x] **IRQ-004** GIC mask/unmask, priority-drop, explicit deactivate, active-state validation, notification-gated acknowledge semantics, and mask-before-rebind with active rejection are implemented.
 - [-] **IRQ-005** Edge configuration and the level-triggered timer path pass QEMU integration; real external edge/level device evidence remains open.
 - [x] **IRQ-006** IRQ ownership is exclusive for 1.0: a second object cannot register the same physical line; shared-line demultiplexing is delegated to a userspace driver service.
 - [x] **IRQ-007** A bounded delivery window masks a line after 64 events and requires explicit rebinding/recovery before delivery resumes.
@@ -417,13 +417,13 @@ Every completed requirement must link to:
 
 ## 8.5 Virtual timers
 
-- [-] **HYP-034** Basic virtual timer event injection works in the current verification path.
-- [ ] **HYP-035** `CNTV_CTL_EL0` state saved/restored.
-- [ ] **HYP-036** `CNTV_CVAL_EL0` state saved/restored.
-- [ ] **HYP-037** Virtual counter offset managed per VM.
-- [ ] **HYP-038** Timer expiry while vCPU is descheduled handled correctly.
-- [ ] **HYP-039** Timer state remains correct across migration.
-- [ ] **HYP-040** Timer races and cancellation stress-tested.
+- [x] **HYP-034** Basic virtual timer event injection executes through the real ARM64 guest path.
+- [x] **HYP-035** `CNTV_CTL_EL0` is saved at guest exit, retained in the vCPU context, and restored on re-entry; the real guest arms it before WFI and certification validates the captured enabled state.
+- [x] **HYP-036** `CNTV_CVAL_EL0` is saved/restored with the vCPU context; certification validates the nonzero guest deadline and production timer-state synchronization.
+- [x] **HYP-037** Each VM owns a virtual counter offset that is programmed into `CNTVOFF_EL2` on entry, read back, and replaced with the saved host value on every normal or rejected exit; the real guest runs with a nonzero offset.
+- [-] **HYP-038** Expiry is detected and queued when a descheduled vCPU next enters, with single-pending-event semantics; deadline-driven scheduler wakeup remains open.
+- [-] **HYP-039** Timer state is vCPU-resident and independent of host CPU, and modeled migration retains it; real cross-CPU guest migration remains open.
+- [-] **HYP-040** Deterministic certification covers expiry idempotence, acknowledgement, re-arm, and cancellation; concurrent expiry/cancel stress remains open.
 
 ## 8.6 Hypercalls and exits
 

@@ -312,7 +312,19 @@ guest_stage1_enabled:
     guest_putc 'u'
     guest_putc 10
 
-    /* single-vCPU verification guest virtual timer: WFI exits, host injects HCR_EL2.VI. */
+    /*
+     * Arm a far-future virtual timer before descheduling. The host must retain
+     * CNTV_CTL_EL0 and CNTV_CVAL_EL0 across the WFI exit and subsequent run.
+     * The certification harness injects HCR_EL2.VI independently of expiry.
+     */
+    mrs x0, cntvct_el0
+    mov x1, #1
+    lsl x1, x1, #40
+    add x0, x0, x1
+    msr cntv_cval_el0, x0
+    mov x0, #1
+    msr cntv_ctl_el0, x0
+    isb
     msr daifclr, #2
     wfi
 

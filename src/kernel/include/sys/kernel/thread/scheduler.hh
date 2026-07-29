@@ -5,12 +5,14 @@
 #include <sys/arch/thread/entry.hh>
 #include <sys/kernel/capability/cspace.hh>
 #include <sys/kernel/hypervisor.hh>
+#include <sys/kernel/interrupt/timing.hh>
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/verification/hooks.hh>
 #if CONFIG_HYPERVISOR_SELFTEST
 #include <sys/kernel/tests/hypervisor/control_models.hh>
 #endif
 #if CONFIG_SELFTEST
+#include <sys/kernel/tests/capability/derivation.hh>
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
 #include <sys/kernel/tests/scheduling/sporadic.hh>
@@ -45,25 +47,25 @@ namespace sys::kernel::thread
     inline u32 timeout_queue_counts[maximum_cpu_count]{};
     inline volatile u32 timeout_queue_locks[maximum_cpu_count]{};
 
-    [[nodiscard]] inline arch::irq::irq_state_t lock_timeout_queue(cpu_id_t cpu) noexcept {
-        const arch::irq::irq_state_t state = arch::irq::save_and_disable();
+    [[nodiscard]] inline interrupt::timing::state lock_timeout_queue(cpu_id_t cpu) noexcept {
+        const interrupt::timing::state state = interrupt::timing::save_and_disable();
         while (__atomic_exchange_n(&timeout_queue_locks[cpu], 1U, __ATOMIC_ACQUIRE) != 0U)
             arch::cpu::relax();
         lock_order::acquired(lock_order::rank::scheduler_timeout, &timeout_queue_locks[cpu]);
         return state;
     }
 
-    inline void unlock_timeout_queue(cpu_id_t cpu, arch::irq::irq_state_t state) noexcept {
+    inline void unlock_timeout_queue(cpu_id_t cpu, interrupt::timing::state state) noexcept {
         lock_order::released(lock_order::rank::scheduler_timeout, &timeout_queue_locks[cpu]);
         __atomic_store_n(&timeout_queue_locks[cpu], 0U, __ATOMIC_RELEASE);
-        arch::irq::restore(state);
+        interrupt::timing::restore(state);
     }
 
     inline void arm_ipc_timeout(thread& value) noexcept {
         if (!value.ipc_timeout_active || value.pinned_cpu >= maximum_cpu_count)
             return;
         const cpu_id_t cpu = value.pinned_cpu;
-        const arch::irq::irq_state_t irq_state = lock_timeout_queue(cpu);
+        const interrupt::timing::state irq_state = lock_timeout_queue(cpu);
         u32& count = timeout_queue_counts[cpu];
         for (u32 index = 0U; index < count;) {
             if (timeout_queues[cpu][index].thread == value.id) {
@@ -224,11 +226,6 @@ namespace sys::kernel::thread
             if (result != error_t::success)
                 return result;
 
-            /*
-             * Publish the bootstrap thread only after its object table and
-             * capability-space construction is complete.  Scheduler-visible
-             * readiness is the transaction commit point.
-             */
             store_state(user_threads[id], state::ready);
         }
         task::task& root_task = user_tasks[0];
@@ -546,12 +543,6 @@ namespace sys::kernel::thread
         certification_operations[id] = 0U;
         certification_failures[id] = 0U;
 
-        /*
-         * Commit the process bundle atomically from the scheduler's point of
-         * view.  Before this release store the slot remains inactive, so no
-         * CPU can execute a partially registered object graph or partially
-         * initialized address space.
-         */
         store_state(target, state::ready);
         return error_t::success;
     }
@@ -592,12 +583,6 @@ namespace sys::kernel::thread
         unlock_ipc_lifecycle();
         platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
 
-        /*
-         * State publication alone does not prove that a remote CPU has left
-         * PL3.  Wait for the target CPU's exception/scheduler path to save
-         * the context and publish executing=false before reclaiming or
-         * replacing the address-space image.
-         */
         const u32 target_generation = target.object.generation;
         constexpr u32 maximum_wait_rounds = 1000000U;
         for (u32 round = 0U; round < maximum_wait_rounds; ++round) {
@@ -637,26 +622,53 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
 
-        store_state(target, state::terminated);
-        capability::revoke_reference(object::reference(target.object));
-        capability::revoke_reference(object::reference(target.owner->object));
-        capability::revoke_reference(object::reference(target.address_space.object));
-        capability::revoke_reference(object::reference(target.scheduling_context.object));
-        (void)capability::delete_capability(root.cspace, thread_selector);
-        (void)capability::delete_capability(root.cspace, task_selector);
-        (void)capability::delete_capability(root.cspace, space_selector);
-
-        memory::unmap_all(target.address_space);
         if (capability::slot_at(owner->cspace, 15U).object.type ==
             object::type_t::memory_resource) {
             result = memory::destroy_resource(*owner, 15U);
             if (result != error_t::success)
                 return result;
         }
-        (void)object::unregister_object(object::reference(target.scheduling_context.object));
-        (void)object::unregister_object(object::reference(target.address_space.object));
-        (void)object::unregister_object(object::reference(target.object));
-        (void)object::unregister_object(object::reference(owner->object));
+
+        const object::reference_t scheduling_reference =
+            object::reference(target.scheduling_context.object);
+        const object::reference_t space_reference = object::reference(target.address_space.object);
+        const object::reference_t thread_reference = object::reference(target.object);
+        const object::reference_t task_reference = object::reference(owner->object);
+        {
+            const capability::authority_guard authority_transaction{};
+            header = nullptr;
+            result = capability::lookup(root.cspace, thread_selector, object::type_t::thread,
+                                        capability::right_t::control, header);
+            if (result != error_t::success || header != &target.object)
+                return result == error_t::success ? error_t::not_found : result;
+            result = capability::lookup(root.cspace, task_selector, object::type_t::task,
+                                        capability::right_t::control, header);
+            if (result != error_t::success || header != &owner->object)
+                return result == error_t::success ? error_t::not_found : result;
+            result = capability::lookup(root.cspace, space_selector, object::type_t::address_space,
+                                        capability::right_t::control, header);
+            if (result != error_t::success || header != &target.address_space.object)
+                return result == error_t::success ? error_t::not_found : result;
+            store_state(target, state::terminated);
+            memory::unmap_all(target.address_space);
+            (void)capability::revoke_all_locked(
+                owner->cspace, [](capability::derivation_id_t derivation) noexcept {
+                    (void)memory::unmap_authority(derivation, false);
+                });
+            capability::revoke_reference_locked(thread_reference);
+            capability::revoke_reference_locked(task_reference);
+            capability::revoke_reference_locked(space_reference);
+            capability::revoke_reference_locked(scheduling_reference);
+        }
+        result = object::unregister_object(scheduling_reference);
+        if (result == error_t::success)
+            result = object::unregister_object(space_reference);
+        if (result == error_t::success)
+            result = object::unregister_object(thread_reference);
+        if (result == error_t::success)
+            result = object::unregister_object(task_reference);
+        if (result != error_t::success)
+            return result;
         clear_user_bundle(target, *owner);
         return error_t::success;
     }
@@ -746,6 +758,10 @@ namespace sys::kernel::thread
             capability::slot_at(root.cspace, 18U).object.type != object::type_t::none ||
             capability::slot_at(root.cspace, 10U).object.type == object::type_t::none)
             return error_t::invalid_argument;
+
+        result = tests::capability_derivation::run_derivation_generation_aba(root);
+        if (result != error_t::success)
+            return result;
 
         static capability::cspace_t guarded_cspace{};
         static capability_id_t scalable_selectors[193]{};
@@ -846,6 +862,11 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
         pr_info("[TEST] name=lock_hold_measurement result=PASS max_ticks=%llu\n",
                 static_cast<unsigned long long>(lock_order::maximum_hold()));
+        pr_info("[METRIC] name=irq_disabled_duration max_ticks=%llu reference_ticks=%llu "
+                "samples=%llu\n",
+                static_cast<unsigned long long>(interrupt::timing::maximum()),
+                static_cast<unsigned long long>(interrupt::timing::target_ticks()),
+                static_cast<unsigned long long>(interrupt::timing::sample_count()));
 
         result = tests::interrupt::run(root, guarded_cspace);
         if (result != error_t::success)
@@ -1032,6 +1053,8 @@ namespace sys::kernel::thread
         pr_info("[TEST] name=dynamic_memory_objects result=PASS free=%u managed=%u\n",
                 static_cast<unsigned int>(memory::free_pages),
                 static_cast<unsigned int>(memory::managed_pages));
+        if (!memory::mapping_database_valid())
+            return error_t::invalid_argument;
 
         notification::signal(bootstrap::root_notification, 1U);
         if (notification::consume(bootstrap::root_notification) != 1U)
@@ -1145,7 +1168,7 @@ namespace sys::kernel::thread
 
     inline void expire_ipc_timeouts(cpu_id_t cpu, u64 now) noexcept {
         for (;;) {
-            const arch::irq::irq_state_t irq_state = lock_timeout_queue(cpu);
+            const interrupt::timing::state irq_state = lock_timeout_queue(cpu);
             u32& count = timeout_queue_counts[cpu];
             if (count == 0U || timeout_queues[cpu][0].deadline > now) {
                 unlock_timeout_queue(cpu, irq_state);
@@ -1221,7 +1244,7 @@ namespace sys::kernel::thread
     [[nodiscard]] inline u64 next_timer_deadline(cpu_id_t cpu, u64 now) noexcept {
         if (cpu >= maximum_cpu_count || !user_execution_active[cpu] || !user_cpu_idle[cpu])
             return now == ~0ULL ? now : now + 1U;
-        const arch::irq::irq_state_t irq_state = lock_timeout_queue(cpu);
+        const interrupt::timing::state irq_state = lock_timeout_queue(cpu);
         const u64 idle_deadline = now <= ~0ULL - platform::timer::ticks_per_second
                                       ? now + platform::timer::ticks_per_second
                                       : ~0ULL;
@@ -1236,12 +1259,6 @@ namespace sys::kernel::thread
         if (user_execution_active[cpu]) {
             thread& value = user_threads[current_user_thread[cpu]];
             arch::thread::copy(value.context, frame);
-            /*
-             * Keep the execution claim while the scheduler still owns a
-             * lower-PL exception frame that may be returned to this thread.
-             * Quiescence is published only after load_user() commits to a
-             * different thread or to the kernel-idle frame.
-             */
             (void)scheduling::charge(value.scheduling_context, platform::timer::ticks(cpu), 1U);
         }
     }
@@ -1291,12 +1308,6 @@ namespace sys::kernel::thread
 
     inline void commit_kernel_idle(arch::thread::context& frame, thread* previous) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
-        /*
-         * The kernel identity mapping still lives in TTBR0.  Switch to the
-         * permanent kernel root before publishing that the previous user
-         * context is quiescent; otherwise another CPU may clear that user
-         * address-space table while this CPU is executing EL1 code through it.
-         */
         arch::space::activate_kernel();
         arch::thread::prepare_kernel_idle(frame,
                                           reinterpret_cast<uintptr_t>(&sys_kernel_user_idle));

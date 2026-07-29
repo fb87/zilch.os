@@ -18,6 +18,9 @@ namespace sys::kernel::capability
     inline constexpr u32 maximum_registered_cspaces = 32U;
     inline constexpr u32 maximum_derivations = 4096U;
     inline constexpr u32 maximum_derivation_depth = 64U;
+    inline constexpr u32 derivation_index_bits = 12U;
+    inline constexpr derivation_id_t derivation_index_mask = (1ULL << derivation_index_bits) - 1U;
+    static_assert(maximum_derivations == (1U << derivation_index_bits));
 
     struct cspace_leaf_t {
         slot_t slots[cspace_leaf_slot_count]{};
@@ -36,6 +39,7 @@ namespace sys::kernel::capability
         derivation_id_t id{};
         derivation_id_t parent{};
         object::reference_t object{};
+        u32 generation{};
         volatile u32 active{};
     };
 
@@ -45,6 +49,31 @@ namespace sys::kernel::capability
     inline volatile u32 derivation_lock{};
     inline volatile u32 authority_lock{};
     inline derivation_id_t next_derivation_hint{1U};
+
+    [[nodiscard]] inline constexpr u32 derivation_index(derivation_id_t id) noexcept {
+        return static_cast<u32>(id & derivation_index_mask);
+    }
+
+    [[nodiscard]] inline bool has_active_derivation_child(derivation_id_t parent) noexcept {
+        if (parent == 0U)
+            return false;
+        for (u32 index = 1U; index < maximum_derivations; ++index) {
+            const derivation_record_t& candidate = derivations[index];
+            if (__atomic_load_n(&candidate.active, __ATOMIC_ACQUIRE) != 0U &&
+                candidate.parent == parent)
+                return true;
+        }
+        return false;
+    }
+
+    inline void deactivate_derivation(derivation_id_t id) noexcept {
+        const u32 index = derivation_index(id);
+        if (id == 0U || index == 0U || index >= maximum_derivations)
+            return;
+        derivation_record_t& record = derivations[index];
+        if (record.id == id)
+            __atomic_store_n(&record.active, 0U, __ATOMIC_RELEASE);
+    }
 
     inline void spin_lock(volatile u32& value, lock_order::rank order) noexcept {
         while (__atomic_exchange_n(&value, 1U, __ATOMIC_ACQUIRE) != 0U) {
@@ -69,6 +98,26 @@ namespace sys::kernel::capability
     inline void unlock_authority() noexcept {
         spin_unlock(authority_lock, lock_order::rank::capability_authority);
     }
+    struct authority_guard final {
+        authority_guard() noexcept {
+            lock_authority();
+        }
+        ~authority_guard() noexcept {
+            if (active)
+                unlock_authority();
+        }
+        void release() noexcept {
+            if (!active)
+                return;
+            unlock_authority();
+            active = false;
+        }
+        authority_guard(const authority_guard&) = delete;
+        authority_guard& operator=(const authority_guard&) = delete;
+
+      private:
+        bool active{true};
+    };
     inline void unlock(cspace_t& cspace) noexcept {
         spin_unlock(cspace.lock, lock_order::rank::cspace);
     }
@@ -150,14 +199,23 @@ namespace sys::kernel::capability
             if (candidate == 0U || candidate >= maximum_derivations)
                 candidate = 1U;
             derivation_record_t& record = derivations[candidate];
-            if (__atomic_load_n(&record.active, __ATOMIC_ACQUIRE) == 0U) {
-                record.id = candidate;
+            if (__atomic_load_n(&record.active, __ATOMIC_ACQUIRE) == 0U &&
+                !has_active_derivation_child(record.id)) {
+                u32 generation = record.generation + 1U;
+                if (generation == 0U) {
+                    ++candidate;
+                    continue;
+                }
+                const derivation_id_t id =
+                    (static_cast<derivation_id_t>(generation) << derivation_index_bits) | candidate;
+                record.id = id;
                 record.parent = parent;
                 record.object = object;
+                record.generation = generation;
                 __atomic_store_n(&record.active, 1U, __ATOMIC_RELEASE);
                 next_derivation_hint = candidate + 1U;
                 spin_unlock(derivation_lock, lock_order::rank::capability_derivation);
-                return candidate;
+                return id;
             }
             ++candidate;
         }
@@ -167,9 +225,10 @@ namespace sys::kernel::capability
 
     [[nodiscard]] inline bool derivation_valid(derivation_id_t id,
                                                const object::reference_t& object) noexcept {
-        if (id == 0U || id >= maximum_derivations)
+        const u32 index = derivation_index(id);
+        if (id == 0U || index == 0U || index >= maximum_derivations)
             return false;
-        const derivation_record_t& record = derivations[id];
+        const derivation_record_t& record = derivations[index];
         return __atomic_load_n(&record.active, __ATOMIC_ACQUIRE) != 0U && record.id == id &&
                record.object.id == object.id && record.object.generation == object.generation &&
                record.object.type == object.type;
@@ -180,10 +239,11 @@ namespace sys::kernel::capability
         if (candidate == 0U || ancestor == 0U || candidate == ancestor)
             return false;
         for (u32 depth = 0U; depth < maximum_derivation_depth; ++depth) {
-            if (candidate >= maximum_derivations)
+            const u32 index = derivation_index(candidate);
+            if (candidate == 0U || index == 0U || index >= maximum_derivations)
                 return false;
-            const derivation_record_t& record = derivations[candidate];
-            if (record.id != candidate || __atomic_load_n(&record.active, __ATOMIC_ACQUIRE) == 0U)
+            const derivation_record_t& record = derivations[index];
+            if (record.id != candidate)
                 return false;
             if (record.parent == ancestor)
                 return true;
@@ -275,8 +335,7 @@ namespace sys::kernel::capability
         slot_t& slot = slot_at(cspace, index);
         if (slot.object.type == object::type_t::none)
             return error_t::not_found;
-        if (slot.derivation < maximum_derivations)
-            __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
+        deactivate_derivation(slot.derivation);
         slot = {};
         mark_free(cspace, index);
         return error_t::success;
@@ -542,8 +601,7 @@ namespace sys::kernel::capability
                 if (revoke_marks[space_index][slot_index] == 0U)
                     continue;
                 slot_t& slot = slot_at(*cspace, slot_index);
-                if (slot.derivation < maximum_derivations)
-                    __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
+                deactivate_derivation(slot.derivation);
                 slot = {};
                 mark_free(*cspace, slot_index);
                 revoke_marks[space_index][slot_index] = 0U;
@@ -571,8 +629,7 @@ namespace sys::kernel::capability
             slot_t& slot = slot_at(cspace, index);
             if (slot.object.id == reference.id && slot.object.generation == reference.generation &&
                 slot.object.type == reference.type) {
-                if (slot.derivation < maximum_derivations)
-                    __atomic_store_n(&derivations[slot.derivation].active, 0U, __ATOMIC_RELEASE);
+                deactivate_derivation(slot.derivation);
                 slot = {};
                 mark_free(cspace, index);
                 ++removed;
@@ -599,6 +656,24 @@ namespace sys::kernel::capability
         lock_authority();
         const u32 removed = revoke_reference_locked(reference);
         unlock_authority();
+        return removed;
+    }
+
+    template <typename RetireAttachment>
+    inline u32 revoke_all_locked(cspace_t& cspace, RetireAttachment&& retire_attachment) noexcept {
+        u32 removed = 0U;
+        for (u32 index = 0U; index < cspace_slot_count; ++index) {
+            lock(cspace);
+            const slot_t slot = slot_at(cspace, index);
+            unlock(cspace);
+            if (slot.object.type == object::type_t::none)
+                continue;
+            retire_attachment(slot.derivation);
+            removed += revoke_descendants_locked(slot.derivation);
+            if (delete_capability_locked(cspace, encode_selector(cspace.guard, index)) ==
+                error_t::success)
+                ++removed;
+        }
         return removed;
     }
 } // namespace sys::kernel::capability

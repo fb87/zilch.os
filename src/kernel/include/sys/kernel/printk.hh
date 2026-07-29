@@ -1,8 +1,8 @@
 #pragma once
-
 #include <sys/arch/cpu.hh>
 #include <sys/arch/irq.hh>
 #include <sys/kernel/emergency.hh>
+#include <sys/kernel/interrupt/timing.hh>
 #include <sys/platform/platform.hh>
 #include <sys/types.hh>
 
@@ -207,9 +207,10 @@ namespace sys::printk
     }
 
     inline int printk(const char* format, ...) noexcept {
-        const arch::irq::irq_state_t irq_state = arch::irq::save_and_disable();
+        const kernel::interrupt::timing::state irq_state =
+            kernel::interrupt::timing::save_and_disable();
         if (!lock()) {
-            arch::irq::restore(irq_state);
+            kernel::interrupt::timing::restore(irq_state);
             return -1;
         }
 
@@ -219,7 +220,7 @@ namespace sys::printk
         va_end(arguments);
 
         unlock();
-        arch::irq::restore(irq_state);
+        kernel::interrupt::timing::restore(irq_state);
         return result;
     }
 } // namespace sys::printk

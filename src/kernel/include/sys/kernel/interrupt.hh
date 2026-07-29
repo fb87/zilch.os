@@ -51,17 +51,30 @@ namespace sys::kernel::interrupt
     }
 
     [[nodiscard]] inline error_t register_irq(interrupt_t& value) noexcept {
-        if (value.irq >= maximum_irq_count || registry[value.irq] != nullptr)
+        if (value.irq >= maximum_irq_count)
             return error_t::busy;
-        registry[value.irq] = &value;
+        interrupt_t* expected = nullptr;
+        if (!__atomic_compare_exchange_n(&registry[value.irq], &expected, &value, false,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            return error_t::busy;
         platform::interrupt::mask(value.irq);
-        return platform::interrupt::configure(value.irq, value.trigger_mode == trigger::edge);
+        const error_t result =
+            platform::interrupt::configure(value.irq, value.trigger_mode == trigger::edge);
+        if (result != error_t::success) {
+            expected = &value;
+            (void)__atomic_compare_exchange_n(&registry[value.irq], &expected, nullptr, false,
+                                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        }
+        return result;
     }
 
     inline void unregister_irq(interrupt_t& value) noexcept {
         platform::interrupt::mask(value.irq);
-        if (value.irq < maximum_irq_count && registry[value.irq] == &value)
-            registry[value.irq] = nullptr;
+        if (value.irq < maximum_irq_count) {
+            interrupt_t* expected = &value;
+            (void)__atomic_compare_exchange_n(&registry[value.irq], &expected, nullptr, false,
+                                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        }
         value.notification = {};
         value.masked = true;
         value.active = false;
@@ -97,6 +110,10 @@ namespace sys::kernel::interrupt
         object::header_t* header = object::resolve(target);
         if (header == nullptr || header->type != object::type_t::notification)
             return error_t::invalid_argument;
+        platform::interrupt::mask(value.irq);
+        __atomic_store_n(&value.masked, true, __ATOMIC_RELEASE);
+        if (__atomic_load_n(&value.active, __ATOMIC_ACQUIRE))
+            return error_t::busy;
         value.notification = target;
         __atomic_store_n(&value.stormed, false, __ATOMIC_RELEASE);
         __atomic_store_n(&value.window_count, 0U, __ATOMIC_RELEASE);
@@ -122,7 +139,7 @@ namespace sys::kernel::interrupt
     [[nodiscard]] inline bool dispatch(irq_id_t irq) noexcept {
         if (irq >= maximum_irq_count)
             return false;
-        interrupt_t* value = registry[irq];
+        interrupt_t* value = __atomic_load_n(&registry[irq], __ATOMIC_ACQUIRE);
         if (value == nullptr ||
             !record_delivery(*value, platform::timer::ticks(arch::cpu::current_id())))
             return false;
@@ -134,6 +151,26 @@ namespace sys::kernel::interrupt
         }
         auto& target = *reinterpret_cast<notification::notification*>(header);
         notification::signal(target, 1ULL << (irq & 63U));
+        return true;
+    }
+
+    [[nodiscard]] inline bool database_valid() noexcept {
+        for (u32 irq = 0U; irq < maximum_irq_count; ++irq) {
+            interrupt_t* value = __atomic_load_n(&registry[irq], __ATOMIC_ACQUIRE);
+            if (value == nullptr)
+                continue;
+            if (value->irq != irq || value->object.type != object::type_t::interrupt ||
+                __atomic_load_n(&value->acknowledged, __ATOMIC_ACQUIRE) >
+                    __atomic_load_n(&value->delivered, __ATOMIC_ACQUIRE) ||
+                (__atomic_load_n(&value->active, __ATOMIC_ACQUIRE) &&
+                 !__atomic_load_n(&value->masked, __ATOMIC_ACQUIRE)) ||
+                (__atomic_load_n(&value->stormed, __ATOMIC_ACQUIRE) &&
+                 !__atomic_load_n(&value->masked, __ATOMIC_ACQUIRE)))
+                return false;
+            if (value->notification.type != object::type_t::none &&
+                object::resolve(value->notification) == nullptr)
+                return false;
+        }
         return true;
     }
 } // namespace sys::kernel::interrupt

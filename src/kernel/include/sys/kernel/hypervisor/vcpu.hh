@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sys/arch/timer.hh>
 #include <sys/kernel/hypervisor/object.hh>
 #include <sys/kernel/printk.hh>
 
@@ -17,6 +18,7 @@ namespace sys::kernel::hypervisor
         vcpu.context.pstate = pstate;
         vcpu.context.sp_el1 = sp;
         vcpu.interrupt_state.reset();
+        vcpu.timer.reset();
         vcpu.virtual_irq_pending = false;
         vcpu.state = vm_state::runnable;
         vcpu.lifecycle = vcpu_state::runnable;
@@ -44,6 +46,14 @@ namespace sys::kernel::hypervisor
             return vmid_result;
         if (vcpu.state != vm_state::runnable || vm.mapping_count == 0U)
             return error_t::invalid_argument;
+        vcpu.timer.synchronize(vcpu.context.cntv_ctl_el0, vcpu.context.cntv_cval_el0);
+        if (vcpu.timer.expire(virtual_counter(arch::timer::counter(), vm.counter_offset))) {
+            const error_t timer_irq = vcpu.interrupt_state.inject(27U);
+            if (timer_irq != error_t::success)
+                return timer_irq;
+            vcpu.virtual_irq = 27U;
+            __atomic_store_n(&vcpu.virtual_irq_pending, true, __ATOMIC_RELEASE);
+        }
         if (__atomic_exchange_n(&vcpu.running, true, __ATOMIC_ACQ_REL))
             return error_t::busy;
         if (vm.run_entries == ~static_cast<u64>(0U)) {
@@ -61,12 +71,14 @@ namespace sys::kernel::hypervisor
             ++vcpu.migration_count;
         vcpu.lifecycle = vcpu_state::running;
         const bool pending_irq = __atomic_load_n(&vcpu.virtual_irq_pending, __ATOMIC_ACQUIRE);
-        const error_t result =
-            arch::hypervisor::run_guest(vm.vmid, vm.stage_2_root, vcpu.context, exit, pending_irq);
+        const error_t result = arch::hypervisor::run_guest(vm.vmid, vm.stage_2_root, vcpu.context,
+                                                           exit, vm.counter_offset, pending_irq);
         if (pending_irq && result == error_t::success) {
             __atomic_store_n(&vcpu.virtual_irq_pending, false, __ATOMIC_RELEASE);
             vcpu.interrupt_state.reset();
+            vcpu.timer.acknowledge();
         }
+        vcpu.timer.synchronize(vcpu.context.cntv_ctl_el0, vcpu.context.cntv_cval_el0);
         vcpu.last_exit = exit;
         emergency::trace(emergency::event::vm_exit, vcpu.id, static_cast<u64>(exit.reason),
                          exit.syndrome, exit.qualification, exit.guest_pc);

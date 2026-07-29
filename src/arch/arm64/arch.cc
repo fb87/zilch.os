@@ -35,10 +35,14 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
     const sys::u64 exception_class = vector & 0x3U;
 
     if (exception_class == 1U) {
+        const sys::kernel::interrupt::timing::latency_scope interrupt_latency{
+            sys::kernel::interrupt::timing::latency_kind::interrupt_service};
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
         bool userspace_deactivate = false;
         sys::kernel::emergency::trace(sys::kernel::emergency::event::irq, irq, vector, level);
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
+            const sys::kernel::interrupt::timing::latency_scope preemption_latency{
+                sys::kernel::interrupt::timing::latency_kind::preemption_service};
             const sys::u64 ticks = sys::platform::timer::handle_interrupt();
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
@@ -54,6 +58,7 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                         static_cast<unsigned int>(sys::arch::cpu::current_id()));
             }
         } else if (irq == sys::platform::interrupt::reschedule_ipi) {
+            sys::kernel::interrupt::timing::complete_cross_cpu_wake(sys::arch::cpu::current_id());
             sys::arch::smp::record_reschedule_ipi();
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {

@@ -570,19 +570,34 @@ namespace sys::kernel::memory
     }
 
     [[nodiscard]] inline error_t release_frame(frame& target) noexcept {
-        if (!target.allocated)
+        lock_mappings();
+        if (!target.allocated) {
+            unlock_mappings();
             return error_t::not_found;
-        if (target.mapping_count != 0U)
+        }
+        if (target.mapping_count != 0U) {
+            unlock_mappings();
             return error_t::busy;
-        const error_t result =
-            target.device ? error_t::success : release_physical_page(target.physical_address);
-        if (result != error_t::success)
+        }
+        const paddr_t physical_address = target.physical_address;
+        const bool device = target.device;
+        target.allocated = false;
+        unlock_mappings();
+
+        const error_t result = device ? error_t::success : release_physical_page(physical_address);
+        if (result != error_t::success) {
+            lock_mappings();
+            target.allocated = true;
+            unlock_mappings();
             return result;
+        }
+
+        lock_mappings();
         target.physical_address = 0U;
         target.owner = 0U;
         target.owner_task = {};
-        target.allocated = false;
         target.device = false;
+        unlock_mappings();
         return error_t::success;
     }
 
@@ -718,6 +733,7 @@ namespace sys::kernel::memory
 
     [[nodiscard]] inline error_t destroy_resource(task::task& owner,
                                                   capability_id_t selector) noexcept {
+        capability::authority_guard authority_transaction{};
         object::header_t* header = nullptr;
         error_t result = capability::lookup(owner.cspace, selector, object::type_t::memory_resource,
                                             capability::right_t::control, header);
@@ -745,8 +761,8 @@ namespace sys::kernel::memory
             }
         }
         const object::reference_t reference = object::reference(target.object);
-        capability::revoke_reference(reference);
-        (void)capability::delete_capability(owner.cspace, selector);
+        capability::revoke_reference_locked(reference);
+        authority_transaction.release();
         result = object::unregister_object(reference);
         if (result != error_t::success)
             return result;
@@ -1006,6 +1022,7 @@ namespace sys::kernel::memory
 
     [[nodiscard]] inline error_t destroy_frame(task::task& owner,
                                                capability_id_t selector) noexcept {
+        capability::authority_guard authority_transaction{};
         object::header_t* header = nullptr;
         error_t result = capability::lookup(owner.cspace, selector, object::type_t::frame,
                                             capability::right_t::control, header);
@@ -1025,7 +1042,8 @@ namespace sys::kernel::memory
         if (result != error_t::success)
             return result;
         const object::reference_t reference = object::reference(target.object);
-        capability::revoke_reference(reference);
+        capability::revoke_reference_locked(reference);
+        authority_transaction.release();
         result = object::unregister_object(reference);
         if (result != error_t::success)
             return result;
@@ -1143,6 +1161,7 @@ namespace sys::kernel::memory
 
     [[nodiscard]] inline error_t destroy_page_table(task::task& owner,
                                                     capability_id_t selector) noexcept {
+        capability::authority_guard authority_transaction{};
         object::header_t* header = nullptr;
         error_t result = capability::lookup(owner.cspace, selector, object::type_t::page_table,
                                             capability::right_t::control, header);
@@ -1163,7 +1182,8 @@ namespace sys::kernel::memory
         if (result != error_t::success)
             return result;
         const object::reference_t reference = object::reference(target.object);
-        capability::revoke_reference(reference);
+        capability::revoke_reference_locked(reference);
+        authority_transaction.release();
         result = object::unregister_object(reference);
         if (result != error_t::success)
             return result;
@@ -1187,6 +1207,15 @@ namespace sys::kernel::memory
             return error_t::invalid_argument;
 
         lock_mappings();
+        /*
+         * Allocation state and attributes are revalidated after acquiring the
+         * mapping lock. A concurrent release may have retired the frame after
+         * the optimistic entry check but before this transaction began.
+         */
+        if (!source.allocated || !valid_attributes(attributes, permissions, source.device)) {
+            unlock_mappings();
+            return error_t::denied;
+        }
         for (const auto& mapping : source.mappings) {
             if (mapping.valid && same_reference(mapping.address_space, space_reference) &&
                 mapping.address == address) {
@@ -1353,6 +1382,59 @@ namespace sys::kernel::memory
             }
         }
         unlock_mappings();
+    }
+
+    [[nodiscard]] inline bool mapping_database_valid() noexcept {
+        bool valid = true;
+        lock_mappings();
+        for (u32 frame_index = 0U; frame_index < frame_count && valid; ++frame_index) {
+            const frame& source = frames[frame_index];
+            u32 observed = 0U;
+            for (u32 mapping_index = 0U; mapping_index < maximum_mappings_per_frame;
+                 ++mapping_index) {
+                const mapping_record& mapping = source.mappings[mapping_index];
+                if (!mapping.valid)
+                    continue;
+                ++observed;
+                object::header_t* target_header = object::resolve(mapping.address_space);
+                if (!source.allocated || mapping.generation == 0U || target_header == nullptr ||
+                    target_header->type != object::type_t::address_space ||
+                    !valid_permission(mapping.permissions) ||
+                    !valid_attributes(mapping.attributes, mapping.permissions, source.device) ||
+                    (mapping.frame_authority != 0U &&
+                     !capability::derivation_valid(mapping.frame_authority,
+                                                   object::reference(source.object))) ||
+                    (mapping.space_authority != 0U &&
+                     !capability::derivation_valid(mapping.space_authority,
+                                                   mapping.address_space))) {
+                    valid = false;
+                    break;
+                }
+                for (u32 candidate_frame = frame_index; candidate_frame < frame_count;
+                     ++candidate_frame) {
+                    const u32 first_mapping =
+                        candidate_frame == frame_index ? mapping_index + 1U : 0U;
+                    for (u32 candidate_mapping = first_mapping;
+                         candidate_mapping < maximum_mappings_per_frame; ++candidate_mapping) {
+                        const mapping_record& candidate =
+                            frames[candidate_frame].mappings[candidate_mapping];
+                        if (candidate.valid &&
+                            same_reference(candidate.address_space, mapping.address_space) &&
+                            candidate.address == mapping.address) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    if (!valid)
+                        break;
+                }
+            }
+            if (observed != source.mapping_count ||
+                (!source.allocated && (observed != 0U || source.mapping_count != 0U)))
+                valid = false;
+        }
+        unlock_mappings();
+        return valid;
     }
 
     [[nodiscard]] inline u32 allocated_page_count() noexcept {

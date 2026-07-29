@@ -1,3 +1,77 @@
+## 0165 - Retire complete process bundles transactionally
+
+- Quiesce a process thread and destroy its delegated memory resource before
+  entering the process-wide capability-authority transaction.
+- Revalidate the thread, task, and address-space control capabilities, unmap
+  the address space, drain the task CSpace, and revoke the complete object
+  bundle before object-reader grace periods.
+- Gate final acceptance on thread, task, address-space, and scheduling-context
+  ownership and lifecycle invariants.
+
+## 0164 - Retire IPC and interrupt objects safely
+
+- Add an endpoint retiring state and revalidate the control capability while
+  holding endpoint-to-authority locks before revocation.
+- Reject call and receive operations that resolved an endpoint before its
+  retirement became visible.
+- Retire notification capabilities under authority and release authority
+  before object-reader synchronization.
+- Publish IRQ registry entries with atomic compare/exchange, roll back failed
+  registration, and consume entries with acquire semantics in dispatch.
+- Mask IRQs before rebinding notification state and reject rebinding while an
+  interrupt remains active.
+- Gate final acceptance on endpoint, notification, and interrupt registry
+  invariants in addition to mapping, object, and lock invariants.
+
+## 0163 - Serialize memory-object retirement and mapping lifetime
+
+- Make frame, page-table, and memory-resource destruction capability-authority
+  transactions through validation, resource retirement, and capability revoke.
+- Release the authority lock before object-table reader synchronization to
+  avoid a grace-period cycle with remote syscalls waiting for authority.
+- Retire frames under the mapping lock before returning physical memory and
+  revalidate allocation state after map acquires that lock.
+- Serialize explicit frame allocate/release operations against map, unmap,
+  revoke, and destroy.
+- Add complete mapping-database validation and make mapping, object-accounting,
+  and lock-order invariants part of final certification acceptance.
+
+## 0162 - Harden capability derivations and IPC cancellation
+
+- Replace reusable derivation-array indexes with generation-tagged internal
+  handles and permanently retire a record if its generation would wrap.
+- Prevent inactive derivation records from being reused while active children
+  still reference that exact generation.
+- Preserve descendant traversal through deleted intermediate capabilities
+  without allowing an unrelated reused record to create an ABA collision.
+- Serialize endpoint removal and IPC lifecycle completion under the documented
+  endpoint-to-lifecycle lock order, with exact blocked-state and endpoint
+  revalidation.
+- Add deterministic certification for deleted-ancestor traversal and forced
+  derivation-index reuse alongside the existing four-CPU lifecycle races.
+
+## 0161 - Preserve guest virtual timer state and counter offsets
+
+- Save and restore `CNTV_CTL_EL0` and `CNTV_CVAL_EL0` across real guest
+  deschedule/resume boundaries.
+- Program a per-VM `CNTVOFF_EL2` value for every guest entry and restore the
+  host value on normal and rejected entries.
+- Track bounded virtual-timer arm, expiry, pending, acknowledgement, and
+  cancellation state in the production vCPU path.
+- Certify a nonzero counter offset with a real ARM64 guest and exercise
+  deterministic expiry and cancellation transitions.
+
+## 0160 - Add kernel real-time latency telemetry
+
+- Wrap serialized logging and scheduler timeout-queue mutation in per-CPU
+  architectural-counter duration telemetry.
+- Measure IRQ handler service, timer preemption service, cross-CPU wake
+  request-to-IPI receipt, and IPC syscall service with the same per-CPU maxima.
+- Publish full-run QEMU observations without treating host-scheduling outliers
+  as kernel acceptance failures.
+- Advance SCH-017 and SCH-020 through SCH-023 to in progress; stable targets
+  and retained real-hardware evidence remain required for completion.
+
 ## 0159 - Restore progress-safe sporadic replenishment
 
 - Track charged scheduling slices in a bounded ordered replenishment queue.

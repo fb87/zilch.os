@@ -14,10 +14,12 @@ period, and absolute-deadline overflow. Donation remains separately accounted
 through the existing authority chain.
 
 Every ranked kernel lock records its acquisition counter and updates a
-generation-safe maximum on release. Certification reports the maximum hold
-duration in architectural timer ticks and rejects lock-order violations.
-IRQ-disabled-section timing remains SCH-017 work. Hardware-specific latency
-targets remain outside this bounded evidence.
+generation-safe maximum on release. Scoped logging and scheduler timeout-queue
+sections also retain per-CPU IRQ-disabled sample counts and maximum duration.
+IRQ service, timer preemption, cross-CPU wake, and IPC service use the same
+telemetry foundation. QEMU runs publish observations only: host vCPU
+descheduling makes elapsed-time limits nondeterministic, so stable
+real-hardware bounds remain SCH-017 and SCH-020 through SCH-023 work.
 
 Scheduler charges and IPC donation use the current per-CPU logical timer.
 Donated unconsumed budget receives a future replenishment record before the
