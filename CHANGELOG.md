@@ -1,3 +1,15 @@
+## 0170 - Complete the bounded kernel capability system
+
+- Validate every registered CSpace and active derivation at final acceptance,
+  including occupancy, generation, ancestry, uniqueness, and live-object
+  invariants.
+- Add a `capability_completion_gate` aggregating attenuation, derivation,
+  revoke, batched transfer and rollback, mapping authority, cross-CPU races,
+  SMP mutation, teardown, and generation reuse evidence.
+- Freeze the production bounds at 32 CSpaces, 256 slots per CSpace, 4,095
+  usable derivations, depth 64, and four-capability IPC batches.
+- Close CAP-001 through CAP-021 and the capability production gate.
+
 ## 0169 - Complete bounded physical memory and address spaces
 
 - Generate the QEMU virt DTB for every ARM64 run, load it at the documented

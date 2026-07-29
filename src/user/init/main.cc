@@ -44,6 +44,7 @@ namespace
         ipc_ool_frame_grant = 27U,
         ipc_completion_gate = 28U,
         memory_completion_gate = 29U,
+        capability_completion_gate = 30U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -1119,6 +1120,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
                mapping_database_pass && authority_revoke_pass && attributes_pressure_pass &&
                resource_delegation_pass && extent_retype_pass && extent_metadata_pass &&
                pressure_rollback_pass && fuzz_pass && destroyed && reused);
+    record(ledger, test_id::capability_completion_gate,
+           capability_pass && capability_race_pass && object_race_pass && authority_revoke_pass &&
+               services.memory_protocol && dynamic_ipc_pass && fuzz_pass && destroyed && reused);
 
     const bool pass = ledger.failure_count == 0U && ledger.transport_ok;
     (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,

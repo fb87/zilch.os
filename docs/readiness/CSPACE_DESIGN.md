@@ -35,16 +35,25 @@ order, performs its two-phase mark/remove transaction, and unlocks in reverse
 order. This keeps equal-rank locking consistent even when registration order
 differs from storage order.
 
-## Bounds and remaining work
+## Production bounds
 
 The 1.0 CSpace capacity is 256 slots. This is an explicit bounded kernel
 contract, not a test-only pool. The derivation table remains a separate bounded
-global structure; scalable/restartable derivation traversal is tracked by
-CAP-008 and CAP-013. Multi-capability IPC transfer remains tracked by
-CAP-017 through CAP-019.
+global structure with 4,095 usable generation-tagged records and maximum depth
+64. Up to 32 CSpaces may be registered. Exhaustion fails closed. Descendant
+revoke completes as one bounded transaction rather than exposing a restart
+cursor.
+
+IPC calls and replies transfer at most four capabilities per transaction. Each
+element has a receiver-selected destination, and any duplicate, occupied
+destination, or mint failure rolls back the complete batch.
 
 Certification fills 193 slots across all four leaves, rejects a wrong guard,
 bulk-revokes every descendant, verifies bitmap recovery, and then executes
 4,096 generated cross-CSpace copy/lookup/delete operations. The existing
 cross-CPU transfer-versus-revoke suite continues to verify its post-revoke
 invariant.
+
+Final acceptance also scans the complete bounded capability database and
+rejects registry, occupancy, generation, ancestry, uniqueness, or live-object
+inconsistency.

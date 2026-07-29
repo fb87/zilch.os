@@ -659,6 +659,70 @@ namespace sys::kernel::capability
         return removed;
     }
 
+    [[nodiscard]] inline bool database_valid() noexcept {
+        static u8 live_derivations[maximum_derivations]{};
+        for (u32 index = 0U; index < maximum_derivations; ++index)
+            live_derivations[index] = 0U;
+
+        bool valid = true;
+        lock_authority();
+        spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);
+        for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
+            cspace_t* cspace = cspace_registry[space_index];
+            if (cspace == nullptr)
+                continue;
+            lock(*cspace);
+            valid = valid && cspace->registry_index == space_index &&
+                    cspace->guard <= cspace_guard_mask &&
+                    cspace->allocation_hint < cspace_slot_count;
+            for (u32 slot_index = 0U; slot_index < cspace_slot_count; ++slot_index) {
+                const slot_t& slot = slot_at(*cspace, slot_index);
+                const u64 occupied = cspace->leaves[slot_index >> cspace_leaf_bits].occupied;
+                const bool marked =
+                    (occupied & (1ULL << (slot_index & (cspace_leaf_slot_count - 1U)))) != 0U;
+                if (slot.object.type == object::type_t::none) {
+                    valid = valid && slot.derivation == 0U && slot.parent == 0U &&
+                            slot.rights.bits == 0U && slot.badge == 0U && slot.depth == 0U;
+                    continue;
+                }
+                const u32 index = derivation_index(slot.derivation);
+                if (!marked || index == 0U || index >= maximum_derivations ||
+                    live_derivations[index] != 0U ||
+                    !derivation_valid(slot.derivation, slot.object) ||
+                    object::resolve(slot.object) == nullptr ||
+                    slot.depth > maximum_derivation_depth) {
+                    valid = false;
+                    continue;
+                }
+                const derivation_record_t& record = derivations[index];
+                valid = valid && slot.parent == record.parent &&
+                        ((slot.depth == 0U) == (slot.parent == 0U));
+                live_derivations[index] = 1U;
+            }
+            unlock(*cspace);
+        }
+
+        for (u32 index = 1U; index < maximum_derivations; ++index) {
+            const derivation_record_t& record = derivations[index];
+            if (__atomic_load_n(&record.active, __ATOMIC_ACQUIRE) == 0U)
+                continue;
+            valid = valid && live_derivations[index] != 0U &&
+                    derivation_index(record.id) == index && record.generation != 0U &&
+                    (record.id >> derivation_index_bits) == record.generation;
+            if (record.parent != 0U) {
+                const u32 parent_index = derivation_index(record.parent);
+                valid = valid && parent_index != 0U && parent_index < maximum_derivations &&
+                        derivations[parent_index].id == record.parent &&
+                        derivations[parent_index].object.id == record.object.id &&
+                        derivations[parent_index].object.generation == record.object.generation &&
+                        derivations[parent_index].object.type == record.object.type;
+            }
+        }
+        spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
+        unlock_authority();
+        return valid;
+    }
+
     template <typename RetireAttachment>
     inline u32 revoke_all_locked(cspace_t& cspace, RetireAttachment&& retire_attachment) noexcept {
         u32 removed = 0U;

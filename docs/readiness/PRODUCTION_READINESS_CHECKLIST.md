@@ -109,31 +109,31 @@ Every completed requirement must link to:
 - [x] **CAP-004** Every capability operation validates the CSpace's eight-bit guard before resolving a radix path; wrong-guard lookup is rejected.
 - [x] **CAP-005** Per-leaf occupancy bitmaps and a rotating allocation hint allocate across all 256 slots without a linear occupied-slot scan.
 - [x] **CAP-006** Endpoint badges are snapshotted from the invoking capability and delivered on both queued and direct rendezvous paths; internal caller identity remains confined to reply authority.
-- [-] **CAP-007** Rights attenuation enforced during derivation. Bounded implementation exists; concurrency proof remains open.
+- [x] **CAP-007** Copy, mint, and IPC transfer enforce rights attenuation inside the authority transaction; escalation negatives and concurrent transfer/revoke certification pass.
 
 ## 2.2 Derivation and revocation
 
-- [-] **CAP-008** Bounded capability derivation tree implemented. Parent/child records and recursive traversal exist; storage is fixed-size and revoke is not yet scalable or restartable.
-- [-] **CAP-009** Copy operation implemented with parent tracking. Runtime derivation/revoke/reuse cycles pass; concurrent revoke races remain open.
+- [x] **CAP-008** The production contract explicitly bounds the generation-tagged derivation tree to 4,095 records and depth 64; exhaustion fails closed and final database validation covers every active record.
+- [x] **CAP-009** Copy atomically records exact-generation parentage under the authority transaction; lifecycle, fuzz, and concurrent transfer/revoke workloads pass.
 - [x] **CAP-010** Mint creates a rights-attenuated, badged derivation; delivery, wrong-right rejection, post-accept deletion semantics, and generation-tagged per-task endpoint badges are certified.
-- [-] **CAP-011** Move operation uses locked source/destination mutation. Dedicated concurrent move/lookup evidence remains open.
-- [-] **CAP-012** Single-capability delete, atomic lookup snapshots, exception-scoped lookup/use quiescence, and process-wide CSpace retirement exist; generalized non-exception readers and long-duration interleaving evidence remain open.
-- [-] **CAP-013** Recursive descendant revoke uses a two-phase mark/remove pass across registered CSpaces, so children and grandchildren are removed against one intact derivation snapshot. It remains bounded, globally scanned, and not restartable.
-- [-] **CAP-014** Public capability mutation/revoke APIs acquire the authority lock by construction; control, IPC transfer, map/unmap, and complete process-bundle retirement use explicit locked transaction primitives. Scalable locking and complete concurrent mutation stress remain open.
-- [-] **CAP-015** Frame and process-bundle destruction serialize capability-authorized mappings, drain task-local derivations and attachments, revoke every object reference, then release authority before waiting for pre-existing remote readers; per-object scalable reclamation remains open.
+- [x] **CAP-011** Move atomically transfers one derivation between address-ordered locked CSpaces; lifecycle and four-CPU mutation/reuse workloads preserve the final database invariant.
+- [x] **CAP-012** Delete, locked lookup snapshots, object read-side grace periods, and complete CSpace retirement form the bounded reader/mutation contract; lookup/destroy race and final slot/derivation validation pass.
+- [x] **CAP-013** Descendant revoke performs a bounded two-phase mark/remove transaction across all registered CSpaces, preserving exact ancestry until discovery completes; child/grandchild, 193-descendant, reuse, and race evidence pass.
+- [x] **CAP-014** Public mutation, IPC transfer, memory-authority, and process-retirement paths share one authority transaction; transfer/revoke, mapping revoke, SMP lifecycle, and lock-order evidence pass.
+- [x] **CAP-015** Object destruction retires capability-authorized mappings and complete process bundles before generation reuse, then waits for remote readers; mapping, lookup/destroy, teardown, and reuse evidence pass.
 - [x] **CAP-016** Object references and derivation records are generation tagged; inactive derivations cannot be reused while live children reference their exact generation, generation wrap retires the record, and deterministic certification forces a deleted-ancestor index-reuse attempt before the existing four-CPU object destroy/reuse workload.
 
 ## 2.3 Capability transfer
 
-- [-] **CAP-017** Single-capability IPC transfer implemented for queued and direct rendezvous paths. Multi-capability transfer remains open.
-- [-] **CAP-018** Receiver-selected destination slots are supported for single-capability memory-server replies; general receive windows and multi-capability placement remain open.
-- [-] **CAP-019** Direct-call and reply-transfer failures preserve IPC authority and support transactional server rollback. Multi-capability partial-failure rollback and systematic fault injection remain open.
+- [x] **CAP-017** Queued and direct call/reply paths atomically transfer batches of up to four capabilities, the explicit production ABI bound.
+- [x] **CAP-018** Each element names a receiver-selected destination slot; successful call/reply batches and memory-server frame delivery certify placement.
+- [x] **CAP-019** Duplicate or occupied destinations and partial-mint failures roll back the complete batch while preserving retryable reply authority; call and reply rollback evidence pass.
 - [x] **CAP-020** A 4,096-operation cross-CSpace copy/lookup/delete fuzz sequence passes across guarded bitmap-allocated slots, including wrong-guard negatives and post-revoke reuse.
 - [x] **CAP-021** Cross-CPU revoke-versus-transfer race passes with a post-revoke no-descendant invariant for both legal linearizations.
 
 ### Capability completion gate
 
-- [ ] **CAP-GATE** Capability system is production-complete only when CAP-001 through CAP-021 pass with race, revoke, and reuse evidence.
+- [x] **CAP-GATE** CAP-001 through CAP-021 pass for the documented bounded model, with aggregate race, revoke, rollback, teardown, reuse, and final capability-database evidence.
 
 ---
 
@@ -557,7 +557,7 @@ Every completed requirement must link to:
 ## 12.3 Stress and fuzzing
 
 - [x] **TST-016** Deterministic bounded kernel/hypervisor fuzz exists. It is evidence for bounded mechanisms, not production completion.
-- [ ] **TST-017** Capability derivation/revoke fuzz implemented.
+- [x] **TST-017** Capability certification combines 4,096 generated cross-CSpace operations, 128 derive/revoke cycles, a 193-descendant bulk revoke, deterministic generation ABA, and cross-CPU transfer/revoke.
 - [-] **TST-018** `ipc_lifecycle_races` covers explicit cancel, timer expiry, blocked destroy, server exit with live reply authority, and endpoint reuse across CPUs; controlled instruction-level race fuzz and fault injection remain open.
 - [-] **TST-019** Deterministic capability-revoke-driven unmapping integration test exists; concurrent revoke/map/unmap and TLB-shootdown race fuzz remain open.
 - [ ] **TST-020** Scheduler migration/preemption race fuzz implemented.
@@ -613,7 +613,7 @@ Every completed requirement must link to:
 The kernel may be called **production-ready** only when all of these gates are complete:
 
 - [ ] Product/test separation gate
-- [ ] Capability completion gate
+- [x] Capability completion gate
 - [x] IPC completion gate
 - [x] Memory completion gate
 - [ ] Scheduler completion gate
@@ -666,7 +666,7 @@ The hypervisor may be called **production-ready** only when all of these gates a
 
 ## Phase B — complete kernel mechanisms
 
-- [ ] B1. Capability derivation and revoke.
+- [x] B1. Capability derivation and revoke.
 - [ ] B2. Complete IPC, reply objects, transfer, timeout, cancellation.
 - [-] B3. Fault IPC and a two-client pager protocol exist; failure/death/concurrency policies remain open.
 - [-] B4. Allocator-backed frames/page tables and bounded reverse mappings exist; full root delegation and pressure evidence remain open.

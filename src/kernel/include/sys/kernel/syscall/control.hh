@@ -337,6 +337,9 @@ namespace sys::kernel::syscall
                     case 29U:
                         name = "memory_completion_gate";
                         break;
+                    case 30U:
+                        name = "capability_completion_gate";
+                        break;
                     default:
                         break;
                 }
@@ -361,6 +364,7 @@ namespace sys::kernel::syscall
                 const bool notifications_valid = notification::database_valid();
                 const bool interrupts_valid = interrupt::database_valid();
                 const bool processes_valid = process_lifecycle_valid();
+                const bool capabilities_valid = capability::database_valid();
                 const bool memory_inventory_valid = memory::physical_inventory_source !=
                                                     memory::inventory_source::platform_fallback;
                 const u64 ipc_latency_samples = interrupt::timing::latency_sample_count(
@@ -370,10 +374,10 @@ namespace sys::kernel::syscall
                 const bool ipc_timing_valid =
                     ipc_latency_samples != 0U &&
                     ipc_latency_max <= interrupt::timing::latency_target_ticks();
-                const bool kernel_invariants = mappings_valid && objects_valid && locks_valid &&
-                                               endpoints_valid && notifications_valid &&
-                                               interrupts_valid && processes_valid &&
-                                               memory_inventory_valid && ipc_timing_valid;
+                const bool kernel_invariants =
+                    mappings_valid && objects_valid && locks_valid && endpoints_valid &&
+                    notifications_valid && interrupts_valid && processes_valid &&
+                    capabilities_valid && memory_inventory_valid && ipc_timing_valid;
                 const bool acceptance_passed = passed != 0U && kernel_invariants;
                 pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
                         "objects=%s locks=%s endpoints=%s notifications=%s\n",
@@ -384,6 +388,8 @@ namespace sys::kernel::syscall
                         interrupts_valid ? "PASS" : "FAIL");
                 pr_info("[TEST] name=process_lifecycle_invariants result=%s\n",
                         processes_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=capability_database_invariants result=%s\n",
+                        capabilities_valid ? "PASS" : "FAIL");
                 pr_info("[TEST] name=ipc_latency_bound result=%s max_ticks=%llu limit_ticks=%llu "
                         "samples=%llu\n",
                         ipc_timing_valid ? "PASS" : "FAIL",

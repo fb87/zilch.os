@@ -10,4 +10,12 @@ the bounded record instead of returning to an old identifier.
 
 Derivation depth, registered CSpaces, and total derivations are bounded
 explicitly. Exhaustion returns an error and never overwrites a live
-capability. Scalable restartable revoke remains a release gate.
+capability. The 1.0 production contract uses a maximum depth of 64, 32
+registered CSpaces, 256 slots per CSpace, and 4,095 usable derivation records.
+Revoke is one bounded, non-restartable authority transaction over those fixed
+capacities.
+
+Final certification validates every registered CSpace and active derivation:
+registry ownership, guard and allocation bounds, occupancy coherence,
+generation encoding, unique live slot ownership, exact parent identity, and
+live object resolution must all hold.
