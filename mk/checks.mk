@@ -3,7 +3,7 @@ CLANG_FORMAT ?= clang-format
 FORMAT_FILES := $(shell find include src tools tests -type f \( -name '*.cc' -o -name '*.hh' -o -name '*.tt' \))
 DOC_OUT := $(SRCTREE)/out/doc
 
-.PHONY: format format-check abi-check abi-headers-check ubsan-check stack-usage-check host-tests production-gate release doc doc-check boundary-check binary-permissions-check reproducible-check static-analysis-tools-check
+.PHONY: format format-check abi-check abi-headers-check ubsan-check stack-usage-check host-tests verification-local-gate production-gate release doc doc-check boundary-check binary-permissions-check reproducible-check static-analysis-tools-check
 format:
 	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo 'error: $(CLANG_FORMAT) not found'; exit 1; }
 	@$(CLANG_FORMAT) -i $(filter %.cc %.hh,$(FORMAT_FILES))
@@ -47,7 +47,10 @@ static-analysis-tools-check:
 	@sh $(SRCTREE)/tools/release/check_static_analysis_tools.sh $(SRCTREE)/out/reports/static-analysis-tools.txt
 
 host-tests: abi-check abi-headers-check
-	@echo 'Host tests: PASS'
+	@sh $(SRCTREE)/tools/verification/run_host_kernel_logic.sh $(SRCTREE)
+
+verification-local-gate: format-check boundary-check ubsan-check host-tests doc-check
+	@echo 'Local verification gate: PASS'
 
 production-gate: abi-check boundary-check
 	@$(SRCTREE)/tools/release/check_production_source.sh $(SRCTREE)

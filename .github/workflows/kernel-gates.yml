@@ -11,9 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain and QEMU
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm device-tree-compiler
+        run: sudo apt-get update && sudo apt-get install -y clang clang-tidy lld llvm qemu-system-arm device-tree-compiler
       - name: Static and ABI gates
-        run: make format-check abi-check boundary-check ubsan-check doc-check
+        run: make format-check abi-check boundary-check ubsan-check host-tests doc-check
       - name: ARM64 certification boot
         shell: bash
         run: |

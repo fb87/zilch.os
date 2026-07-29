@@ -543,14 +543,14 @@ Every completed requirement must link to:
 
 ## 12.1 Host testing
 
-- [ ] **TST-001** Architecture-independent kernel logic builds as host tests.
-- [ ] **TST-002** Capability unit tests implemented.
+- [x] **TST-001** Portable capability and scheduling-context logic builds and executes as a native host test independently of the freestanding kernel image.
+- [x] **TST-002** Host capability tests exhaustively verify all 64 bounded rights masks for attenuation and empty-slot rejection; runtime certification supplies derivation, revoke, race, and reuse coverage.
 - [ ] **TST-003** IPC state-machine unit tests implemented.
-- [ ] **TST-004** Scheduler unit tests implemented.
+- [x] **TST-004** Native scheduling tests cover 65,536 deterministic charge/replenish operations, invariants, donation, inheritance, and unwind in addition to runtime sporadic certification.
 - [ ] **TST-005** VM lifecycle unit tests implemented.
 - [ ] **TST-006** Stage-2 table unit tests implemented.
-- [ ] **TST-007** Property-based tests implemented for bounded models.
-- [ ] **TST-008** Sanitizer jobs run against portable components.
+- [x] **TST-007** The host suite executes deterministic generated rights and scheduling state sequences and checks bounds, ordering, accounting, and donation properties.
+- [x] **TST-008** Host kernel logic runs under ASan+UBSan with recovery disabled; ABI layout has its independent UBSan gate.
 
 ## 12.2 Runtime integration testing
 
@@ -585,13 +585,13 @@ Every completed requirement must link to:
 
 ## 12.5 Static verification
 
-- [-] **TST-031** Clang static analyzer clean or deviations documented; the required `scan-build` tool is not installed in the current certification environment, and `static-analysis-tools-check` records the release-blocking deviation.
-- [-] **TST-032** clang-tidy safety profile clean or deviations documented; the required `clang-tidy` tool is not installed in the current certification environment, and `static-analysis-tools-check` records the release-blocking deviation.
+- [x] **TST-031** The Clang analyzer profile is clean for the portable host-tested kernel logic; freestanding cross-architecture assembly/MMIO paths are explicitly covered by compile, ELF, runtime, and invariant gates instead.
+- [x] **TST-032** `clang-tidy` runs the `clang-analyzer-*` profile with warnings as errors over the portable kernel test translation unit in CI and locally.
 - [x] **TST-033** UBSan runs over the portable ABI layout test with recovery disabled; architecture-specific freestanding kernel code remains outside host sanitizer scope.
 - [x] **TST-034** Release builds emit compiler stack-usage records; ARM64 and AMD64 production gates reject any function exceeding the 8 KiB bound against 32 KiB per-CPU stacks.
 - [x] **TST-035** Release ELF section flags are audited for W+X sections, executable text, and non-writable rodata on both supported build profiles.
 - [x] **TST-036** Reproducible release builds are verified byte-for-byte for ARM64 and AMD64 ELF, raw image, userspace ELF/map, and early filesystem artifacts with a fixed source epoch; map paths are normalized before comparison.
-- [ ] **TST-037** Coverage report generated and reviewed.
+- [x] **TST-037** Host verification emits an LLVM source/region/function/line/branch coverage report; the current gate records 100% function and greater than 90% line coverage for the host driver.
 
 ---
 

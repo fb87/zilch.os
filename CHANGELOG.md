@@ -1,3 +1,13 @@
+## 0175 - Add portable host verification
+
+- Build real capability and scheduling headers into a native host test.
+- Exercise exhaustive bounded-rights properties and 65,536 deterministic
+  scheduling operations with donation/unwind checks.
+- Run the suite under ASan+UBSan, Clang analyzer warnings-as-errors, and LLVM
+  coverage, retaining the coverage report under `out/reports`.
+- Add a local verification aggregate while keeping userspace/device
+  integration and retained 24/72-hour soak gates open.
+
 ## 0174 - Compose the bounded Kernel 1.0 core gate
 
 - Add separate CI jobs for certification boot and release builds, including
