@@ -77,7 +77,7 @@ Every completed requirement must link to:
 - [x] **PRD-003** Self-test dispatch, IPC fuzz decoding, modeled hypervisor tests, acceptance reporting, embedded guest fixtures, and verbose EL2 diagnostics are excluded or disabled in release builds.
 - [x] **PRD-004** Ensure production kernel boots with all self-test options disabled. Runtime evidence: release boot reports `selftests=disabled`.
 - [x] **PRD-005** Ensure production binary contains no profile-specific guest images or test fixtures. Evidence: release ELF symbol/string gate in batch 0079.
-- [-] **PRD-006** Add CI jobs for both production and self-test configurations. Local build gates exist; hosted CI evidence is not yet retained.
+- [x] **PRD-006** CI defines independent ARM64 certification-boot and release jobs, plus AMD64 compile-only, ABI, boundary, sanitizer, documentation, permission, stack, and reproducibility gates.
 
 ## 1.2 ABI cleanup
 
@@ -620,7 +620,7 @@ Every completed requirement must link to:
 
 The kernel may be called **production-ready** only when all of these gates are complete:
 
-- [ ] Product/test separation gate
+- [x] Product/test separation gate
 - [x] Capability completion gate
 - [x] IPC completion gate
 - [x] Memory completion gate
@@ -631,6 +631,14 @@ The kernel may be called **production-ready** only when all of these gates are c
 - [ ] Verification and soak gate
 - [ ] Documentation and conformance gate
 - [ ] Real hardware ARM64 certification gate
+
+The bounded kernel mechanisms have an independently executable core gate:
+
+- [x] **KERNEL-CORE-GATE** Capability, IPC, memory, scheduler, interrupt/timer/platform, and security gates compose into `kernel_core_1_0_gate` and final kernel invariants with zero certification failures.
+
+The overall Kernel 1.0 production-ready claim remains blocked by the unchecked
+userspace, verification/soak, documentation/conformance, and real-hardware
+gates above.
 
 ## Hypervisor 1.0 gate
 

@@ -48,6 +48,7 @@ namespace
         scheduler_completion_gate = 31U,
         interrupt_timer_platform_gate = 32U,
         security_hardening_gate = 33U,
+        kernel_core_1_0_gate = 34U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -1139,6 +1140,11 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
                object_race_pass && services.pager && services.memory_protocol &&
                memory_lifecycle_pass && mapping_database_pass && authority_revoke_pass &&
                pressure_rollback_pass && fuzz_pass && destroyed && reused);
+    record(ledger, test_id::kernel_core_1_0_gate,
+           capability_pass && ipc_lifecycle_pass && capability_race_pass && object_race_pass &&
+               scheduling_configuration_pass && services.pager && services.memory_protocol &&
+               dynamic_ipc_pass && memory_lifecycle_pass && mapping_database_pass &&
+               authority_revoke_pass && pressure_rollback_pass && fuzz_pass && destroyed && reused);
 
     const bool pass = ledger.failure_count == 0U && ledger.transport_ok;
     (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_finalize,

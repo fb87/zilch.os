@@ -1,3 +1,13 @@
+## 0174 - Compose the bounded Kernel 1.0 core gate
+
+- Add separate CI jobs for certification boot and release builds, including
+  ABI, boundary, sanitizer, documentation, reproducibility, section, stack,
+  and AMD64 compile-only checks.
+- Add `kernel_core_1_0_gate` to compose the completed kernel mechanism gates.
+- Keep the overall production-ready claim fail-closed while userspace,
+  long-duration verification, documentation conformance, and real-hardware
+  qualification remain incomplete.
+
 ## 0173 - Complete bounded security and hardening
 
 - Enable host SCTLR WXN and validate exact MAIR/TCR plus required

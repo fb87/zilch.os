@@ -1,0 +1,40 @@
+name: kernel-gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  certification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and QEMU
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm device-tree-compiler
+      - name: Static and ABI gates
+        run: make format-check abi-check boundary-check ubsan-check doc-check
+      - name: ARM64 certification boot
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout 180 make BUILD_VARIANT=certification run 2>&1 | tee certification.log || test $? -eq 124
+          grep -F "[ACCEPTANCE] suite=root-only boot=root-only result=PASS failures=0" certification.log
+
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+      - name: ARM64 production gate
+        run: make production-gate
+      - name: AMD64 compile-only release gate
+        run: |
+          make BUILD_VARIANT=release ARCH=amd64 PLATFORM=qemu-amd64-q35 O=out/release/amd64 all
+          tools/release/check_production_elf.sh out/release/amd64/zilch.elf
+          sh tools/release/check_section_permissions.sh out/release/amd64/zilch.elf
+          sh tools/release/check_stack_usage.sh out/release/amd64
+      - name: Reproducibility
+        run: make reproducible-check

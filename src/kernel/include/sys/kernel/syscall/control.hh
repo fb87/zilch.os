@@ -394,6 +394,9 @@ namespace sys::kernel::syscall
                     case 33U:
                         name = "security_hardening_gate";
                         break;
+                    case 34U:
+                        name = "kernel_core_1_0_gate";
+                        break;
                     default:
                         break;
                 }
