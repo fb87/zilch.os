@@ -195,6 +195,7 @@ namespace
         constexpr sys::word_t sender_task = 59U;
         constexpr sys::word_t sender_space = 60U;
         constexpr sys::word_t authority = 30U;
+        constexpr sys::word_t rollback_authority = 31U;
         constexpr sys::word_t transferred_slot = 20U;
         constexpr sys::word_t ready_badge = 1U << 12U;
         constexpr sys::word_t sender_started_badge = 1U << 13U;
@@ -207,9 +208,16 @@ namespace
         bool server_created = false;
         bool sender_created = false;
         bool authority_created = false;
+        bool rollback_authority_created = false;
         bool passed = sys::control(sys::abi::v1::control_operation::notification_create,
                                    authority) == success;
         authority_created = passed;
+        if (passed) {
+            rollback_authority_created =
+                sys::control(sys::abi::v1::control_operation::notification_create,
+                             rollback_authority) == success;
+            passed = rollback_authority_created;
+        }
         if (passed) {
             server_created = create_service_process(1U, capability_race_server_role, server_thread,
                                                     server_task, server_space);
@@ -226,6 +234,16 @@ namespace
             passed =
                 sys::control(sys::abi::v1::control_operation::capability_mint, sender_task,
                              transferred_slot, authority, cap_write | cap_grant, 0U) == success;
+        }
+        if (passed) {
+            passed = sys::control(sys::abi::v1::control_operation::capability_mint, sender_task,
+                                  transferred_slot + 1U, rollback_authority, cap_write | cap_grant,
+                                  0U) == success;
+        }
+        if (passed) {
+            passed =
+                sys::control(sys::abi::v1::control_operation::capability_mint, server_task,
+                             transferred_slot + 1U, rollback_authority, cap_write, 0U) == success;
         }
         if (passed)
             passed = wait_for_badges(sender_started_badge);
@@ -245,6 +263,10 @@ namespace
             passed = sys::control(sys::abi::v1::control_operation::capability_delete, server_task,
                                   transferred_slot) == not_found;
         }
+        if (passed) {
+            passed = sys::control(sys::abi::v1::control_operation::capability_delete, server_task,
+                                  transferred_slot + 1U) == success;
+        }
 
         if (sender_created)
             passed = destroy_service_process(sender_thread, sender_task, sender_space) && passed;
@@ -253,6 +275,11 @@ namespace
         if (authority_created) {
             const sys::word_t destroy =
                 sys::control(sys::abi::v1::control_operation::notification_destroy, authority);
+            passed = destroy == success && passed;
+        }
+        if (rollback_authority_created) {
+            const sys::word_t destroy = sys::control(
+                sys::abi::v1::control_operation::notification_destroy, rollback_authority);
             passed = destroy == success && passed;
         }
         return passed;

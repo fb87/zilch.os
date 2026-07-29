@@ -25,4 +25,5 @@ namespace sys::platform::interrupt
         return error_t::unsupported;
     }
     inline void send_ipi_all_others(irq_id_t) noexcept {}
+    inline void send_ipi(cpu_id_t, irq_id_t) noexcept {}
 } // namespace sys::platform::interrupt

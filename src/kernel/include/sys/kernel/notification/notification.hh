@@ -12,7 +12,6 @@ namespace sys::kernel::notification
     struct notification {
         object::header_t object{};
         volatile u64 pending_badges{};
-        object::reference_t waiter{};
         volatile u32 allocated{};
     };
 
@@ -20,7 +19,6 @@ namespace sys::kernel::notification
 
     inline void initialize(notification& value) noexcept {
         value.pending_badges = 0U;
-        value.waiter = {};
     }
 
     inline void signal(notification& value, u64 badge) noexcept {
@@ -75,8 +73,6 @@ namespace sys::kernel::notification
         if (&value < dynamic_notifications ||
             &value >= dynamic_notifications + dynamic_notification_count)
             return error_t::denied;
-        if (value.waiter.type != object::type_t::none)
-            return error_t::busy;
         const object::reference_t reference = object::reference(value.object);
         capability::revoke_reference_locked(reference);
         authority_transaction.release();
@@ -96,7 +92,6 @@ namespace sys::kernel::notification
                 if (value.object.type != object::type_t::notification)
                     return false;
             } else if (value.object.type != object::type_t::none ||
-                       value.waiter.type != object::type_t::none ||
                        __atomic_load_n(&value.pending_badges, __ATOMIC_ACQUIRE) != 0U) {
                 return false;
             }

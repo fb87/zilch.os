@@ -349,9 +349,16 @@ namespace sys::kernel::syscall
                 const bool notifications_valid = notification::database_valid();
                 const bool interrupts_valid = interrupt::database_valid();
                 const bool processes_valid = process_lifecycle_valid();
-                const bool kernel_invariants = mappings_valid && objects_valid && locks_valid &&
-                                               endpoints_valid && notifications_valid &&
-                                               interrupts_valid && processes_valid;
+                const u64 ipc_latency_samples = interrupt::timing::latency_sample_count(
+                    interrupt::timing::latency_kind::ipc_service);
+                const u64 ipc_latency_max =
+                    interrupt::timing::latency_max(interrupt::timing::latency_kind::ipc_service);
+                const bool ipc_timing_valid =
+                    ipc_latency_samples != 0U &&
+                    ipc_latency_max <= interrupt::timing::latency_target_ticks();
+                const bool kernel_invariants =
+                    mappings_valid && objects_valid && locks_valid && endpoints_valid &&
+                    notifications_valid && interrupts_valid && processes_valid && ipc_timing_valid;
                 const bool acceptance_passed = passed != 0U && kernel_invariants;
                 pr_info("[TEST] name=kernel_lifetime_invariants result=%s mappings=%s "
                         "objects=%s locks=%s endpoints=%s notifications=%s\n",
@@ -362,6 +369,12 @@ namespace sys::kernel::syscall
                         interrupts_valid ? "PASS" : "FAIL");
                 pr_info("[TEST] name=process_lifecycle_invariants result=%s\n",
                         processes_valid ? "PASS" : "FAIL");
+                pr_info("[TEST] name=ipc_latency_bound result=%s max_ticks=%llu limit_ticks=%llu "
+                        "samples=%llu\n",
+                        ipc_timing_valid ? "PASS" : "FAIL",
+                        static_cast<unsigned long long>(ipc_latency_max),
+                        static_cast<unsigned long long>(interrupt::timing::latency_target_ticks()),
+                        static_cast<unsigned long long>(ipc_latency_samples));
                 pr_info("[METRIC] name=irq_disabled_duration_final max_ticks=%llu "
                         "reference_ticks=%llu samples=%llu\n",
                         static_cast<unsigned long long>(interrupt::timing::maximum()),
@@ -571,7 +584,7 @@ namespace sys::kernel::syscall
                     if (caller.object.generation == current.reply.generation) {
                         if (caller_state == thread::state::blocked_reply) {
                             caller.ipc_timeout_active = false;
-                            caller.transfer = {};
+                            thread::clear_transfer(caller.transfer);
                             caller.pending_result = error_t::timed_out;
                             (void)thread::wake(caller);
                             ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());

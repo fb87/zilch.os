@@ -7,10 +7,12 @@
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/thread/scheduler.hh>
+#include <sys/kernel/user_access.hh>
 #include <sys/kernel/verification/hooks.hh>
 #include <sys/platform/timer.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/ipc.hh>
 #include <abi/sys/v1/syscall_numbers.hh>
 #if CONFIG_SELFTEST
 #include <sys/test_abi/v1/certification.hh>
@@ -175,17 +177,43 @@ namespace sys::kernel::syscall
     }
 #endif
 
-    inline void capture_transfer(thread::thread& value,
-                                 const arch::thread::context& frame) noexcept {
-        value.transfer = {};
+    [[nodiscard]] inline error_t capture_transfer(thread::thread& value,
+                                                  const arch::thread::context& frame) noexcept {
+        thread::clear_transfer(value.transfer);
         const word_t descriptor = arch::syscall::argument(frame, 6U);
         if ((descriptor & abi::v1::capability_transfer_valid) == 0U)
-            return;
-        value.transfer.source = descriptor & 0x3fU;
-        value.transfer.destination = (descriptor >> 6U) & 0x3fU;
-        value.transfer.rights.bits = static_cast<u32>((descriptor >> 12U) & 0x3fU);
-        value.transfer.badge = static_cast<capability::badge_t>(descriptor >> 32U);
-        value.transfer.valid = true;
+            return error_t::success;
+        if ((descriptor & abi::v1::capability_transfer_batch) != 0U) {
+            abi::v1::ipc_transfer_batch batch{};
+            const vaddr_t address = descriptor & ~(abi::v1::capability_transfer_valid |
+                                                   abi::v1::capability_transfer_batch);
+            const error_t copied = user_access::copy_from_user(value.address_space.native, &batch,
+                                                               address, sizeof(batch));
+            if (copied != error_t::success || batch.count == 0U ||
+                batch.count > abi::v1::maximum_capability_transfers)
+                return error_t::invalid_argument;
+            value.transfer.count = static_cast<u32>(batch.count);
+            for (u32 index = 0U; index < value.transfer.count; ++index) {
+                const abi::v1::ipc_transfer& source = batch.entries[index];
+                if (source.source == static_cast<capability_id_t>(-1))
+                    return error_t::invalid_argument;
+                thread::capability_transfer& transfer = value.transfer.entries[index];
+                transfer.source = source.source;
+                transfer.destination = source.destination;
+                transfer.rights.bits = source.rights;
+                transfer.badge = source.badge;
+                transfer.valid = true;
+            }
+            return error_t::success;
+        }
+        value.transfer.count = 1U;
+        thread::capability_transfer& transfer = value.transfer.entries[0];
+        transfer.source = descriptor & 0x3fU;
+        transfer.destination = (descriptor >> 6U) & 0x3fU;
+        transfer.rights.bits = static_cast<u32>((descriptor >> 12U) & 0x3fU);
+        transfer.badge = static_cast<capability::badge_t>(descriptor >> 32U);
+        transfer.valid = true;
+        return error_t::success;
     }
 
     inline void capture_timeout(thread::thread& value,
@@ -203,26 +231,39 @@ namespace sys::kernel::syscall
 
     [[nodiscard]] inline error_t transfer_capability(thread::thread& sender,
                                                      thread::thread& receiver) noexcept {
-        if (!sender.transfer.valid)
+        if (!sender.transfer.valid())
             return error_t::success;
-        if (sender.owner == nullptr || receiver.owner == nullptr ||
-            sender.transfer.destination >= capability::cspace_slot_count ||
-            sender.transfer.source >= capability::cspace_slot_count ||
-            sender.transfer.rights.bits == 0U) {
+        if (sender.owner == nullptr || receiver.owner == nullptr)
             return error_t::invalid_argument;
-        }
-        /*
-         * Transfer is an authority transaction just like control-path
-         * copy/mint/delete/revoke.  Otherwise revoke can finish scanning the
-         * tree while this mint publishes a descendant that survives it.
-         */
         capability::lock_authority();
-        const error_t result = capability::mint_locked(
-            receiver.owner->cspace, sender.transfer.destination, sender.owner->cspace,
-            sender.transfer.source, sender.transfer.rights, sender.transfer.badge);
+        error_t result = error_t::success;
+        u32 installed = 0U;
+        for (u32 index = 0U; index < sender.transfer.count; ++index) {
+            const thread::capability_transfer& transfer = sender.transfer.entries[index];
+            if (!transfer.valid || transfer.destination >= capability::cspace_slot_count ||
+                transfer.source >= capability::cspace_slot_count || transfer.rights.bits == 0U) {
+                result = error_t::invalid_argument;
+                break;
+            }
+            for (u32 previous = 0U; previous < index; ++previous)
+                if (sender.transfer.entries[previous].destination == transfer.destination)
+                    result = error_t::invalid_argument;
+            if (result != error_t::success)
+                break;
+            result = capability::mint_locked(receiver.owner->cspace, transfer.destination,
+                                             sender.owner->cspace, transfer.source, transfer.rights,
+                                             transfer.badge);
+            if (result != error_t::success)
+                break;
+            ++installed;
+        }
+        if (result != error_t::success)
+            while (installed != 0U)
+                (void)capability::delete_capability_locked(
+                    receiver.owner->cspace, sender.transfer.entries[--installed].destination);
         capability::unlock_authority();
         if (result == error_t::success)
-            sender.transfer = {};
+            thread::clear_transfer(sender.transfer);
         return result;
     }
 
@@ -287,7 +328,7 @@ namespace sys::kernel::syscall
                 thread::unlock_ipc_lifecycle();
                 return transfer_result;
             }
-        } else if (server.transfer.valid) {
+        } else if (server.transfer.valid()) {
             thread::unlock_ipc_lifecycle();
             return error_t::invalid_argument;
         }
@@ -406,14 +447,18 @@ namespace sys::kernel::syscall
             return true;
         }
         copy_message_from_frame(current, frame);
-        capture_transfer(current, frame);
+        const error_t capture_result = capture_transfer(current, frame);
+        if (capture_result != error_t::success) {
+            set_error(frame, capture_result);
+            return true;
+        }
         capture_timeout(current, frame);
         current.waiting_endpoint = selector;
         current.ipc_badge = endpoint_badge;
         ipc::lock(*endpoint);
         if (endpoint->retiring) {
             current.ipc_timeout_active = false;
-            current.transfer = {};
+            thread::clear_transfer(current.transfer);
             current.ipc_badge = 0U;
             ipc::unlock(*endpoint);
             set_error(frame, error_t::not_found);
@@ -470,7 +515,7 @@ namespace sys::kernel::syscall
             (void)thread::compare_state(current, thread::state::blocked_send,
                                         thread::state::running);
             current.ipc_timeout_active = false;
-            current.transfer = {};
+            thread::clear_transfer(current.transfer);
             ipc::unlock(*endpoint);
             set_error(frame, error_t::busy);
             return true;
@@ -538,7 +583,7 @@ namespace sys::kernel::syscall
             }
         }
         target.ipc_timeout_active = false;
-        target.transfer = {};
+        thread::clear_transfer(target.transfer);
         target.ipc_badge = 0U;
         target.pending_result = error_t::timed_out;
         (void)thread::wake(target);
@@ -588,10 +633,14 @@ namespace sys::kernel::syscall
                 return receive(current, frame, endpoint);
             case abi::v1::ipc_operation::reply_receive: {
                 copy_message_from_frame(current, frame);
-                capture_transfer(current, frame);
+                const error_t capture_result = capture_transfer(current, frame);
+                if (capture_result != error_t::success) {
+                    set_error(frame, capture_result);
+                    return true;
+                }
                 const error_t result = reply_to_caller(current);
                 if (result != error_t::success) {
-                    current.transfer = {};
+                    thread::clear_transfer(current.transfer);
                     set_error(frame, result);
                     return true;
                 }
@@ -601,10 +650,14 @@ namespace sys::kernel::syscall
                 return cancel(current, frame);
             case abi::v1::ipc_operation::reply: {
                 copy_message_from_frame(current, frame);
-                capture_transfer(current, frame);
+                const error_t capture_result = capture_transfer(current, frame);
+                if (capture_result != error_t::success) {
+                    set_error(frame, capture_result);
+                    return true;
+                }
                 const error_t result = reply_to_caller(current);
                 if (result != error_t::success)
-                    current.transfer = {};
+                    thread::clear_transfer(current.transfer);
                 set_error(frame, result);
                 return true;
             }

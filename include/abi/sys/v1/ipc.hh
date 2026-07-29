@@ -7,6 +7,8 @@
 
 namespace sys::abi::v1
 {
+    inline constexpr usize_t maximum_ipc_ool_bytes = 4096U;
+
     struct ipc_transfer final {
         capability_id_t source{static_cast<capability_id_t>(-1)};
         capability_id_t destination{static_cast<capability_id_t>(-1)};
@@ -17,6 +19,34 @@ namespace sys::abi::v1
             return source == static_cast<capability_id_t>(-1)
                        ? 0U
                        : encode_capability_transfer(source, destination, rights, badge);
+        }
+    };
+
+    struct ipc_transfer_batch final {
+        ipc_transfer entries[maximum_capability_transfers]{};
+        usize_t count{};
+
+        [[nodiscard]] word_t encode() const noexcept {
+            return count == 0U ? 0U
+                               : encode_capability_transfer_batch(reinterpret_cast<vaddr_t>(this));
+        }
+    };
+
+    struct ipc_ool_message final {
+        capability_id_t frame{};
+        capability_id_t destination{};
+        u32 rights{};
+        u32 badge{};
+        usize_t offset{};
+        usize_t length{};
+
+        [[nodiscard]] constexpr ipc_transfer transfer() const noexcept {
+            return {frame, destination, rights, badge};
+        }
+
+        [[nodiscard]] constexpr bool valid() const noexcept {
+            return length != 0U && offset < maximum_ipc_ool_bytes &&
+                   length <= maximum_ipc_ool_bytes - offset;
         }
     };
 

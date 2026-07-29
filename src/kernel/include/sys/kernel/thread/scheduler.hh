@@ -416,7 +416,7 @@ namespace sys::kernel::thread
         target.scheduling_context.object = {};
         target.waiting_endpoint = 0U;
         target.reply = {};
-        target.transfer = {};
+        clear_transfer(target.transfer);
         target.ipc_timeout_active = false;
         target.last_fault = {};
         target.fault_disposition = fault::disposition::pending;
@@ -577,11 +577,11 @@ namespace sys::kernel::thread
             }
         }
         target.ipc_timeout_active = false;
-        target.transfer = {};
+        clear_transfer(target.transfer);
         target.ipc_badge = 0U;
         target.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
         unlock_ipc_lifecycle();
-        platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+        platform::interrupt::send_ipi(target.pinned_cpu, platform::interrupt::reschedule_ipi);
 
         const u32 target_generation = target.object.generation;
         constexpr u32 maximum_wait_rounds = 1000000U;
@@ -598,7 +598,8 @@ namespace sys::kernel::thread
             if (!cpu_bound && !__atomic_load_n(&target.executing, __ATOMIC_ACQUIRE))
                 return error_t::success;
             if ((round & 0x3ffU) == 0U) {
-                platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+                platform::interrupt::send_ipi(target.pinned_cpu,
+                                              platform::interrupt::reschedule_ipi);
             }
             arch::cpu::relax();
         }
@@ -1226,7 +1227,7 @@ namespace sys::kernel::thread
                 }
             }
             value.ipc_timeout_active = false;
-            value.transfer = {};
+            clear_transfer(value.transfer);
             value.ipc_badge = 0U;
             value.pending_result = error_t::timed_out;
             if (current_state == state::blocked_fault) {

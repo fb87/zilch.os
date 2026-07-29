@@ -143,23 +143,23 @@ Every completed requirement must link to:
 
 - [x] **IPC-001** Basic send/receive path exists. Runtime IPC paths pass.
 - [x] **IPC-002** Synchronous call implemented.
-- [-] **IPC-003** One-shot reply authority is serialized against cancellation, timeout, server exit, and teardown; scalable locking and race stress remain open.
-- [-] **IPC-004** Reply-receive and reply-only operations exist; complete atomicity/race evidence remains open.
-- [-] **IPC-005** Endpoint cancellation holds the endpoint and IPC lifecycle locks together, revalidates the exact blocked state and waited-on selector, then removes and completes the wait atomically; broader forced interleaving fuzz remains open.
-- [-] **IPC-006** Teardown cancellation serializes blocked state, endpoint membership, and reply authority; endpoint destroy publishes a retiring state under endpoint-to-authority locks and stale resolved call/receive operations fail closed. Blocked-destroy and object reuse pass, while broader quiescence proof remains open.
-- [-] **IPC-007** Bounded IPC timeout expiration returns deterministic error-only completions, removes write-only callers, and never spins in IRQ context. Complete timeout ABI and race stress remain open.
-- [-] **IPC-008** Notification signal/consume and dynamic lifecycle exist; destruction revokes under authority and waits for pre-existing readers before reuse, with final database invariants. Full waiter/binding policy remains open.
-- [-] **IPC-009** Single-capability transfer works on calls and replies, including receiver-selected destinations for the memory-server protocol; multi-capability atomic transfer remains open.
-- [ ] **IPC-010** Bounded out-of-line message strategy implemented.
+- [x] **IPC-003** Generation-tagged one-shot reply authority is serialized against reply, cancellation, timeout, server exit, and teardown under the bounded IPC lifecycle transaction.
+- [x] **IPC-004** Reply-receive and reply-only operations commit transfer and consume reply authority in one lifecycle transaction; cross-CPU lifecycle races pass.
+- [x] **IPC-005** Endpoint cancellation holds endpoint and lifecycle locks, revalidates the exact wait, and atomically removes membership; final invariants reject dead, duplicate, or conflicting queue entries.
+- [x] **IPC-006** Teardown serializes blocked state, endpoint membership, and reply authority; retiring endpoints reject stale call/receive resolutions and reader grace precedes reuse.
+- [x] **IPC-007** The typed bounded timeout ABI covers call, receive, and reply-receive; expiration removes queued waits, returns deterministic completion, restores donation, and performs no unbounded IRQ work.
+- [x] **IPC-008** Notifications implement the selected nonblocking policy: atomic badge coalescing/consume, generation-checked IRQ binding, authority retirement, reader grace, and reuse invariants.
+- [x] **IPC-009** Calls and replies atomically transfer batches of up to four capabilities under one authority transaction, with duplicate rejection and complete partial-mint rollback.
+- [x] **IPC-010** Bounded out-of-line IPC transfers a frame capability with checked one-page offset/length metadata; receivers map it through normal memory-resource policy.
 
 ## 3.2 Scheduling integration
 
 - [x] **IPC-011** Synchronous IPC donates the caller's remaining scheduling-context budget and inherited priority to the server, including nested calls.
-- [-] **IPC-012** Priority donation/inheritance propagates through a certified two-hop chain and is bounded at depth eight; measured RT inversion evidence remains open.
-- [-] **IPC-013** Reply, timeout, cancellation, server exit, and teardown return unused donated budget and restore base priority; long-duration race verification remains open.
-- [-] **IPC-014** IPC wakeup targets the receiver CPU where available; teardown still uses broader reschedule signaling and full targeted-IPI evidence remains open.
-- [ ] **IPC-015** IPC fast-path instruction count measured.
-- [ ] **IPC-016** IPC latency limits defined and met.
+- [x] **IPC-012** Donation propagates through a certified two-hop chain, is bounded at depth eight, and executes within the certified IPC service latency bound.
+- [x] **IPC-013** Reply, timeout, cancellation, server exit, and teardown return unused donated budget and restore base priority under lifecycle-race certification.
+- [x] **IPC-014** Normal completion and process teardown target only the receiver/owner CPU on ARM64 and record request-to-target-handler latency.
+- [x] **IPC-015** Release checking records and enforces ARM64 instruction-footprint budgets for complete call, receive, and reply paths.
+- [x] **IPC-016** Final certification requires IPC samples and enforces the architecture-counter service limit; the four-CPU workload passes.
 
 ## 3.3 Fault IPC
 

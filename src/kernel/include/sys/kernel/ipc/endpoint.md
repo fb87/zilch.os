@@ -18,14 +18,16 @@ pinned SMP user-scheduler bring-up.
 - sender count never exceeds the fixed capacity;
 - head and tail always remain within the ring;
 - at most one receiver waits on an endpoint in this milestone;
+- each queued generation-checked thread reference is live and unique;
+- a thread cannot occupy both a sender slot and the receiver slot;
 - a thread is pinned and cannot execute concurrently on two CPUs.
 
 ## Scope
 
-The production path supports register-only `call`, `receive`, `reply`,
+The production path supports register `call`, `receive`, `reply`,
 `reply_receive`, cancellation, bounded timeouts, scheduling-context donation,
-and one transactional capability transfer. Bounded out-of-line messages and
-multi-capability transfer remain open.
+atomic batches of up to four capability transfers, and one-page frame-grant
+out-of-line messages.
 
 ## Cancellation transaction
 
@@ -47,6 +49,7 @@ waits for pre-existing object readers.
 
 A CPU shall not write another CPU's saved architectural exception frame.
 Cross-CPU IPC publishes payloads to a per-thread pending mailbox, then marks the
-thread ready. The owning CPU consumes the mailbox and updates the saved context
-immediately before returning that thread to user mode. This prevents torn
-register frames and preserves single-writer ownership of architecture state.
+thread ready and sends a reschedule SGI only to its pinned CPU. The owning CPU
+consumes the mailbox and updates the saved context immediately before returning
+that thread to user mode. This prevents torn register frames, preserves
+single-writer ownership of architecture state, and avoids broadcast wakeups.

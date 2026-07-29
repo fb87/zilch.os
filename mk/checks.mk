@@ -54,6 +54,7 @@ production-gate: abi-check boundary-check
 	@$(MAKE) BUILD_VARIANT=release ARCH=arm64 PLATFORM=qemu-arm64-virt O=out/release/arm64 clean
 	@$(MAKE) BUILD_VARIANT=release ARCH=arm64 PLATFORM=qemu-arm64-virt O=out/release/arm64 all
 	@$(SRCTREE)/tools/release/check_production_elf.sh $(SRCTREE)/out/release/arm64/$(PROJECT).elf
+	@sh $(SRCTREE)/tools/release/check_ipc_instruction_budget.sh $(SRCTREE)/out/release/arm64/$(PROJECT).elf
 	@sh $(SRCTREE)/tools/release/check_section_permissions.sh $(SRCTREE)/out/release/arm64/$(PROJECT).elf
 	@sh $(SRCTREE)/tools/release/check_stack_usage.sh $(SRCTREE)/out/release/arm64
 

@@ -77,10 +77,28 @@ namespace sys::kernel::ipc
     }
 
     [[nodiscard]] inline bool validate(const endpoint& value) noexcept {
-        return value.sender_count <= endpoint_capacity && value.sender_head < endpoint_capacity &&
-               value.sender_tail < endpoint_capacity &&
-               (!value.retiring ||
-                (value.sender_count == 0U && value.receiver.type == object::type_t::none));
+        if (value.sender_count > endpoint_capacity || value.sender_head >= endpoint_capacity ||
+            value.sender_tail >= endpoint_capacity ||
+            (value.retiring &&
+             (value.sender_count != 0U || value.receiver.type != object::type_t::none)))
+            return false;
+        for (u32 offset = 0U; offset < value.sender_count; ++offset) {
+            const u32 index = (value.sender_head + offset) % endpoint_capacity;
+            const object::reference_t& sender = value.senders[index];
+            if (sender.type != object::type_t::thread || object::resolve(sender) == nullptr ||
+                (value.receiver.type == object::type_t::thread && sender.id == value.receiver.id &&
+                 sender.generation == value.receiver.generation))
+                return false;
+            for (u32 previous = 0U; previous < offset; ++previous) {
+                const object::reference_t& candidate =
+                    value.senders[(value.sender_head + previous) % endpoint_capacity];
+                if (candidate.id == sender.id && candidate.generation == sender.generation)
+                    return false;
+            }
+        }
+        return value.receiver.type == object::type_t::none ||
+               (value.receiver.type == object::type_t::thread &&
+                object::resolve(value.receiver) != nullptr);
     }
 
     inline u32 cancel_thread_locked(endpoint& value,
@@ -230,7 +248,7 @@ namespace sys::kernel::ipc
     inline void remote_reschedule(cpu_id_t target, cpu_id_t current) noexcept {
         if (target != current) {
             interrupt::timing::begin_cross_cpu_wake(target);
-            platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+            platform::interrupt::send_ipi(target, platform::interrupt::reschedule_ipi);
         }
     }
 } // namespace sys::kernel::ipc

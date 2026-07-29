@@ -11,6 +11,8 @@
 #include <sys/kernel/task/task.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/syscall_numbers.hh>
+
 namespace sys::kernel::thread
 {
     /*
@@ -78,6 +80,29 @@ namespace sys::kernel::thread
         bool valid{};
     };
 
+    inline constexpr u32 maximum_capability_transfers =
+        static_cast<u32>(abi::v1::maximum_capability_transfers);
+
+    struct capability_transfer_set {
+        capability_transfer entries[maximum_capability_transfers]{};
+        u32 count{};
+
+        [[nodiscard]] bool valid() const noexcept {
+            return count != 0U && count <= maximum_capability_transfers;
+        }
+    };
+
+    inline void clear_transfer(capability_transfer_set& value) noexcept {
+        for (u32 index = 0U; index < maximum_capability_transfers; ++index) {
+            value.entries[index].source = static_cast<capability_id_t>(-1);
+            value.entries[index].destination = static_cast<capability_id_t>(-1);
+            value.entries[index].rights = {};
+            value.entries[index].badge = 0U;
+            value.entries[index].valid = false;
+        }
+        value.count = 0U;
+    }
+
     struct thread {
         object::header_t object{};
         thread_id_t id{};
@@ -89,7 +114,7 @@ namespace sys::kernel::thread
         scheduling::context scheduling_context{};
         capability_id_t waiting_endpoint{};
         reply_capability reply{};
-        capability_transfer transfer{};
+        capability_transfer_set transfer{};
         u64 ipc_deadline{};
         bool ipc_timeout_active{};
         error_t pending_result{error_t::success};
@@ -122,7 +147,7 @@ namespace sys::kernel::thread
         value.waiting_endpoint = 0U;
         scheduling::initialize(value.scheduling_context, cpu);
         value.reply = {};
-        value.transfer = {};
+        clear_transfer(value.transfer);
         value.ipc_deadline = 0U;
         value.ipc_timeout_active = false;
         value.pending_result = error_t::success;

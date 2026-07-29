@@ -37,4 +37,20 @@ namespace sys
             endpoint, static_cast<word_t>(abi::v1::ipc_operation::reply_receive), message0,
             message1, message2, message3, transfer.encode(), timeout);
     }
+
+    [[nodiscard]] inline abi::v1::ipc_result
+    ipc_call_ool(capability_id_t endpoint, const abi::v1::ipc_ool_message& message,
+                 abi::v1::ipc_timeout timeout = {}) noexcept {
+        if (!message.valid())
+            return {static_cast<word_t>(static_cast<s64>(error_t::invalid_argument))};
+        return ipc_call(endpoint, message.offset, message.length, message.destination, 0U,
+                        message.transfer(), timeout);
+    }
+
+    [[nodiscard]] inline word_t ipc_reply_ool(const abi::v1::ipc_ool_message& message) noexcept {
+        if (!message.valid())
+            return static_cast<word_t>(static_cast<s64>(error_t::invalid_argument));
+        return ipc_reply(message.offset, message.length, message.destination, 0U,
+                         message.transfer());
+    }
 } // namespace sys

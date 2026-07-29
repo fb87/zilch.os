@@ -1,3 +1,24 @@
+## 0167 - Complete bounded Core IPC
+
+- Transfer up to four capabilities atomically from a user-described batch,
+  rolling back every earlier mint if any entry fails.
+- Define bounded out-of-line IPC as a checked one-page frame grant carrying
+  offset and length metadata without unbounded kernel allocation or copying.
+- Make notification policy explicitly nonblocking and badge-coalescing,
+  leaving all blocking, timeout, and donation semantics with endpoints.
+- Target normal and teardown IPC wakeups to the owning CPU.
+- Gate certification on the IPC latency limit and release builds on static
+  call, receive, and reply instruction-footprint budgets.
+
+## 0166 - Target IPC wakeups and validate queue ownership
+
+- Send cross-CPU IPC wakeups only to the receiver's pinned CPU on ARM64
+  instead of broadcasting a reschedule SGI to every other CPU.
+- Validate that every queued endpoint reference resolves to a live thread,
+  appears only once, and cannot simultaneously own the receiver slot.
+- Retain cross-CPU wake latency telemetry as end-to-end evidence that the
+  targeted CPU received and serviced the wake request.
+
 ## 0165 - Retire complete process bundles transactionally
 
 - Quiesce a process thread and destroy its delegated memory resource before

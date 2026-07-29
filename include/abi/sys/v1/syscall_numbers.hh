@@ -18,6 +18,8 @@ namespace sys::abi::v1
     };
 
     inline constexpr word_t capability_transfer_valid = 1ULL << 63U;
+    inline constexpr word_t capability_transfer_batch = 1ULL << 62U;
+    inline constexpr usize_t maximum_capability_transfers = 4U;
     inline constexpr word_t ipc_timeout_valid = 1ULL << 63U;
     inline constexpr u64 no_timeout = 0U;
 
@@ -31,6 +33,12 @@ namespace sys::abi::v1
                                                                      u32 badge) noexcept {
         return capability_transfer_valid | (source & 0x3fU) | ((destination & 0x3fU) << 6U) |
                ((static_cast<word_t>(rights) & 0x3fU) << 12U) | (static_cast<word_t>(badge) << 32U);
+    }
+
+    [[nodiscard]] inline constexpr word_t
+    encode_capability_transfer_batch(vaddr_t address) noexcept {
+        return capability_transfer_valid | capability_transfer_batch |
+               (address & ~(capability_transfer_valid | capability_transfer_batch));
     }
 
     inline constexpr capability_id_t ipc_server_a = 10U;

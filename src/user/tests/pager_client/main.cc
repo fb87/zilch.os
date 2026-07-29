@@ -73,13 +73,16 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         }
         (void)sys::control(sys::abi::v1::control_operation::notification_signal, notification,
                            1U << 13U);
-        sys::abi::v1::ipc_transfer transfer{};
-        transfer.source = 20U;
-        transfer.destination = 20U;
-        transfer.rights = 1U << 1U;
-        const auto result = sys::ipc_call(endpoint, 0x43415052U, 0U, 0U, 0U, transfer);
+        sys::abi::v1::ipc_transfer_batch transfer{};
+        transfer.count = 2U;
+        transfer.entries[0] = {20U, 20U, 1U << 1U, 0U};
+        transfer.entries[1] = {21U, 21U, 1U << 1U, 0U};
+        const auto result = sys_ipc_exchange_raw(
+            endpoint, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::call), 0x43415052U, 0U,
+            0U, 0U, transfer.encode(), 0U);
         if (result.status != static_cast<sys::word_t>(sys::error_t::success) &&
-            result.status != static_cast<sys::word_t>(sys::error_t::not_found))
+            result.status != static_cast<sys::word_t>(sys::error_t::not_found) &&
+            result.status != static_cast<sys::word_t>(sys::error_t::busy))
             return 10;
         sys::thread_exit(0U, notification, 1U << 15U);
     }

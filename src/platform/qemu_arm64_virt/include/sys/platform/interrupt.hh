@@ -196,4 +196,16 @@ namespace sys::platform::interrupt
 
         __asm__ volatile("dsb ishst\n\tmsr ICC_SGI1R_EL1, %0\n\tisb" : : "r"(value) : "memory");
     }
+
+    inline void send_ipi(cpu_id_t cpu, irq_id_t irq) noexcept {
+        if (cpu >= 16U)
+            return;
+        const u64 mpidr = current_mpidr();
+        const u64 aff1 = (mpidr >> 8U) & 0xffU;
+        const u64 aff2 = (mpidr >> 16U) & 0xffU;
+        const u64 aff3 = (mpidr >> 32U) & 0xffU;
+        const u64 value = (aff3 << 48U) | (aff2 << 32U) | (static_cast<u64>(irq & 0xfU) << 24U) |
+                          (aff1 << 16U) | (1ULL << cpu);
+        __asm__ volatile("dsb ishst\n\tmsr ICC_SGI1R_EL1, %0\n\tisb" : : "r"(value) : "memory");
+    }
 } // namespace sys::platform::interrupt
