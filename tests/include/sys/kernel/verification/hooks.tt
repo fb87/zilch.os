@@ -1,2 +1,3 @@
-verification::certification_operation_target == 1048576 final PASS requires all prerequisites and
-    zero failures
+verification::certification_operation_target == 1048576 final PASS
+        requires all
+    prerequisites and zero failures

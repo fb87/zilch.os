@@ -13,6 +13,7 @@
 #if CONFIG_SELFTEST
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
+#include <sys/kernel/tests/scheduling/sporadic.hh>
 #endif
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/bootstrap.hh>
@@ -411,6 +412,7 @@ namespace sys::kernel::thread
         target.scheduling_context.affinity = 0U;
         target.scheduling_context.enabled = false;
         target.scheduling_context.throttled = false;
+        target.scheduling_context.replenishment_count = 0U;
         target.owner = nullptr;
         target.object = {};
         target.address_space.object = {};
@@ -661,6 +663,9 @@ namespace sys::kernel::thread
 
 #if CONFIG_SELFTEST
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
+        if (tests::scheduling::run_sporadic_server() != error_t::success)
+            return error_t::invalid_argument;
+
         if (!arch::memory::kernel_stack_guards_valid())
             return error_t::invalid_argument;
         if (!arch::memory::kernel_permissions_valid())
@@ -1237,7 +1242,7 @@ namespace sys::kernel::thread
              * Quiescence is published only after load_user() commits to a
              * different thread or to the kernel-idle frame.
              */
-            (void)scheduling::charge(value.scheduling_context, 1U);
+            (void)scheduling::charge(value.scheduling_context, platform::timer::ticks(cpu), 1U);
         }
     }
 

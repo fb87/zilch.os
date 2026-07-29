@@ -234,8 +234,8 @@ namespace sys::kernel::syscall
             server.reply.nonce = __atomic_fetch_add(&next_reply_nonce, 1U, __ATOMIC_ACQ_REL);
         }
         server.reply.donation_active =
-            scheduling::donate(server.scheduling_context, caller.scheduling_context) ==
-            error_t::success;
+            scheduling::donate(server.scheduling_context, caller.scheduling_context,
+                               platform::timer::ticks(arch::cpu::current_id())) == error_t::success;
         server.reply.valid = true;
     }
 

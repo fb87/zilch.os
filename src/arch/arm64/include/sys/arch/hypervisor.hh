@@ -228,13 +228,15 @@ namespace sys::arch::hypervisor
     }
 
     inline void console_hex(u64 value) noexcept {
-        constexpr char digits[] = "0123456789abcdef";
         console_puts("0x");
         bool started = false;
         for (s32 shift = 60; shift >= 0; shift -= 4) {
             const u8 digit = static_cast<u8>((value >> static_cast<u32>(shift)) & 0xfU);
             if (digit != 0U || started || shift == 0) {
-                console_putc(digits[digit]);
+                const char encoded =
+                    static_cast<char>(digit < 10U ? static_cast<u8>('0') + digit
+                                                  : static_cast<u8>('a') + digit - 10U);
+                console_putc(encoded);
                 started = true;
             }
         }

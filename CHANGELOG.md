@@ -1,3 +1,16 @@
+## 0159 - Restore progress-safe sporadic replenishment
+
+- Track charged scheduling slices in a bounded ordered replenishment queue.
+- Merge equal deadlines and coalesce overflow into the latest record so queue
+  pressure delays budget safely instead of permanently throttling a context.
+- Certify staggered return, throttling, overflow rejection, bounded-queue
+  recovery, and the pager checks that exposed the earlier liveness regression.
+- Timestamp real scheduler charges and donated budget from the per-CPU logical
+  timer so every exhausted context retains a future progress point.
+- Make EL2 hexadecimal diagnostics register-only, preventing diagnostic data
+  lookup faults from recursing through the active-guest exception path.
+- Close SCH-009 and SCH-010 with complete root-only certification acceptance.
+
 ## 0158 - Add RT-safe deferred logging
 
 - Add `printk::defer` for lock-free structured records from RT/exception paths.

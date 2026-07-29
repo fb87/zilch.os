@@ -9,6 +9,7 @@ namespace sys::kernel::scheduling
     inline constexpr u8 highest_priority = 255U;
     inline constexpr u32 maximum_donation_depth = 8U;
     inline constexpr u64 maximum_time = ~0ULL;
+    inline constexpr u32 maximum_replenishments = 16U;
 
     [[nodiscard]] inline constexpr bool deadline_fits(u64 now, u64 delay) noexcept {
         return delay <= maximum_time - now;
@@ -28,6 +29,9 @@ namespace sys::kernel::scheduling
         cpu_id_t affinity{};
         bool enabled{true};
         bool throttled{};
+        u64 replenishment_deadlines[maximum_replenishments]{};
+        u64 replenishment_amounts[maximum_replenishments]{};
+        u32 replenishment_count{};
     };
 
     inline void initialize(context& value, cpu_id_t affinity) noexcept {
@@ -43,6 +47,7 @@ namespace sys::kernel::scheduling
         value.affinity = affinity;
         value.enabled = true;
         value.throttled = false;
+        value.replenishment_count = 0U;
     }
 
     [[nodiscard]] inline error_t configure(context& value, u8 priority, u64 budget, u64 period,
@@ -63,19 +68,59 @@ namespace sys::kernel::scheduling
         value.enabled = true;
         value.throttled = false;
         value.donation_depth = 0U;
+        value.replenishment_count = 0U;
         return error_t::success;
     }
 
+    inline void insert_replenishment(context& value, u64 deadline, u64 amount) noexcept {
+        if (amount == 0U)
+            return;
+        u32 position = 0U;
+        while (position < value.replenishment_count &&
+               value.replenishment_deadlines[position] < deadline)
+            ++position;
+        if (position < value.replenishment_count &&
+            value.replenishment_deadlines[position] == deadline) {
+            value.replenishment_amounts[position] += amount;
+        } else if (value.replenishment_count < maximum_replenishments) {
+            for (u32 index = value.replenishment_count; index > position; --index) {
+                value.replenishment_deadlines[index] = value.replenishment_deadlines[index - 1U];
+                value.replenishment_amounts[index] = value.replenishment_amounts[index - 1U];
+            }
+            value.replenishment_deadlines[position] = deadline;
+            value.replenishment_amounts[position] = amount;
+            ++value.replenishment_count;
+        } else {
+            /*
+             * Coalesce overflow into the latest record. Delaying returned
+             * budget is bandwidth-safe and, unlike dropping a record, always
+             * permits a throttled context to make progress eventually.
+             */
+            const u32 last = maximum_replenishments - 1U;
+            value.replenishment_amounts[last] += amount;
+            if (deadline > value.replenishment_deadlines[last])
+                value.replenishment_deadlines[last] = deadline;
+        }
+        value.next_replenishment = value.replenishment_deadlines[0];
+    }
+
     inline void replenish_if_due(context& value, u64 now) noexcept {
-        if (!value.enabled || value.period_ticks == 0U || now < value.next_replenishment) {
+        if (!value.enabled || value.period_ticks == 0U || value.replenishment_count == 0U) {
             return;
         }
-        const u64 elapsed = now - value.next_replenishment;
-        const u64 remainder = elapsed % value.period_ticks;
-        const u64 until_next = value.period_ticks - remainder;
-        value.next_replenishment = deadline_fits(now, until_next) ? now + until_next : maximum_time;
-        value.consumed_ticks = 0U;
-        value.throttled = false;
+        while (value.replenishment_count != 0U && value.replenishment_deadlines[0] <= now) {
+            const u64 amount = value.replenishment_amounts[0];
+            value.consumed_ticks =
+                amount >= value.consumed_ticks ? 0U : value.consumed_ticks - amount;
+            for (u32 index = 1U; index < value.replenishment_count; ++index) {
+                value.replenishment_deadlines[index - 1U] = value.replenishment_deadlines[index];
+                value.replenishment_amounts[index - 1U] = value.replenishment_amounts[index];
+            }
+            --value.replenishment_count;
+        }
+        value.next_replenishment =
+            value.replenishment_count == 0U ? maximum_time : value.replenishment_deadlines[0];
+        value.throttled = value.consumed_ticks >= value.budget_ticks;
     }
 
     [[nodiscard]] inline bool eligible(context& value, u64 now) noexcept {
@@ -97,15 +142,15 @@ namespace sys::kernel::scheduling
         }
         if (value.budget_ticks == 0U || value.throttled || ticks == 0U)
             return false;
-        if (ticks > value.budget_ticks - value.consumed_ticks) {
-            value.consumed_ticks = value.budget_ticks;
-            value.throttled = true;
-            return false;
-        }
-        value.consumed_ticks += ticks;
+        const u64 remaining = value.budget_ticks - value.consumed_ticks;
+        const u64 charged = ticks < remaining ? ticks : remaining;
+        value.consumed_ticks += charged;
+        const u64 deadline =
+            deadline_fits(now, value.period_ticks) ? now + value.period_ticks : maximum_time;
+        insert_replenishment(value, deadline, charged);
         if (value.consumed_ticks >= value.budget_ticks)
             value.throttled = true;
-        return !value.throttled;
+        return ticks == charged && !value.throttled;
     }
 
     [[nodiscard]] inline bool charge(context& value, u64 ticks = 1U) noexcept {
@@ -115,9 +160,11 @@ namespace sys::kernel::scheduling
     inline void replenish(context& value) noexcept {
         value.consumed_ticks = 0U;
         value.throttled = false;
+        value.replenishment_count = 0U;
+        value.next_replenishment = maximum_time;
     }
 
-    [[nodiscard]] inline error_t donate(context& receiver, context& donor) noexcept {
+    [[nodiscard]] inline error_t donate(context& receiver, context& donor, u64 now) noexcept {
         if (donor.donation_depth >= maximum_donation_depth || receiver.donation_depth != 0U ||
             receiver.donated_ticks != 0U)
             return error_t::busy;
@@ -133,10 +180,17 @@ namespace sys::kernel::scheduling
             return error_t::invalid_argument;
         }
         receiver.donated_ticks = donor.donated_ticks + own_remaining;
+        const u64 deadline =
+            deadline_fits(now, donor.period_ticks) ? now + donor.period_ticks : maximum_time;
+        insert_replenishment(donor, deadline, own_remaining);
         donor.donated_ticks = 0U;
         donor.consumed_ticks = donor.budget_ticks;
         donor.throttled = true;
         return error_t::success;
+    }
+
+    [[nodiscard]] inline error_t donate(context& receiver, context& donor) noexcept {
+        return donate(receiver, donor, 0U);
     }
 
     inline void revoke_donation(context& receiver, context& donor) noexcept {

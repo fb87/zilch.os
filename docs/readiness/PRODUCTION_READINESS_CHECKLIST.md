@@ -237,8 +237,8 @@ Every completed requirement must link to:
 
 - [x] **SCH-007** Scheduling-context objects exist.
 - [-] **SCH-008** Bounded budget charging/throttling and validated quiescent reconfiguration exist; RT stress evidence remains open.
-- [-] **SCH-009** Bounded periodic replenishment exists; configuration rejects zero budget, zero period, budget greater than period, and deadlines that overflow the logical timebase; sporadic-server conformance remains open.
-- [ ] **SCH-010** Sporadic-server semantics documented and tested.
+- [x] **SCH-009** Bounded replenishment exists; configuration rejects zero budget, zero period, budget greater than period, and deadlines that overflow the logical timebase.
+- [x] **SCH-010** Per-slice sporadic replenishment uses real scheduler timestamps and a bounded ordered queue with bandwidth-safe overflow coalescing; staggered return, throttle, overflow, donation, eventual-progress, pager-liveness, and full acceptance certification pass.
 - [x] **SCH-011** Scheduling-context budget and effective priority donation are integrated with synchronous IPC and deterministic unwind.
 - [x] **SCH-012** Donation chains propagate budget and inherited priority and reject depth beyond eight.
 - [x] **SCH-013** A lower-priority server executes at the caller's inherited priority until reply, cancellation, timeout, exit, or teardown.
