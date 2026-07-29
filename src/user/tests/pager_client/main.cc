@@ -63,23 +63,43 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         (void)sys::control(sys::abi::v1::control_operation::notification_signal, notification,
                            1U << 12U);
         const auto request = sys::ipc_receive(endpoint);
-        if (request.status == static_cast<sys::word_t>(sys::error_t::success))
-            (void)sys::ipc_reply(0U, 0U, 0U, 0U);
+        if (request.status != static_cast<sys::word_t>(sys::error_t::success))
+            return 10;
+        sys::abi::v1::ipc_transfer_batch reply{};
+        reply.count = 2U;
+        reply.entries[0] = {22U, 22U, 1U << 1U, 0U};
+        reply.entries[1] = {23U, 23U, 1U << 1U, 0U};
+        if (sys_ipc_invoke_raw(0U, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::reply), 0U,
+                               0U, 0U, 0U, reply.encode(),
+                               0U) != static_cast<sys::word_t>(sys::error_t::success))
+            return 10;
+        (void)sys::ipc_receive(endpoint);
         sys::thread_exit(0U, notification, 1U << 14U);
     }
     if (role == capability_race_sender_role) {
         while (sys::control(sys::abi::v1::control_operation::notification_signal, 20U, 1U) !=
                static_cast<sys::word_t>(sys::error_t::success)) {
         }
-        (void)sys::control(sys::abi::v1::control_operation::notification_signal, notification,
-                           1U << 13U);
         sys::abi::v1::ipc_transfer_batch transfer{};
         transfer.count = 2U;
+        transfer.entries[0] = {20U, 22U, (1U << 1U) | (1U << 3U), 0U};
+        transfer.entries[1] = {21U, 23U, (1U << 1U) | (1U << 3U), 0U};
+        auto result = sys_ipc_exchange_raw(
+            endpoint, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::call), 0x42415443U, 0U,
+            0U, 0U, transfer.encode(), 0U);
+        if (result.status != static_cast<sys::word_t>(sys::error_t::success) ||
+            sys::control(sys::abi::v1::control_operation::notification_signal, 22U, 1U) !=
+                static_cast<sys::word_t>(sys::error_t::success) ||
+            sys::control(sys::abi::v1::control_operation::notification_signal, 23U, 1U) !=
+                static_cast<sys::word_t>(sys::error_t::success))
+            return 10;
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal, notification,
+                           1U << 13U);
         transfer.entries[0] = {20U, 20U, 1U << 1U, 0U};
         transfer.entries[1] = {21U, 21U, 1U << 1U, 0U};
-        const auto result = sys_ipc_exchange_raw(
-            endpoint, static_cast<sys::word_t>(sys::abi::v1::ipc_operation::call), 0x43415052U, 0U,
-            0U, 0U, transfer.encode(), 0U);
+        result = sys_ipc_exchange_raw(endpoint,
+                                      static_cast<sys::word_t>(sys::abi::v1::ipc_operation::call),
+                                      0x43415052U, 0U, 0U, 0U, transfer.encode(), 0U);
         if (result.status != static_cast<sys::word_t>(sys::error_t::success) &&
             result.status != static_cast<sys::word_t>(sys::error_t::not_found) &&
             result.status != static_cast<sys::word_t>(sys::error_t::busy))

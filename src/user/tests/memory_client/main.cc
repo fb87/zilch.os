@@ -40,6 +40,36 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         fail(client, 1U);
     const sys::word_t first_handle = client * handles_per_client;
 
+    {
+        constexpr sys::vaddr_t grant_address = 0x2000f000U;
+        constexpr sys::word_t read_write = 3U;
+        const auto grant = sys::ipc_call(
+            endpoint, static_cast<sys::word_t>(sys::abi::v1::memory_server_operation::grant_frame),
+            first_handle, received_frame_base);
+        if (grant.status != static_cast<sys::word_t>(sys::error_t::success) ||
+            grant.message0 != 0U || grant.message1 != sys::abi::v1::maximum_ipc_ool_bytes ||
+            grant.message2 != received_frame_base)
+            fail(client, 8U);
+        const sys::word_t mapped =
+            sys::control(sys::abi::v1::control_operation::map_frame, 3U, received_frame_base,
+                         grant_address, read_write, 0x100U);
+        if (mapped != static_cast<sys::word_t>(sys::error_t::success))
+            fail(client, 9U, mapped);
+        auto* payload = reinterpret_cast<volatile sys::word_t*>(grant_address);
+        const sys::word_t pattern = 0x4f4f4c0000000000ULL | client;
+        *payload = pattern;
+        if (*payload != pattern)
+            fail(client, 10U);
+        if (sys::control(sys::abi::v1::control_operation::unmap_frame, 3U, received_frame_base,
+                         grant_address) != static_cast<sys::word_t>(sys::error_t::success) ||
+            sys::control(sys::abi::v1::control_operation::capability_delete, 0U,
+                         received_frame_base) != static_cast<sys::word_t>(sys::error_t::success))
+            fail(client, 11U);
+        sys::word_t released = 0U;
+        if (!request(sys::abi::v1::memory_server_operation::release_frame, first_handle, released))
+            fail(client, 12U);
+    }
+
     /* Receiver-selected occupied slots must fail without leaking a frame. */
     {
         const auto rejected = sys::ipc_call(

@@ -49,6 +49,7 @@ namespace
 
         switch (operation) {
             case sys::abi::v1::memory_server_operation::allocate_frame:
+            case sys::abi::v1::memory_server_operation::grant_frame:
                 if (handle >= sys::abi::v1::memory_server_max_handles || handles[handle].allocated)
                     return invalid;
                 if (sys::control(sys::abi::v1::control_operation::resource_frame_create, resource,
@@ -175,7 +176,20 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         sys::word_t value = 0U;
         sys::abi::v1::ipc_transfer transfer{};
         const sys::word_t status = service_request(request, value, transfer);
-        sys::word_t reply_status = sys::ipc_reply(status, value, 0U, 0U, transfer);
+        const auto operation = static_cast<sys::abi::v1::memory_server_operation>(request.message0);
+        sys::word_t reply_status = 0U;
+        if (operation == sys::abi::v1::memory_server_operation::grant_frame &&
+            status == static_cast<sys::word_t>(sys::error_t::success)) {
+            const sys::abi::v1::ipc_ool_message grant{transfer.source,
+                                                      transfer.destination,
+                                                      transfer.rights,
+                                                      transfer.badge,
+                                                      0U,
+                                                      sys::abi::v1::maximum_ipc_ool_bytes};
+            reply_status = sys::ipc_reply_ool(grant);
+        } else {
+            reply_status = sys::ipc_reply(status, value, 0U, 0U, transfer);
+        }
         if (reply_status != static_cast<sys::word_t>(sys::error_t::success)) {
             /*
              * Capability transfer is atomic with reply delivery.  If the
@@ -193,8 +207,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         }
         if (reply_status != static_cast<sys::word_t>(sys::error_t::success))
             fail(0x41U);
-        if (static_cast<sys::abi::v1::memory_server_operation>(request.message0) ==
-                sys::abi::v1::memory_server_operation::shutdown &&
+        if (operation == sys::abi::v1::memory_server_operation::shutdown &&
             status == static_cast<sys::word_t>(sys::error_t::success))
             ++completed_clients;
     }

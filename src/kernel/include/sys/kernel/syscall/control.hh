@@ -325,6 +325,15 @@ namespace sys::kernel::syscall
                     case 25U:
                         name = "scheduling_configuration";
                         break;
+                    case 26U:
+                        name = "ipc_capability_batch";
+                        break;
+                    case 27U:
+                        name = "ipc_ool_frame_grant";
+                        break;
+                    case 28U:
+                        name = "ipc_completion_gate";
+                        break;
                     default:
                         break;
                 }

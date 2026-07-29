@@ -40,6 +40,9 @@ namespace
         capability_transfer_revoke_race = 23U,
         object_lookup_destroy_race = 24U,
         scheduling_configuration = 25U,
+        ipc_capability_batch = 26U,
+        ipc_ool_frame_grant = 27U,
+        ipc_completion_gate = 28U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -1054,6 +1057,7 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     record(ledger, test_id::ipc_lifecycle_races, ipc_lifecycle_pass);
     const bool capability_race_pass = test_capability_transfer_revoke_race();
     record(ledger, test_id::capability_transfer_revoke_race, capability_race_pass);
+    record(ledger, test_id::ipc_capability_batch, capability_race_pass);
     const bool object_race_pass = test_object_lookup_destroy_race();
     record(ledger, test_id::object_lookup_destroy_race, object_race_pass);
     const bool scheduling_configuration_pass = test_scheduling_configuration();
@@ -1062,9 +1066,13 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     const service_results services = run_userspace_services();
     record(ledger, test_id::userspace_pager_service, services.pager);
     record(ledger, test_id::memory_server_protocol, services.memory_protocol);
+    record(ledger, test_id::ipc_ool_frame_grant, services.memory_protocol);
 
     const bool dynamic_ipc_pass = test_dynamic_ipc_objects();
     record(ledger, test_id::dynamic_ipc_objects, dynamic_ipc_pass);
+    record(ledger, test_id::ipc_completion_gate,
+           ipc_lifecycle_pass && capability_race_pass && object_race_pass &&
+               services.memory_protocol && dynamic_ipc_pass);
 
     const bool memory_lifecycle_pass = test_memory_resource_lifecycle();
     record(ledger, test_id::memory_resource_lifecycle, memory_lifecycle_pass);

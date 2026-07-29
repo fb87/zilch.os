@@ -1,3 +1,14 @@
+## 0168 - Close the IPC production gate
+
+- Certify successful two-capability transfer on both call and reply before
+  forcing and validating complete partial-batch rollback.
+- Exercise frame-grant OOL transport end to end by mapping, writing, reading,
+  unmapping, deleting, and releasing the granted page in three clients.
+- Add a dedicated `ipc_completion_gate` runtime result aggregating lifecycle,
+  transfer, OOL, object-reuse, and dynamic-endpoint certification.
+- Reconcile the readiness and evidence documents and close both IPC gate
+  checkboxes after the complete certification suite passes.
+
 ## 0167 - Complete bounded Core IPC
 
 - Transfer up to four capabilities atomically from a user-described batch,

@@ -172,7 +172,7 @@ Every completed requirement must link to:
 
 ### IPC completion gate
 
-- [ ] **IPC-GATE** IPC is production-complete only when call/reply, capability transfer, donation, timeout, cancellation, and fault IPC are all integrated and stress-tested.
+- [x] **IPC-GATE** Call/reply, batched capability transfer and rollback, donation, timeout, cancellation, notification, OOL frame grants, and fault IPC are integrated; dedicated lifecycle, SMP, reuse, mapped-grant, latency, and instruction-footprint gates pass.
 
 ---
 
@@ -614,7 +614,7 @@ The kernel may be called **production-ready** only when all of these gates are c
 
 - [ ] Product/test separation gate
 - [ ] Capability completion gate
-- [ ] IPC completion gate
+- [x] IPC completion gate
 - [ ] Memory completion gate
 - [ ] Scheduler completion gate
 - [ ] Interrupt and timer production gate

@@ -16,6 +16,7 @@ namespace sys::abi::v1
         release_frame = 2U,
         query = 3U,
         shutdown = 4U,
+        grant_frame = 5U,
     };
 
     inline constexpr word_t memory_server_max_handles = 12U;
