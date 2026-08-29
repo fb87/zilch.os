@@ -272,30 +272,61 @@ namespace sys::kernel::hypervisor
             vcpu.last_diagnostic.syndrome = exit.syndrome;
             vcpu.last_diagnostic.fault_address = exit.fault_address;
             vcpu.last_diagnostic.guest_pc = exit.guest_pc;
+            const bool expected_negative =
+                result == error_t::success && exit.reason == abi::v1::vm_exit_reason::unexpected;
 #if CONFIG_VERBOSE_DIAGNOSTICS
-            pr_err("hv guest-exit result=%d reason=%u esr=%llx far=%llx ipa=%llx pc=%llx "
-                   "pstate=%llx vmid=%u run=%u\n",
-                   static_cast<int>(result), static_cast<unsigned int>(exit.reason),
-                   static_cast<unsigned long long>(exit.syndrome),
-                   static_cast<unsigned long long>(exit.fault_address),
-                   static_cast<unsigned long long>(exit.qualification),
-                   static_cast<unsigned long long>(exit.guest_pc),
-                   static_cast<unsigned long long>(vcpu.context.pstate), vm.vmid,
-                   vcpu.run_generation);
-            pr_err("hv guest-regs x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx x6=%llx x7=%llx "
-                   "sp1=%llx\n",
-                   static_cast<unsigned long long>(vcpu.context.x[0]),
-                   static_cast<unsigned long long>(vcpu.context.x[1]),
-                   static_cast<unsigned long long>(vcpu.context.x[2]),
-                   static_cast<unsigned long long>(vcpu.context.x[3]),
-                   static_cast<unsigned long long>(vcpu.context.x[4]),
-                   static_cast<unsigned long long>(vcpu.context.x[5]),
-                   static_cast<unsigned long long>(vcpu.context.x[6]),
-                   static_cast<unsigned long long>(vcpu.context.x[7]),
-                   static_cast<unsigned long long>(vcpu.context.sp_el1));
+            if (expected_negative) {
+                pr_warn("hv guest-exit result=%d reason=%u esr=%llx far=%llx ipa=%llx pc=%llx "
+                        "pstate=%llx vmid=%u run=%u\n",
+                        static_cast<int>(result), static_cast<unsigned int>(exit.reason),
+                        static_cast<unsigned long long>(exit.syndrome),
+                        static_cast<unsigned long long>(exit.fault_address),
+                        static_cast<unsigned long long>(exit.qualification),
+                        static_cast<unsigned long long>(exit.guest_pc),
+                        static_cast<unsigned long long>(vcpu.context.pstate), vm.vmid,
+                        vcpu.run_generation);
+                pr_warn("hv guest-regs x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx x6=%llx "
+                        "x7=%llx sp1=%llx\n",
+                        static_cast<unsigned long long>(vcpu.context.x[0]),
+                        static_cast<unsigned long long>(vcpu.context.x[1]),
+                        static_cast<unsigned long long>(vcpu.context.x[2]),
+                        static_cast<unsigned long long>(vcpu.context.x[3]),
+                        static_cast<unsigned long long>(vcpu.context.x[4]),
+                        static_cast<unsigned long long>(vcpu.context.x[5]),
+                        static_cast<unsigned long long>(vcpu.context.x[6]),
+                        static_cast<unsigned long long>(vcpu.context.x[7]),
+                        static_cast<unsigned long long>(vcpu.context.sp_el1));
+            } else {
+                pr_err("hv guest-exit result=%d reason=%u esr=%llx far=%llx ipa=%llx pc=%llx "
+                       "pstate=%llx vmid=%u run=%u\n",
+                       static_cast<int>(result), static_cast<unsigned int>(exit.reason),
+                       static_cast<unsigned long long>(exit.syndrome),
+                       static_cast<unsigned long long>(exit.fault_address),
+                       static_cast<unsigned long long>(exit.qualification),
+                       static_cast<unsigned long long>(exit.guest_pc),
+                       static_cast<unsigned long long>(vcpu.context.pstate), vm.vmid,
+                       vcpu.run_generation);
+                pr_err("hv guest-regs x0=%llx x1=%llx x2=%llx x3=%llx x4=%llx x5=%llx x6=%llx "
+                       "x7=%llx sp1=%llx\n",
+                       static_cast<unsigned long long>(vcpu.context.x[0]),
+                       static_cast<unsigned long long>(vcpu.context.x[1]),
+                       static_cast<unsigned long long>(vcpu.context.x[2]),
+                       static_cast<unsigned long long>(vcpu.context.x[3]),
+                       static_cast<unsigned long long>(vcpu.context.x[4]),
+                       static_cast<unsigned long long>(vcpu.context.x[5]),
+                       static_cast<unsigned long long>(vcpu.context.x[6]),
+                       static_cast<unsigned long long>(vcpu.context.x[7]),
+                       static_cast<unsigned long long>(vcpu.context.sp_el1));
+            }
 #else
-            pr_err("hv guest-exit result=%d reason=%u vmid=%u run=%u\n", static_cast<int>(result),
-                   static_cast<unsigned int>(exit.reason), vm.vmid, vcpu.run_generation);
+            if (expected_negative)
+                pr_warn("hv guest-exit result=%d reason=%u vmid=%u run=%u\n",
+                        static_cast<int>(result), static_cast<unsigned int>(exit.reason), vm.vmid,
+                        vcpu.run_generation);
+            else
+                pr_err("hv guest-exit result=%d reason=%u vmid=%u run=%u\n",
+                       static_cast<int>(result), static_cast<unsigned int>(exit.reason), vm.vmid,
+                       vcpu.run_generation);
 #endif
         }
         return result;

@@ -35,11 +35,14 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
     const sys::u64 exception_class = vector & 0x3U;
 
     if (exception_class == 1U) {
-        const sys::kernel::interrupt::timing::latency_scope interrupt_latency{
-            sys::kernel::interrupt::timing::latency_kind::interrupt_service};
         const sys::irq_id_t irq = sys::platform::interrupt::acknowledge();
         bool userspace_deactivate = false;
-        sys::kernel::emergency::trace(sys::kernel::emergency::event::irq, irq, vector, level);
+        {
+            const sys::kernel::interrupt::timing::latency_scope interrupt_latency{
+                sys::kernel::interrupt::timing::latency_kind::interrupt_service};
+            sys::kernel::emergency::trace(sys::kernel::emergency::event::irq, irq, vector,
+                                           level);
+        }
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
             const sys::kernel::interrupt::timing::latency_scope preemption_latency{
                 sys::kernel::interrupt::timing::latency_kind::preemption_service};
@@ -56,8 +59,9 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                 sys::kernel::scheduler::on_timer_tick();
             }
             if (ticks == 1U && sys::arch::cpu::current_id() == 0U) {
-                pr_info("timer interrupt active cpu=%u\n",
-                        static_cast<unsigned int>(sys::arch::cpu::current_id()));
+                sys::printk::defer(sys::kernel::emergency::event::irq,
+                                            static_cast<sys::u64>(sys::arch::cpu::current_id()),
+                                            ticks);
             }
         } else if (irq == sys::platform::interrupt::virtual_gic_maintenance_irq) {
             (void)sys::arch::hypervisor::virtual_gic_maintenance_status();

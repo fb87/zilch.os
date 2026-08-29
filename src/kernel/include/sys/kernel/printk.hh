@@ -214,13 +214,15 @@ namespace sys::printk
             return -1;
         }
 
+        // Keep the timing sample on the lock path only.
+        kernel::interrupt::timing::restore(irq_state);
+
         va_list arguments;
         va_start(arguments, format);
         const int result = vprintk(format, arguments);
         va_end(arguments);
 
         unlock();
-        kernel::interrupt::timing::restore(irq_state);
         return result;
     }
 } // namespace sys::printk

@@ -130,9 +130,11 @@ namespace sys::kernel::capability
     [[nodiscard]] inline bool resolve_selector(const cspace_t& cspace, capability_id_t selector,
                                                u32& index) noexcept {
         const u32 raw = static_cast<u32>(selector);
+        if (static_cast<capability_id_t>(raw) != selector)
+            return false;
         index = raw & (cspace_slot_count - 1U);
         const u32 guard = (raw >> cspace_guard_shift) & cspace_guard_mask;
-        return (raw >> (cspace_guard_shift + 8U)) == 0U && guard == cspace.guard;
+        return guard == cspace.guard;
     }
 
     [[nodiscard]] inline slot_t& slot_at(cspace_t& cspace, capability_id_t selector) noexcept {

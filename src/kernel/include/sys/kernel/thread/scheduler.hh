@@ -13,8 +13,10 @@
 #endif
 #if CONFIG_SELFTEST
 #include <sys/kernel/tests/capability/derivation.hh>
+#include <sys/kernel/tests/capability/selector.hh>
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
+#include <sys/kernel/tests/object/generation.hh>
 #include <sys/kernel/tests/scheduling/sporadic.hh>
 #endif
 #include <sys/kernel/boot/bootinfo.hh>
@@ -761,6 +763,12 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
 
         result = tests::capability_derivation::run_derivation_generation_aba(root);
+        if (result != error_t::success)
+            return result;
+        result = tests::capability_selector::run_selector_width_negative(root);
+        if (result != error_t::success)
+            return result;
+        result = tests::object_generation::run_generation_retirement();
         if (result != error_t::success)
             return result;
 

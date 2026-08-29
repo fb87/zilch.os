@@ -162,6 +162,10 @@ namespace sys::kernel::object
         }
     }
 
+    [[nodiscard]] inline bool next_generation_available(u32 generation) noexcept {
+        return generation != ~static_cast<u32>(0U);
+    }
+
     [[nodiscard]] inline constexpr reference_t null_reference() noexcept {
         return {};
     }
@@ -180,9 +184,11 @@ namespace sys::kernel::object
             unlock_table();
             return error_t::busy;
         }
-        u32 generation = slot.generation + 1U;
-        if (generation == 0U)
-            generation = 1U;
+        if (!next_generation_available(slot.generation)) {
+            unlock_table();
+            return error_t::no_memory;
+        }
+        const u32 generation = slot.generation + 1U;
         object.id = id;
         object.type = type;
         object.generation = generation;
@@ -202,9 +208,9 @@ namespace sys::kernel::object
             table_slot_t& slot = object_table[id];
             if (slot.object != nullptr)
                 continue;
-            u32 generation = slot.generation + 1U;
-            if (generation == 0U)
-                generation = 1U;
+            if (!next_generation_available(slot.generation))
+                continue;
+            const u32 generation = slot.generation + 1U;
             object.id = id;
             object.type = type;
             object.generation = generation;
