@@ -84,7 +84,6 @@ namespace sys::kernel
             pr_err("interrupt initialization failed=%d\n", static_cast<int>(interrupt_result));
             arch::cpu::halt();
         }
-
         pr_info("gic: initialized\n");
         pr_info("timer: initializing\n");
         platform::timer::initialize();

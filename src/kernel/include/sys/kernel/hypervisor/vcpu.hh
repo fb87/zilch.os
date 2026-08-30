@@ -110,6 +110,8 @@ namespace sys::kernel::hypervisor
         vcpu.context.cntkctl_el1 = arch::hypervisor::sanitize_guest_cntkctl_el1(0U);
         vcpu.context.gic_pmr = 0xffU;
         vcpu.context.gic_last_iar = 1023U;
+        vcpu.context.gicd_ctlr = 2U;
+        vcpu.context.gic_group1 = ~0ULL;
         for (u32 index = 0U; index < maximum_virtual_irqs; ++index)
             vcpu.context.gic_priority[index] = default_virtual_irq_priority;
         vcpu.interrupt_state.reset();

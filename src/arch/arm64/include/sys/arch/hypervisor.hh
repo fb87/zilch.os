@@ -170,6 +170,9 @@ namespace sys::arch::hypervisor
     inline u64 guest_report_mask[maximum_cpu_count]{};
     inline bool guest_mmu_enable_armed[maximum_cpu_count]{};
     inline bool guest_irq_acknowledged[maximum_cpu_count]{};
+    inline bool guest_uart_irq_pending[maximum_cpu_count]{};
+    inline bool guest_uart_irq_reported[maximum_cpu_count]{};
+    inline bool guest_uart_irq_injected[maximum_cpu_count]{};
     inline guest_context_layout saved_host_el1[maximum_cpu_count]{};
     inline u64 ich_vtr[maximum_cpu_count]{};
 
@@ -292,6 +295,59 @@ namespace sys::arch::hypervisor
         __asm__ volatile("msr hcr_el2, %0; isb" : : "r"(hcr) : "memory");
     }
 
+    inline void route_guest_uart_irq() noexcept {
+        u64 mpidr = 0U;
+        __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+        constexpr u64 affinity_mask = 0xff00ffffffULL;
+        auto* route = reinterpret_cast<volatile u64*>(gicd_base + 0x6000U + 33U * 8U);
+        *route = mpidr & affinity_mask;
+        __asm__ volatile("dsb sy; isb" ::: "memory");
+    }
+
+    inline void enable_guest_uart_irq() noexcept {
+        auto* priority = reinterpret_cast<volatile u8*>(gicd_base + 0x400U + 33U);
+        auto* group = reinterpret_cast<volatile u32*>(gicd_base + 0x80U + 4U);
+        auto* enable = reinterpret_cast<volatile u32*>(gicd_base + 0x100U + 4U);
+        *priority = 0x80U;
+        *group |= 1U << 1U;
+        *enable = 1U << 1U;
+        __asm__ volatile("dsb sy; isb" ::: "memory");
+    }
+
+    /*
+     * The physical UART SPI is level-triggered and stays asserted until the
+     * guest drains the FIFO. Once taken, mask it at the real distributor so
+     * it cannot re-trap EL2 before the guest's virtual ISR gets to run;
+     * re-enable happens only when the guest EOIs/deactivates virtual IRQ 33
+     * (see emulate_native_gic_system_register). Without this, a level IRQ
+     * that arrives while the guest has interrupts masked re-fires on every
+     * ERET and the guest never advances past that instruction.
+     */
+    inline void disable_guest_uart_irq() noexcept {
+        auto* disable = reinterpret_cast<volatile u32*>(gicd_base + 0x180U + 4U);
+        *disable = 1U << 1U;
+        __asm__ volatile("dsb sy; isb" ::: "memory");
+    }
+
+    [[nodiscard]] inline bool handle_guest_uart_irq() noexcept {
+        const cpu_id_t id = cpu::current_id();
+        if (id >= maximum_cpu_count)
+            return false;
+        disable_guest_uart_irq();
+        __atomic_store_n(&guest_uart_irq_pending[id], true, __ATOMIC_RELEASE);
+        if (!guest_active[id] || active_context[id] == nullptr || !active_context[id]->native_gic)
+            return true;
+        __atomic_store_n(&guest_uart_irq_pending[id], false, __ATOMIC_RELEASE);
+        constexpr u64 uart_bit = 1ULL << 33U;
+        active_context[id]->gicd_ctlr |= 2U;
+        active_context[id]->gic_group1 |= uart_bit;
+        active_context[id]->gic_enabled |= uart_bit;
+        active_context[id]->gic_priority[33U] = 0x80U;
+        active_context[id]->gic_pending |= uart_bit;
+        update_native_gic_vi(*active_context[id]);
+        return true;
+    }
+
     [[nodiscard]] inline bool handle_guest_virtual_timer_irq() noexcept {
         const cpu_id_t id = cpu::current_id();
         if (id >= maximum_cpu_count || !guest_active[id] || active_context[id] == nullptr ||
@@ -382,6 +438,10 @@ namespace sys::arch::hypervisor
             state.gic_group1 = (state.gic_group1 & ~valid) | bits;
         } else if (local_offset >= 0x100U && local_offset < 0x108U) {
             state.gic_enabled |= bits;
+#if CONFIG_GUEST_ZEPHYR
+            if ((bits & (1ULL << 33U)) != 0U)
+                enable_guest_uart_irq();
+#endif
         } else if (local_offset >= 0x180U && local_offset < 0x188U) {
             state.gic_enabled &= ~bits;
         } else if (local_offset >= 0x200U && local_offset < 0x208U) {
@@ -424,6 +484,12 @@ namespace sys::arch::hypervisor
         state->native_gic = true;
         const u32 target = static_cast<u32>((syndrome >> 16U) & 0x1fU);
         if (bytes == 8U) {
+            if (!redistributor && offset >= 0x6100U && offset < 0x6300U) {
+                if (((syndrome >> 6U) & 1U) == 0U && target != 31U)
+                    frame.x[target] = 0U;
+                frame.instruction_pointer += 4U;
+                return true;
+            }
             if (!redistributor || offset != 0x8U || ((syndrome >> 6U) & 1U) != 0U)
                 return false;
             if (target != 31U) {
@@ -496,6 +562,8 @@ namespace sys::arch::hypervisor
                     state->gic_pending &= ~(1ULL << intid);
                     state->gic_active |= 1ULL << intid;
                     state->gic_last_iar = intid;
+                    if (intid == 33U)
+                        __atomic_store_n(&guest_uart_irq_injected[id], true, __ATOMIC_RELEASE);
                     value = intid;
                 }
             } else if (encoding == icc_bpr1_el1)
@@ -528,6 +596,10 @@ namespace sys::arch::hypervisor
                                          : "r"(control)
                                          : "memory");
                     }
+#if CONFIG_GUEST_ZEPHYR
+                    if (intid == 33U)
+                        enable_guest_uart_irq();
+#endif
                 }
             } else if (encoding == icc_sre_el1) {
                 // System-register interface is always enabled for this virtual CPU.
@@ -1118,6 +1190,12 @@ namespace sys::arch::hypervisor
                 const u64 run_flags = frame.x[1];
                 const u64 vmid = run_flags & 0xffffU;
                 const bool inject_virtual_irq = (run_flags & (1ULL << 16U)) != 0U;
+#if CONFIG_GUEST_ZEPHYR
+                route_guest_uart_irq();
+                if (context->native_gic &&
+                    __atomic_exchange_n(&guest_uart_irq_pending[id], false, __ATOMIC_ACQ_REL))
+                    context->gic_pending |= 1ULL << 33U;
+#endif
                 if (!inject_virtual_irq)
                     context->report_mask = 0U;
                 const u64 vttbr = (vmid << 48U) | (frame.x[2] & 0x0000fffffffff000ULL);
@@ -1140,7 +1218,12 @@ namespace sys::arch::hypervisor
                  */
                 hcr &= ~(1ULL << 7U);
                 hcr |= 1ULL << 26U;
-                if (inject_virtual_irq)
+                if (inject_virtual_irq ||
+#if CONFIG_GUEST_ZEPHYR
+                    (context->native_gic && native_gic_deliverable(*context) != 0U))
+#else
+                    false)
+#endif
                     hcr |= 1ULL << 7U;
                 __asm__ volatile("dsb ishst; tlbi vmalls12e1is; dsb ish; "
                                  "msr vtcr_el2, %0; msr vttbr_el2, %1; msr hcr_el2, %2; "
