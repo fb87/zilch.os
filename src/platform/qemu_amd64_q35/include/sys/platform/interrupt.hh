@@ -24,6 +24,7 @@ namespace sys::platform::interrupt
     inline void deactivate(irq_id_t) noexcept {}
     inline void mask(irq_id_t) noexcept {}
     inline void unmask(irq_id_t) noexcept {}
+    inline void route_to_current_cpu(irq_id_t) noexcept {}
     [[nodiscard]] inline error_t configure(irq_id_t, bool) noexcept {
         return error_t::unsupported;
     }

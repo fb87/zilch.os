@@ -69,20 +69,6 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             }
         } else if (irq == sys::platform::interrupt::virtual_gic_maintenance_irq) {
             (void)sys::arch::hypervisor::virtual_gic_maintenance_status();
-#if CONFIG_GUEST_ZEPHYR
-        } else if (irq == 33U) {
-            (void)sys::arch::hypervisor::handle_guest_uart_irq();
-#if CONFIG_VERBOSE_DIAGNOSTICS
-            const sys::cpu_id_t cpu = sys::arch::cpu::current_id();
-            const bool injected = __atomic_load_n(
-                &sys::arch::hypervisor::guest_uart_irq_injected[cpu], __ATOMIC_ACQUIRE);
-            if (!__atomic_exchange_n(&sys::arch::hypervisor::guest_uart_irq_reported[cpu], true,
-                                     __ATOMIC_ACQ_REL) ||
-                injected)
-                pr_info("[HV-UART] physical-irq=33 cpu=%u injected=%u\n",
-                        static_cast<unsigned int>(cpu), static_cast<unsigned int>(injected));
-#endif
-#endif
         } else if (irq == sys::platform::interrupt::reschedule_ipi) {
             sys::kernel::interrupt::timing::complete_cross_cpu_wake(sys::arch::cpu::current_id());
             sys::arch::smp::record_reschedule_ipi();

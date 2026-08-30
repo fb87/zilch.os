@@ -1076,6 +1076,15 @@ namespace sys::kernel::syscall
                     result =
                         notification::destroy(*current.owner, static_cast<capability_id_t>(a1));
                 break;
+            case abi::v1::control_operation::interrupt_create:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = interrupt::create(
+                        *current.owner, static_cast<capability_id_t>(a1),
+                        static_cast<irq_id_t>(a2),
+                        a3 != 0U ? interrupt::trigger::edge : interrupt::trigger::level);
+                break;
             case abi::v1::control_operation::notification_signal:
             case abi::v1::control_operation::notification_poll: {
                 if (current.owner == nullptr) {

@@ -47,5 +47,6 @@ namespace sys::abi::v1
         memory_resource_query = 40U,
         memory_resource_destroy = 41U,
         thread_exit = 42U,
+        interrupt_create = 43U,
     };
 } // namespace sys::abi::v1

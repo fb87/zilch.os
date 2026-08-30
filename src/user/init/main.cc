@@ -14,6 +14,7 @@
 #include <sys/test_abi/v1/certification.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
 
 namespace
@@ -847,9 +848,14 @@ namespace
     [[nodiscard]] bool test_domain_manager_lifecycle(sys::capability_id_t endpoint) noexcept {
         constexpr sys::capability_id_t domain_task_selector = 50U;
         constexpr sys::capability_id_t device_frame_selector = 60U;
-        constexpr sys::capability_id_t device_frame_destination = 16U;
+        constexpr sys::capability_id_t device_frame_destination = 100U;
+        constexpr sys::capability_id_t device_irq_selector = 63U;
+        constexpr sys::capability_id_t device_irq_destination = 116U;
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
         constexpr sys::word_t read_write = 3U;
+        constexpr sys::word_t write_control =
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write) |
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::control);
         if (sys::control(sys::abi::v1::control_operation::device_frame_create, device_frame_selector,
                          0x09000000U) != success)
             return false;
@@ -859,6 +865,15 @@ namespace
                                device_frame_selector);
             return false;
         }
+        /* Domain-manager owns physical IRQ 33 (PL011) via a userspace-forwarded
+         * interrupt capability -- see root_graph.hh::start_embedded_guest() for
+         * the same setup used on the real boot path. */
+        if (sys::control(sys::abi::v1::control_operation::interrupt_create, device_irq_selector,
+                         33U, 0U) != success)
+            return false;
+        if (sys::control(sys::abi::v1::control_operation::capability_mint, domain_task_selector,
+                         device_irq_destination, device_irq_selector, write_control) != success)
+            return false;
         const auto launch = sys::ipc_call(endpoint,
                                           static_cast<sys::word_t>(
                                               sys::abi::v1::control_plane_operation::launch),

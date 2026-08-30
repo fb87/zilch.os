@@ -7,6 +7,7 @@ DEFCONFIG := $(CURDIR)/$(MODE)_defconfig
 ZEPHYR := $(OUT)/zephyr
 BUILD := $(OUT)/build
 GUEST_ELF := $(BUILD)/zephyr/zephyr.guest.elf
+GUEST_MANIFEST := $(CURDIR)/manifest.cc
 ZILCH_OUT := $(OUT)/zilch/$(MODE)
 ZILCH_ELF := $(ZILCH_OUT)/zilch.elf
 
@@ -28,7 +29,7 @@ $(GUEST_ELF): CMakeLists.txt hypervisor.overlay prj.conf
 	@nix develop --command llvm-strip --strip-debug -o $@ $(BUILD)/zephyr/zephyr.elf
 
 image: guest
-	@$(MAKE) -C $(ROOT) O=$(ZILCH_OUT) BUILD_VARIANT=$(MODE) KCONFIG_DEFCONFIG=$(DEFCONFIG) DOMAIN_GUEST_ELF=$(GUEST_ELF)
+	@$(MAKE) -C $(ROOT) O=$(ZILCH_OUT) BUILD_VARIANT=$(MODE) KCONFIG_DEFCONFIG=$(DEFCONFIG) DOMAIN_GUEST_ELF=$(GUEST_ELF) DOMAIN_GUEST_MANIFEST=$(GUEST_MANIFEST)
 
 run: image
 	@QEMU_CPUSET=$${QEMU_CPUSET:-4-7} $(MAKE) -C $(ROOT) O=$(ZILCH_OUT) BUILD_VARIANT=$(MODE) KCONFIG_DEFCONFIG=$(DEFCONFIG) run

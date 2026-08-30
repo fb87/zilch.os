@@ -38,6 +38,7 @@ USER_PROGRAM_BINS := $(USER_PROGRAM_ELFS:.elf=.bin)
 USER_COMMON_OBJECTS := $(addprefix $(USER_OBJDIR)/common/,$(USER_COMMON_SOURCES:.cc=.o))
 USER_CRT := $(USER_OBJDIR)/common/src/user/runtime/crt/$(ARCH)/start.o
 USER_domain-manager_EXTRA_OBJECTS :=
+USER_init_EXTRA_OBJECTS :=
 
 .PHONY: userspace
 userspace: $(USER_PROGRAM_ELFS) $(USER_PROGRAM_BINS)
@@ -101,7 +102,14 @@ GUEST_TEST_BIN := $(GUEST_TEST_DIR)/guest-test.bin
 GUEST_TEST_OBJ := $(GUEST_TEST_DIR)/entry.o
 GUEST_TEST_LDSCRIPT := $(SRCTREE)/src/user/guests/test-arm64/linker.ld
 DOMAIN_MANAGER_GUEST_BLOB_OBJ := $(USER_OBJDIR)/domain-manager/guest_blob.o
+DOMAIN_MANAGER_GUEST_MANIFEST_OBJ := $(USER_OBJDIR)/domain-manager/guest_manifest.o
+INIT_GUEST_MANIFEST_OBJ := $(USER_OBJDIR)/init/guest_manifest.o
 DOMAIN_GUEST_ELF ?= $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),)
+# A guest package may supply its own manifest describing the devices/IRQs/RAM
+# it needs (see src/user/include/sys/guest_manifest.hh); this is otherwise a
+# plain compiled translation unit, not an incbin blob, so any guest package
+# just points this at its own .cc file matching that header's struct.
+DOMAIN_GUEST_MANIFEST ?= $(SRCTREE)/src/user/servers/domain/default_manifest.cc
 
 ifeq ($(ARCH),arm64)
 ifeq ($(CONFIG_GUEST_TEST_ARM64),1)
@@ -112,6 +120,10 @@ ifneq ($(strip $(DOMAIN_GUEST_ELF)),)
 USER_domain-manager_EXTRA_OBJECTS += $(DOMAIN_MANAGER_GUEST_BLOB_OBJ)
 $(USER_OBJDIR)/domain-manager.elf: $(DOMAIN_MANAGER_GUEST_BLOB_OBJ)
 endif
+USER_domain-manager_EXTRA_OBJECTS += $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ)
+USER_init_EXTRA_OBJECTS += $(INIT_GUEST_MANIFEST_OBJ)
+$(USER_OBJDIR)/domain-manager.elf: $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ)
+$(USER_OBJDIR)/init.elf: $(INIT_GUEST_MANIFEST_OBJ)
 endif
 endif
 
@@ -123,6 +135,10 @@ $(DOMAIN_MANAGER_GUEST_BLOB_OBJ): $(SRCTREE)/src/user/servers/domain/guest_blob.
 	@printf '  GAS     %s\n' '$@'
 	@$(CC) $(TARGET_FLAGS) -march=armv8-a -ffreestanding -DDOMAIN_GUEST_ELF_PATH=\"$(DOMAIN_GUEST_ELF)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 endif
+$(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ) $(INIT_GUEST_MANIFEST_OBJ): $(DOMAIN_GUEST_MANIFEST)
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 endif
 endif
 

@@ -11,6 +11,7 @@ namespace sys::abi::v1
         read = 1U << 0U,
         write = 1U << 1U,
         execute = 1U << 2U,
-        grant = 1U << 3U
+        grant = 1U << 3U,
+        control = 1U << 4U,
     };
 } // namespace sys::abi::v1

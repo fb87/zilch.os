@@ -2,6 +2,7 @@
 
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
+#include <sys/guest_manifest.hh>
 #include <sys/ipc.hh>
 #include <sys/types.hh>
 
@@ -47,23 +48,54 @@ namespace sys::root_graph
     }
 
 #if CONFIG_GUEST_EMBEDDED_IMAGE
+    /*
+     * Root owns physical devices/interrupts and mints capabilities for them
+     * into the domain-manager's cspace -- mirroring how it already creates
+     * and mints the guest's stage-2 memory. Which devices and IRQs a guest
+     * needs is read from its manifest, not hardcoded here: root has no idea
+     * which guest it's booting.
+     */
     [[nodiscard]] inline bool start_embedded_guest() noexcept {
         constexpr word_t domain_index = static_cast<word_t>(abi::v1::control_plane_role::domain) -
                                         static_cast<word_t>(abi::v1::control_plane_role::process);
-        constexpr capability_id_t device_frame = 60U;
-        constexpr capability_id_t domain_device_frame = 16U;
+        constexpr capability_id_t device_frame_base = 100U;
+        constexpr capability_id_t device_irq_base = 116U;
+        constexpr capability_id_t domain_device_frame_base = 100U;
+        constexpr capability_id_t domain_device_irq_base = 116U;
         constexpr word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
                                       static_cast<word_t>(abi::v1::CapabilityRight::write);
+        constexpr word_t write_control = static_cast<word_t>(abi::v1::CapabilityRight::write) |
+                                         static_cast<word_t>(abi::v1::CapabilityRight::control);
         const capability_id_t domain_task = selector_base + domain_index * selector_stride + 1U;
         const capability_id_t domain_endpoint = endpoint_base + domain_index;
         const word_t success = static_cast<word_t>(error_t::success);
 
-        if (control(abi::v1::control_operation::device_frame_create, device_frame, 0x09000000U) !=
-            success)
+        const auto& manifest = ::sys_arm64_domain_guest_manifest;
+        if (!guest_manifest::valid(manifest) ||
+            manifest.device_count > guest_manifest::maximum_devices)
             return false;
-        if (control(abi::v1::control_operation::capability_mint, domain_task, domain_device_frame,
-                    device_frame, read_write) != success)
-            return false;
+
+        for (word_t index = 0U; index < manifest.device_count; ++index) {
+            const auto& dev = manifest.devices[index];
+            const capability_id_t frame = device_frame_base + index;
+            const capability_id_t domain_frame = domain_device_frame_base + index;
+            if (control(abi::v1::control_operation::device_frame_create, frame, dev.ipa) !=
+                success)
+                return false;
+            if (control(abi::v1::control_operation::capability_mint, domain_task, domain_frame,
+                        frame, read_write) != success)
+                return false;
+            if (dev.forward_irq == guest_manifest::no_irq)
+                continue;
+            const capability_id_t irq = device_irq_base + index;
+            const capability_id_t domain_irq = domain_device_irq_base + index;
+            if (control(abi::v1::control_operation::interrupt_create, irq, dev.forward_irq,
+                        dev.forward_trigger) != success)
+                return false;
+            if (control(abi::v1::control_operation::capability_mint, domain_task, domain_irq, irq,
+                        write_control) != success)
+                return false;
+        }
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
                      0U)
                 .status != success)

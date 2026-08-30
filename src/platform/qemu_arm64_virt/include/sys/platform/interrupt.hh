@@ -178,6 +178,33 @@ namespace sys::platform::interrupt
         __asm__ volatile("dsb sy" ::: "memory");
     }
 
+    /*
+     * Shared (SPI-class) interrupts are delivered only to whichever PE(s)
+     * GICD_IROUTER<n> names; the reset default is affinity 0. A userspace
+     * owner of such an interrupt is not guaranteed to run on that core, so
+     * this repins the interrupt to the calling core. Called from
+     * acknowledge() on every ack, which keeps routing correct even if the
+     * owning thread migrates, without any device- or guest-specific code.
+     */
+    inline void route_to_current_cpu(irq_id_t irq) noexcept {
+        if (irq < 32U)
+            return;
+        constexpr u64 affinity_mask = 0xff00ffffffULL;
+        reg64(distributor_base + 0x6000U + static_cast<uintptr_t>(irq) * 8U) =
+            current_mpidr() & affinity_mask;
+        __asm__ volatile("dsb sy; isb" ::: "memory");
+    }
+
+    /*
+     * The reset default for GICD/GICR_IGROUPR is Group 0, but this kernel
+     * only enables the Group 1 CPU interface (ICC_IGRPEN1_EL1, see
+     * initialize_cpu()). A userspace-owned interrupt must be assigned to
+     * Group 1 and given a priority below ICC_PMR_EL1's reset value (0xff)
+     * to ever be signaled -- generic requirements for any registered IRQ,
+     * not specific to any one device.
+     */
+    inline constexpr u8 userspace_irq_priority = 0x80U;
+
     [[nodiscard]] inline error_t configure(irq_id_t irq, bool edge) noexcept {
         if (!userspace_assignable(irq))
             return error_t::invalid_argument;
@@ -189,6 +216,9 @@ namespace sys::platform::interrupt
         const u32 shift = (irq & 15U) * 2U + 1U;
         const u32 value = config;
         config = edge ? value | (1U << shift) : value & ~(1U << shift);
+        volatile u32& group = reg32(base + 0x0080U + static_cast<uintptr_t>(irq / 32U) * 4U);
+        group |= 1U << (irq & 31U);
+        *reinterpret_cast<volatile u8*>(base + 0x0400U + irq) = userspace_irq_priority;
         __asm__ volatile("dsb sy" ::: "memory");
         return error_t::success;
     }

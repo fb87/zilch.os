@@ -1,6 +1,7 @@
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/domain_manager.hh>
+#include <sys/guest_manifest.hh>
 #include <sys/ipc.hh>
 #include <sys/thread.hh>
 #include <sys/types.hh>
@@ -17,16 +18,18 @@ namespace
     inline constexpr sys::capability_id_t vcpu_selector = 62U;
     inline constexpr sys::capability_id_t self_task_selector = 0U;
     inline constexpr sys::capability_id_t self_space_selector = 3U;
-    [[maybe_unused]] inline constexpr sys::capability_id_t pl011_frame_selector = 16U;
+    /*
+     * Slots for device frames/IRQs minted by root (see
+     * root_graph.hh::start_embedded_guest(), which uses the same base
+     * values), one pair per sys::guest_manifest device entry.
+     */
+    [[maybe_unused]] inline constexpr sys::capability_id_t device_frame_base = 100U;
+    [[maybe_unused]] inline constexpr sys::capability_id_t device_irq_base = 116U;
+    [[maybe_unused]] inline constexpr sys::capability_id_t device_irq_notification_selector = 18U;
     inline constexpr sys::capability_id_t guest_frame_base = 20U;
     inline constexpr sys::word_t scratch_address = 0x2003f000U;
     inline constexpr sys::word_t guest_page_size = 4096U;
     inline constexpr sys::word_t guest_page_limit = 32U;
-    inline constexpr sys::word_t guest_ram_size = 32U * guest_page_size;
-    [[maybe_unused]] inline constexpr sys::word_t guest_stack = 0xf000U;
-    [[maybe_unused]] inline constexpr sys::word_t guest_pstate = 0x3c5U;
-    inline constexpr sys::word_t pl011_ipa = 0x09000000U;
-    [[maybe_unused]] inline constexpr sys::word_t pl011_permissions = 1U | 2U | (1U << 3U);
     inline constexpr sys::word_t failure_badge = 1U << 15U;
 
     struct guest_page final {
@@ -78,7 +81,8 @@ namespace
     inline guest_page loaded_guest_pages[guest_page_limit]{};
     inline sys::word_t loaded_guest_page_count{};
     inline sys::word_t load_failure{};
-    inline bool pl011_mapped{};
+    inline sys::word_t mapped_device_ipa[sys::guest_manifest::maximum_devices]{};
+    inline bool mapped_device[sys::guest_manifest::maximum_devices]{};
     inline sys::domain_manager::manager domain{};
 
     [[nodiscard]] inline constexpr sys::word_t load_error(sys::word_t stage,
@@ -92,9 +96,11 @@ namespace
 #endif
 
     [[maybe_unused]] inline void cleanup_loaded_guest() noexcept {
-        if (pl011_mapped) {
-            (void)domain.vm.unmap(pl011_ipa);
-            pl011_mapped = false;
+        for (sys::word_t index = 0U; index < sys::guest_manifest::maximum_devices; ++index) {
+            if (mapped_device[index]) {
+                (void)domain.vm.unmap(mapped_device_ipa[index]);
+                mapped_device[index] = false;
+            }
         }
         for (sys::word_t index = loaded_guest_page_count; index != 0U; --index) {
             const guest_page page = loaded_guest_pages[index - 1U];
@@ -171,6 +177,77 @@ namespace
         return true;
     }
 
+    /*
+     * Forward whichever physical device interrupts (per the guest manifest)
+     * are owned in userspace into the guest's vGIC. This replaces what used
+     * to be a hardcoded EL2 hack ("if physical irq == 33, poke the guest's
+     * GIC state directly"): the kernel/hypervisor have no idea any of these
+     * devices or IRQs exist. Ownership comes from capabilities minted by
+     * root (root_graph.hh) and bound to a single shared notification;
+     * forwarding is a non-blocking poll folded into the existing
+     * wait/virtual_timer re-entry points below, since this codebase has no
+     * blocking-wait syscall for notifications.
+     */
+    inline void forward_device_irqs() noexcept {
+        const auto& manifest = ::sys_arm64_domain_guest_manifest;
+        sys::word_t signaled = 0U;
+        const sys::word_t polled = sys::control_result1(
+            signaled, sys::abi::v1::control_operation::notification_poll,
+            device_irq_notification_selector);
+        if (polled != static_cast<sys::word_t>(sys::error_t::success) || signaled == 0U)
+            return;
+        for (sys::word_t index = 0U; index < manifest.device_count; ++index) {
+            const auto& dev = manifest.devices[index];
+            if (dev.forward_irq == sys::guest_manifest::no_irq)
+                continue;
+            if ((signaled & (sys::word_t{1U} << (dev.forward_irq & 63U))) == 0U)
+                continue;
+            (void)domain.vm.inject(static_cast<sys::u16>(dev.forward_irq));
+            (void)sys::control(sys::abi::v1::control_operation::interrupt_ack,
+                               device_irq_base + index);
+        }
+    }
+
+    /*
+     * Map every passthrough device the manifest declares and bind a
+     * notification to any of their forwarded physical IRQs. Root has
+     * already created and minted the underlying frame/interrupt
+     * capabilities at device_frame_base/device_irq_base + index (see
+     * root_graph.hh::start_embedded_guest()); this just consumes them.
+     */
+    [[nodiscard]] inline sys::word_t map_manifest_devices(
+        const sys::guest_manifest::manifest& manifest) noexcept {
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        bool any_irq = false;
+        for (sys::word_t index = 0U; index < manifest.device_count; ++index) {
+            const auto& dev = manifest.devices[index];
+            const sys::word_t mapped =
+                domain.vm.map_frame(dev.ipa, device_frame_base + index, dev.permissions);
+            if (mapped != success)
+                return mapped;
+            mapped_device_ipa[index] = dev.ipa;
+            mapped_device[index] = true;
+            if (dev.forward_irq != sys::guest_manifest::no_irq)
+                any_irq = true;
+        }
+        if (!any_irq)
+            return success;
+        const sys::word_t created = sys::control(
+            sys::abi::v1::control_operation::notification_create, device_irq_notification_selector);
+        if (created != success)
+            return created;
+        for (sys::word_t index = 0U; index < manifest.device_count; ++index) {
+            if (manifest.devices[index].forward_irq == sys::guest_manifest::no_irq)
+                continue;
+            const sys::word_t bound =
+                sys::control(sys::abi::v1::control_operation::interrupt_bind,
+                             device_irq_base + index, device_irq_notification_selector);
+            if (bound != success)
+                return bound;
+        }
+        return success;
+    }
+
     [[nodiscard]] inline bool guest_page_loaded(sys::word_t ipa) noexcept {
         for (sys::word_t index = 0U; index < loaded_guest_page_count; ++index)
             if (loaded_guest_pages[index].ipa == ipa)
@@ -207,6 +284,7 @@ namespace
 
     [[maybe_unused]] [[nodiscard]] inline bool load_guest_image(const sys::u8* begin,
                                                                 const sys::u8* end,
+                                                                sys::word_t ram_size,
                                                                 sys::word_t& entry) noexcept {
         cleanup_loaded_guest();
         load_failure = 0U;
@@ -290,7 +368,7 @@ namespace
             cleanup_loaded_guest();
             return false;
         }
-        for (sys::word_t offset = 0U; offset < guest_ram_size; offset += guest_page_size) {
+        for (sys::word_t offset = 0U; offset < ram_size; offset += guest_page_size) {
             const sys::word_t ipa = ram_base + offset;
             if (guest_page_loaded(ipa))
                 continue;
@@ -341,14 +419,16 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             }
         } else if (operation == sys::abi::v1::control_plane_operation::load) {
 #if CONFIG_GUEST_EMBEDDED_IMAGE
+            const auto& manifest = ::sys_arm64_domain_guest_manifest;
             sys::word_t entry = 0U;
-            result0 = load_guest_image(sys_arm64_domain_guest_image_start,
-                                       sys_arm64_domain_guest_image_end, entry)
-                          ? domain.vm.map_frame(pl011_ipa, pl011_frame_selector, pl011_permissions)
+            result0 = sys::guest_manifest::valid(manifest) &&
+                             load_guest_image(sys_arm64_domain_guest_image_start,
+                                              sys_arm64_domain_guest_image_end, manifest.ram_size,
+                                              entry)
+                          ? map_manifest_devices(manifest)
                           : static_cast<sys::word_t>(sys::error_t::invalid_argument);
-            pl011_mapped = result0 == static_cast<sys::word_t>(sys::error_t::success);
-            if (pl011_mapped)
-                result0 = domain.configure(entry, guest_pstate, guest_stack);
+            if (result0 == static_cast<sys::word_t>(sys::error_t::success))
+                result0 = domain.configure(entry, manifest.guest_pstate, manifest.guest_stack);
             if (result0 == static_cast<sys::word_t>(sys::error_t::success))
                 result1 = static_cast<sys::word_t>(domain.lifecycle);
             else
@@ -369,6 +449,7 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
                 result0 = static_cast<sys::word_t>(sys::error_t::busy);
             } else {
                 for (;;) {
+                    forward_device_irqs();
                     const auto& exit = domain.run();
                     if (exit.status != static_cast<sys::word_t>(sys::error_t::success) ||
                         (exit.reason != sys::abi::v1::vm_exit_reason::wait &&
