@@ -119,3 +119,30 @@ not yet present.
 - [x] Exclude guest ELF and blob adapter from release builds.
 - [-] Replace the temporary certification blob adapter with PL3 domain-manager loading.
 - [ ] Complete the production hypervisor module split and extract all bounded models.
+
+## Next configuration and sample-layout migration
+
+The target contract is documented in
+`docs/architecture/BUILD_CONFIGURATION.md`. Execute the migration in this
+order:
+
+- [ ] Add the top-level Kconfig hierarchy and Kconfiglib generation step.
+- [ ] Generate `.config`, `include/generated/auto.conf`, and
+  `include/generated/autoconf.h` below each object directory.
+- [ ] Add checked-in debug and release defconfigs; remove development and
+  certification variants after all internal callers migrate.
+- [ ] Make debug select tests, self-tests, verbose diagnostics, trace, and
+  debug information.
+- [ ] Make release reject all test/debug options and add ELF checks for debug
+  markers and DWARF sections.
+- [ ] Add generic Kconfig guest support, built-in test guest, external guest,
+  interactive service, and Zephyr sample switches.
+- [ ] Move the Zephyr example to `samples/guests/zephyr/` with its own flake,
+  lockfile, Makefile, fetch policy, ignored output, and shell-acceptance target.
+- [ ] Remove Zephyr-only packages from the root flake and prove a clean release
+  build requires no guest source or toolchain.
+- [ ] Add Linux-style boot-relative timestamps to formatted printk records.
+- [ ] Migrate CI and current readiness evidence from certification/release
+  terminology to debug/release terminology.
+- [ ] Re-run debug acceptance, release gates, reproducibility, and the Zephyr
+  native-shell `help` transcript.

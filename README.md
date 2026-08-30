@@ -9,6 +9,7 @@ The authoritative production requirement tracker is [`docs/readiness/PRODUCTION_
 - `include/abi/`: stable C-compatible kernel/userspace ABI (`.h`)
 - `include/sys/`: shared restricted-C++ contracts (`.hh`)
 - `src/`: product implementation, colocated module docs and tests
+- `samples/guests/`: independently built guest examples and their toolchains
 - `tools/`: build, run, release, image and future collection tooling
 - `out/`: all generated artifacts
 
@@ -16,9 +17,15 @@ A module is represented by `module.hh`, `module.md`, and `module.tt`. Linkage an
 
 ## Build
 
+The current build accepts `BUILD_VARIANT=development|certification|release`.
+The planned Kconfig migration replaces those presets with strict debug and
+release defconfigs; see
+[`docs/architecture/BUILD_CONFIGURATION.md`](docs/architecture/BUILD_CONFIGURATION.md).
+
 ```sh
 make arm64
 make amd64
+make BUILD_VARIANT=certification
 make format-check
 make release VERSION=0.1.0
 ```
@@ -35,7 +42,14 @@ The tree intentionally contains no project-owned `.h` headers.
 
 ## Kernel logging
 
-`printk`, `pr_info`, `pr_warn`, `pr_err`, and `pr_debug` retain a printf-like call interface. The freestanding implementation uses compile-time C++ argument dispatch rather than `va_list`, avoiding early-boot variadic ABI dependencies. Supported conversions are `%c`, `%s`, `%d`, `%i`, `%u`, `%x`, `%X`, `%p`, and `%%`, with optional `l`, `ll`, or `z` length markers.
+`printk`, `pr_info`, `pr_warn`, `pr_err`, and `pr_debug` retain a printf-like
+call interface. The freestanding formatter consumes a C `va_list`. Supported
+conversions are `%c`, `%s`, `%d`, `%i`, `%u`, `%x`, `%X`, `%p`, and `%%`, with
+optional `l`, `ll`, or `z` length markers.
+
+The planned `CONFIG_PRINTK_TIME` option prefixes formatted kernel records with
+Linux-style boot-relative timestamps such as `[    0.012345]`. Raw guest UART
+and emergency output remain separate from formatted kernel logging.
 
 ## Hypervisor object-table reservation
 
@@ -53,14 +67,18 @@ recorded in `docs/history/batches/PRODUCTION_ELF64_LOADER_BATCH.md`.
 The build is a single non-recursive dependency graph assembled from ownership fragments:
 
 - `src/kernel/kernel.mk` — kernel and architecture mechanism objects;
-- `src/user/user.mk` — PL3 programs, libsys/runtime, and guest executables;
+- `src/user/user.mk` — PL3 programs, libsys/runtime, and the test-guest artifact boundary;
 - `src/image/image.mk` — earlyfs and bootstrap packaging;
 - `tests/tests.mk` — certification-only adapters;
 - `mk/` — shared configuration, toolchain, and verification targets.
 
 Use `make boundary-check` and `make abi-check` to verify private-header isolation and ABI layout/self-containment.
 
+Guest operating-system examples are independently owned under
+`samples/guests/`. The first planned relocation is the Zephyr build from
+`src/user/guests/zephyr/` to `samples/guests/zephyr/`, with a nested flake and
+all fetched/generated content under an ignored sample-local `out/` directory.
+
 ## Build layout
 
 Zilch uses one non-recursive build graph. The repository root `Makefile` is the only Make entry point; domain orchestration is defined by `src/kernel/kernel.mk`, `src/user/user.mk`, `src/image/image.mk`, and `tests/tests.mk`. Directory-local object lists use `build.mk` consistently.
-

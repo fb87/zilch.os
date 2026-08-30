@@ -78,6 +78,11 @@ Every completed requirement must link to:
 - [x] **PRD-004** Ensure production kernel boots with all self-test options disabled. Runtime evidence: release boot reports `selftests=disabled`.
 - [x] **PRD-005** Ensure production binary contains no profile-specific guest images or test fixtures. Evidence: release ELF symbol/string gate in batch 0079.
 - [x] **PRD-006** CI defines independent ARM64 certification-boot and release jobs, plus AMD64 compile-only, ABI, boundary, sanitizer, documentation, permission, stack, and reproducibility gates.
+- [ ] **PRD-019** A top-level Kconfig hierarchy generates `.config`, `auto.conf`, and `autoconf.h`; generated configuration is the sole source of `CONFIG_*` values for Make, C, C++, and assembly.
+- [ ] **PRD-020** Checked-in debug and release defconfigs replace the development/certification/release variant set; debug enables tests and diagnostics, while release makes every test/debug option unavailable.
+- [ ] **PRD-021** Release compiler flags exclude debug information and enable product optimization; release source/ELF gates reject tests, traces, debug strings, fixtures, and DWARF sections.
+- [ ] **PRD-022** Kconfig exposes generic built-in, external, interactive, and per-sample guest enablement without making an external guest toolchain a core build dependency.
+- [ ] **PRD-023** Guest examples live under `samples/guests/<name>/` with sample-local pinned fetch, nested toolchain shell, build, output, and acceptance ownership; the root release build succeeds with no sample fetched.
 
 ## 1.2 ABI cleanup
 
@@ -536,6 +541,7 @@ Every completed requirement must link to:
 - [-] **OBS-008** A release-enabled, sequence-published bounded ring audits VM reset, mapping, run, pause/resume, stop, and teardown; device-assignment records remain open.
 - [x] **OBS-009** Emergency record format version 1, event identifiers, publication rules, and field meanings are documented.
 - [x] **OBS-010** Release logs exclude guest registers and user/guest PC, FAR, ESR, and IPA details; verbose diagnostics are restricted to development/certification builds.
+- [ ] **OBS-011** Formatted kernel records use Linux-style boot-relative `[    seconds.microseconds]` timestamps from the calibrated architectural counter; SMP record serialization includes the timestamp and severity prefix.
 
 ---
 

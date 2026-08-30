@@ -20,6 +20,25 @@ Every release must pass:
 
 Certification-only ABIs, fixtures, and model controls are never product compatibility commitments.
 
+## Build configuration policy
+
+The target build system has exactly two Kconfig profile presets: debug and
+release. Debug enables tests, self-test ABIs, verbose diagnostics, tracing, and
+debug information. Release forces those mechanisms off and uses optimized
+product compiler flags. The detailed configuration contract is defined in
+`docs/architecture/BUILD_CONFIGURATION.md`.
+
+Every release is built from the checked-in release defconfig. A release is
+invalid if its generated configuration enables debug, tests, self-tests,
+hypervisor self-tests, verbose diagnostics, trace, or debug information. Source
+and ELF gates independently reject test/debug markers, embedded verification
+guests, and DWARF sections.
+
+Guest sample toolchains are not release dependencies. A clean release build
+must succeed without fetching Zephyr, Linux, FreeBSD, or another external guest
+source. Product guest assets must cross the generic external-image boundary and
+must be versioned as release inputs when included.
+
 ## Deprecation
 
 A product ABI operation can be deprecated only after a replacement exists and is documented. It remains supported for at least one subsequent minor release. The first deprecating release must name the replacement and planned removal release. Numeric identifiers are never reused.
