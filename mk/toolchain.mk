@@ -30,5 +30,6 @@ KERNEL_LDSCRIPT := $(SRCTREE)/src/arch/amd64/kernel.ld
 endif
 
 COMMON_WARNINGS := -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wundef -Wcast-align -Wcast-qual -Wformat=2 -Wimplicit-fallthrough
-FREESTANDING_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections -fstack-usage $(COMMON_WARNINGS)
+PROFILE_CXXFLAGS := $(if $(filter 1,$(CONFIG_DEBUG)),-Og -g3 -fno-omit-frame-pointer,-O2 -DNDEBUG)
+FREESTANDING_CXXFLAGS := -std=c++20 -ffreestanding -nostdinc++ -fno-builtin -fno-common -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections -fstack-usage $(PROFILE_CXXFLAGS) $(COMMON_WARNINGS)
 export CC CXX LD NM OBJCOPY OBJDUMP READELF TARGET_FLAGS ARCH_FLAGS LD_EMULATION COMMON_WARNINGS FREESTANDING_CXXFLAGS

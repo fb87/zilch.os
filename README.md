@@ -75,9 +75,9 @@ The build is a single non-recursive dependency graph assembled from ownership fr
 Use `make boundary-check` and `make abi-check` to verify private-header isolation and ABI layout/self-containment.
 
 Guest operating-system examples are independently owned under
-`samples/guests/`. The first planned relocation is the Zephyr build from
-`src/user/guests/zephyr/` to `samples/guests/zephyr/`, with a nested flake and
-all fetched/generated content under an ignored sample-local `out/` directory.
+`samples/guests/`. Zephyr lives at `samples/guests/zephyr/` with a nested flake
+and all fetched/generated content under an ignored sample-local `out/`
+directory.
 
 ## Build layout
 

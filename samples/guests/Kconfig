@@ -1,0 +1,18 @@
+menu "Guest samples"
+
+config GUEST_ZEPHYR
+	bool "Zephyr guest sample"
+	default n
+	depends on GUEST_EXTERNAL && GUEST_INTERACTIVE
+
+config GUEST_LINUX
+	bool "Linux guest sample"
+	default n
+	depends on GUEST_EXTERNAL
+
+config GUEST_FREEBSD
+	bool "FreeBSD guest sample"
+	default n
+	depends on GUEST_EXTERNAL
+
+endmenu

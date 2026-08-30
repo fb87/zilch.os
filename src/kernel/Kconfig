@@ -1,0 +1,8 @@
+menu "Kernel features"
+
+config KERNEL_DEBUG_LOCKS
+	bool "Extra lock diagnostics"
+	default y if DEBUG
+	depends on DEBUG
+
+endmenu

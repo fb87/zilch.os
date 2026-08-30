@@ -1,14 +1,12 @@
 # Zephyr ARM64 guest
 
-Location status: **transitional**. The implementation currently lives under
-`src/user/guests/zephyr/`. Its planned owner is
-`samples/guests/zephyr/`, where it will have a nested flake, sample Makefile,
-pinned fetch helper, ignored `out/` directory, and no dependency from a clean
-root Zilch build. See `docs/architecture/BUILD_CONFIGURATION.md`.
+This sample owns its source pin, toolchain shell, build, generated output, and
+interactive acceptance. It is not a dependency of the root Zilch build. See
+`docs/architecture/BUILD_CONFIGURATION.md`.
 
 This guest targets Zephyr v4.0.0 commit
 `8469084dfae85f854555f0607f2c838dad097235`. Fetch the source with
-`tools/guests/fetch_zephyr.sh`.
+`fetch.sh`.
 
 The initial target is deliberately minimal: one EL1 Cortex-A53 vCPU, 128 KiB
 of RAM at `0x40000000` and a polling PL011 console at `0x09000000`. A
@@ -16,17 +14,18 @@ spurious-only custom interrupt controller keeps the first guest free of a GIC
 dependency. Zephyr keeps its MMU enabled so the loaded image preserves W^X
 permissions. It does not require a guest timer service.
 
-The current transitional build, after fetching Zephyr and its required west
-modules, is:
+Use the sample-local flake and Makefile:
 
 ```sh
-west build -b qemu_cortex_a53 src/user/guests/zephyr -- \
-  -DDTC_OVERLAY_FILE=hypervisor.overlay -DCONF_FILE=prj.conf
+nix develop
+make fetch
+make guest
+make MODE=debug run
 ```
 
-The resulting `zephyr.elf` is the input for the domain-manager ELF loader.
-For a bounded integration build, pass its path as `DOMAIN_GUEST_ELF` to the
-Zilch certification make invocation.
+`make MODE=release run` builds the release profile with the same explicit guest
+artifact. `make MODE=debug acceptance` sends a delayed `help` command and
+requires the native shell command list in the output.
 
 Zephyr bring-up acceptance requires the native `zilch:~$` prompt and a
 successful `help` command response containing `Available commands:`. Build the

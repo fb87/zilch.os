@@ -28,10 +28,12 @@ namespace sys::arch::space
     extern "C" char sys_arm64_user_image_end[];
     extern "C" char sys_arm64_memory_server_image_start[];
     extern "C" char sys_arm64_memory_server_image_end[];
+#if CONFIG_TESTS
     extern "C" char sys_arm64_pager_client_image_start[];
     extern "C" char sys_arm64_pager_client_image_end[];
     extern "C" char sys_arm64_memory_client_image_start[];
     extern "C" char sys_arm64_memory_client_image_end[];
+#endif
     extern "C" char sys_arm64_control_plane_image_start[];
     extern "C" char sys_arm64_control_plane_image_end[];
     extern "C" char sys_arm64_domain_manager_image_start[];
@@ -54,6 +56,7 @@ namespace sys::arch::space
     [[nodiscard]] inline image_view image_for_role(word_t role) noexcept {
         if (role == memory_server_image_role)
             return {sys_arm64_memory_server_image_start, sys_arm64_memory_server_image_end};
+#if CONFIG_TESTS
         if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
             role == undefined_instruction_image_role || role == ipc_lifecycle_client_role_base ||
             role == ipc_lifecycle_client_role_base + 1U ||
@@ -66,6 +69,7 @@ namespace sys::arch::space
             return {sys_arm64_pager_client_image_start, sys_arm64_pager_client_image_end};
         if (role >= memory_client_image_role_base && role < memory_client_image_role_base + 3U)
             return {sys_arm64_memory_client_image_start, sys_arm64_memory_client_image_end};
+#endif
         if (role >= control_plane_image_role_base &&
             role < control_plane_image_role_base + control_plane_image_role_count)
             return role == domain_manager_image_role

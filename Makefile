@@ -14,7 +14,7 @@ endif
 include src/kernel/kernel.mk
 include mk/checks.mk
 
-.PHONY: all run clean arm64 amd64 certification release FORCE
+.PHONY: all run clean arm64 amd64 debug certification release FORCE
 all: userspace kernel image
 
 arm64:
@@ -25,6 +25,9 @@ amd64:
 
 certification:
 	@$(MAKE) BUILD_VARIANT=certification ARCH=arm64 PLATFORM=qemu-arm64-virt all
+
+debug:
+	@$(MAKE) BUILD_VARIANT=debug ARCH=arm64 PLATFORM=qemu-arm64-virt all
 
 run: $(KERNEL_ELF)
 	@CPUS=$(CPUS) MEMORY_MB=$(MEMORY_MB) $(SRCTREE)/tools/run/run.sh $(KERNEL_ELF)

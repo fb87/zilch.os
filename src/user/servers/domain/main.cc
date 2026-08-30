@@ -17,16 +17,16 @@ namespace
     inline constexpr sys::capability_id_t vcpu_selector = 62U;
     inline constexpr sys::capability_id_t self_task_selector = 0U;
     inline constexpr sys::capability_id_t self_space_selector = 3U;
-    inline constexpr sys::capability_id_t pl011_frame_selector = 16U;
+    [[maybe_unused]] inline constexpr sys::capability_id_t pl011_frame_selector = 16U;
     inline constexpr sys::capability_id_t guest_frame_base = 20U;
     inline constexpr sys::word_t scratch_address = 0x2003f000U;
     inline constexpr sys::word_t guest_page_size = 4096U;
     inline constexpr sys::word_t guest_page_limit = 32U;
     inline constexpr sys::word_t guest_ram_size = 32U * guest_page_size;
-    inline constexpr sys::word_t guest_stack = 0xf000U;
-    inline constexpr sys::word_t guest_pstate = 0x3c5U;
+    [[maybe_unused]] inline constexpr sys::word_t guest_stack = 0xf000U;
+    [[maybe_unused]] inline constexpr sys::word_t guest_pstate = 0x3c5U;
     inline constexpr sys::word_t pl011_ipa = 0x09000000U;
-    inline constexpr sys::word_t pl011_permissions = 1U | 2U | (1U << 3U);
+    [[maybe_unused]] inline constexpr sys::word_t pl011_permissions = 1U | 2U | (1U << 3U);
     inline constexpr sys::word_t failure_badge = 1U << 15U;
 
     struct guest_page final {
@@ -86,7 +86,7 @@ namespace
         return (stage << 32U) | (status & 0xffffffffU);
     }
 
-#if CONFIG_HYPERVISOR_SELFTEST
+#if CONFIG_GUEST_EMBEDDED_IMAGE
     extern "C" const sys::u8 sys_arm64_domain_guest_image_start[];
     extern "C" const sys::u8 sys_arm64_domain_guest_image_end[];
 #endif
@@ -340,7 +340,7 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
                 result1 = static_cast<sys::word_t>(domain.lifecycle);
             }
         } else if (operation == sys::abi::v1::control_plane_operation::load) {
-#if CONFIG_HYPERVISOR_SELFTEST
+#if CONFIG_GUEST_EMBEDDED_IMAGE
             sys::word_t entry = 0U;
             result0 = load_guest_image(sys_arm64_domain_guest_image_start,
                                        sys_arm64_domain_guest_image_end, entry)

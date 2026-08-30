@@ -15,6 +15,7 @@ sys_arm64_memory_server_image_start:
 .global sys_arm64_memory_server_image_end
 sys_arm64_memory_server_image_end:
 
+#if CONFIG_TESTS
 .global sys_arm64_pager_client_image_start
 sys_arm64_pager_client_image_start:
 .incbin PAGER_CLIENT_ELF_PATH
@@ -28,6 +29,7 @@ sys_arm64_memory_client_image_start:
 .balign 4096
 .global sys_arm64_memory_client_image_end
 sys_arm64_memory_client_image_end:
+#endif
 
 .global sys_arm64_control_plane_image_start
 sys_arm64_control_plane_image_start:

@@ -39,5 +39,4 @@ fraction is always six-digit microseconds. Architectures without a calibrated
 counter emit a deterministic zero timestamp until calibration exists.
 
 Raw guest console bytes, direct low-level EL2 diagnostics, and emergency-ring
-records are not formatted through this timestamp path. This section describes
-the migration target; timestamp prefixes are not implemented yet.
+records are not formatted through this timestamp path.

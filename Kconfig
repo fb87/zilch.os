@@ -1,0 +1,56 @@
+mainmenu "Zilch OS configuration"
+
+choice BUILD_PROFILE
+	prompt "Build profile"
+	default BUILD_DEBUG
+
+config BUILD_DEBUG
+	bool "Debug"
+
+config BUILD_RELEASE
+	bool "Release"
+
+endchoice
+
+config DEBUG
+	bool
+	default y if BUILD_DEBUG
+
+config RELEASE
+	bool
+	default y if BUILD_RELEASE
+
+config TESTS
+	bool "Build tests"
+	default y if BUILD_DEBUG
+	depends on BUILD_DEBUG
+
+config SELFTEST
+	bool
+	default y if TESTS
+
+config HYPERVISOR_SELFTEST
+	bool
+	default y if SELFTEST
+
+config VERBOSE_DIAGNOSTICS
+	bool "Verbose diagnostics"
+	default y if BUILD_DEBUG
+	depends on BUILD_DEBUG
+
+config TRACE
+	bool "Retained runtime trace"
+	default y if BUILD_DEBUG
+	depends on BUILD_DEBUG
+
+config DEBUG_INFO
+	bool
+	default y if BUILD_DEBUG
+
+config PRINTK_TIME
+	bool "Timestamp formatted kernel records"
+	default y
+
+source "src/kernel/Kconfig"
+source "src/user/Kconfig"
+source "samples/guests/Kconfig"

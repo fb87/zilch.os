@@ -1,5 +1,5 @@
 {
-  description = "Zilch microkernel development shell";
+  description = "Zilch Zephyr guest sample";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -12,28 +12,27 @@
         let
           pkgs = import nixpkgs { inherit system; };
           llvm = pkgs.llvmPackages;
+          python = pkgs.python3.withPackages (ps: [
+            ps.kconfiglib
+            ps.packaging
+            ps.pyelftools
+            ps.pykwalify
+            ps.pyyaml
+            ps.west
+          ]);
         in {
           default = pkgs.mkShell {
             packages = [
-              pkgs.coreutils
-              pkgs.findutils
-              pkgs.gawk
+              pkgs.cmake
+              pkgs.dtc
               pkgs.git
-              pkgs.gnugrep
               pkgs.gnumake
-              pkgs.gnused
-              pkgs.gnutar
-              pkgs.python3
-              pkgs.python3Packages.kconfiglib
-              pkgs.qemu
+              pkgs.ninja
+              python
               llvm.clang-unwrapped
               llvm.lld
               llvm.llvm
             ];
-
-            shellHook = ''
-              export LLVM=1
-            '';
           };
         });
     };

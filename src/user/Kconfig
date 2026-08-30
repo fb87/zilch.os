@@ -1,0 +1,27 @@
+menu "Userspace features"
+
+config GUEST_SUPPORT
+	bool "Guest domain support"
+	default y
+
+config GUEST_TEST_ARM64
+	bool "Built-in ARM64 verification guest"
+	default y if SELFTEST
+	depends on SELFTEST && GUEST_SUPPORT
+
+config GUEST_EXTERNAL
+	bool "External guest image support"
+	default y if GUEST_SUPPORT
+	depends on GUEST_SUPPORT
+
+config GUEST_EMBEDDED_IMAGE
+	bool "Embed an external guest image"
+	default y if GUEST_TEST_ARM64
+	depends on GUEST_EXTERNAL
+
+config GUEST_INTERACTIVE
+	bool "Interactive guest service"
+	default n
+	depends on GUEST_EXTERNAL
+
+endmenu

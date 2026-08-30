@@ -14,8 +14,12 @@ trap 'rm -rf "$stage"' EXIT HUP INT TERM
 mkdir -p "$stage/bin" "$stage/etc" "$stage/lib" "$stage/guests"
 install -m 0755 "$init" "$stage/bin/init"
 install -m 0755 "$memory_server" "$stage/bin/memory-server"
-install -m 0755 "$pager_client" "$stage/bin/pager-client"
-install -m 0755 "$memory_client" "$stage/bin/memory-client"
+if [ "$pager_client" != "-" ]; then
+    install -m 0755 "$pager_client" "$stage/bin/pager-client"
+fi
+if [ "$memory_client" != "-" ]; then
+    install -m 0755 "$memory_client" "$stage/bin/memory-client"
+fi
 install -m 0755 "$domain_manager" "$stage/bin/domain-manager"
 if [ "$guest_test" != "-" ]; then
     install -m 0755 "$guest_test" "$stage/guests/test-arm64.elf"

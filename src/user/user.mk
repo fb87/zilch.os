@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 USER_OBJDIR := $(OBJTREE)/user
-DOMAIN_GUEST_INTERACTIVE ?= 0
+DOMAIN_GUEST_INTERACTIVE ?= $(CONFIG_GUEST_INTERACTIVE)
 USER_LDSCRIPT := $(SRCTREE)/src/user/runtime/linker/user-$(ARCH).ld
 USER_TEST_INCLUDES := $(if $(filter 1,$(CONFIG_SELFTEST)),-I$(SRCTREE)/tests/abi/include -I$(SRCTREE)/src/user/tests/include,)
 USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(USER_TEST_INCLUDES) \
-    -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
+    -I$(OBJTREE)/include/generated -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
+    -include $(KCONFIG_AUTOCONF_H) \
     -DCONFIG_SELFTEST=$(CONFIG_SELFTEST) \
     -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \
     -DCONFIG_DOMAIN_GUEST_INTERACTIVE=$(DOMAIN_GUEST_INTERACTIVE) \
@@ -15,7 +16,10 @@ USER_COMMON_SOURCES := \
     src/user/lib/libsys/syscall.cc \
     src/user/lib/libruntime/runtime.cc \
     src/user/runtime/startup/process_entry.cc
-USER_PROGRAMS := init memory-server pager-client memory-client control-plane domain-manager
+USER_PROGRAMS := init memory-server control-plane domain-manager
+ifeq ($(CONFIG_TESTS),1)
+USER_PROGRAMS += pager-client memory-client
+endif
 USER_init_SOURCE := src/user/init/main.cc
 USER_memory-server_SOURCE := src/user/servers/memory/main.cc
 USER_pager-client_SOURCE := src/user/tests/pager_client/main.cc
@@ -89,7 +93,7 @@ $(USER_OBJDIR)/common/src/user/runtime/crt/$(ARCH)/%.o: $(SRCTREE)/src/user/runt
 
 -include $(shell find $(USER_OBJDIR) -name '*.d' 2>/dev/null)
 
-# Certification-only ARM64 guest executable. Guest code is a user-owned,
+# Debug-only ARM64 verification guest. Guest code is a user-owned,
 # independently linked target and must not include private kernel headers.
 GUEST_TEST_DIR := $(USER_OBJDIR)/guests/test-arm64
 GUEST_TEST_ELF := $(GUEST_TEST_DIR)/guest-test.elf
@@ -97,22 +101,28 @@ GUEST_TEST_BIN := $(GUEST_TEST_DIR)/guest-test.bin
 GUEST_TEST_OBJ := $(GUEST_TEST_DIR)/entry.o
 GUEST_TEST_LDSCRIPT := $(SRCTREE)/src/user/guests/test-arm64/linker.ld
 DOMAIN_MANAGER_GUEST_BLOB_OBJ := $(USER_OBJDIR)/domain-manager/guest_blob.o
-DOMAIN_GUEST_ELF ?= $(GUEST_TEST_ELF)
+DOMAIN_GUEST_ELF ?= $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),)
 
 ifeq ($(ARCH),arm64)
-ifeq ($(CONFIG_HYPERVISOR_SELFTEST),1)
+ifeq ($(CONFIG_GUEST_TEST_ARM64),1)
 userspace: $(GUEST_TEST_ELF) $(GUEST_TEST_BIN)
+endif
+ifeq ($(CONFIG_GUEST_EMBEDDED_IMAGE),1)
+ifneq ($(strip $(DOMAIN_GUEST_ELF)),)
 USER_domain-manager_EXTRA_OBJECTS += $(DOMAIN_MANAGER_GUEST_BLOB_OBJ)
 $(USER_OBJDIR)/domain-manager.elf: $(DOMAIN_MANAGER_GUEST_BLOB_OBJ)
 endif
 endif
+endif
 
 ifeq ($(ARCH),arm64)
-ifeq ($(CONFIG_HYPERVISOR_SELFTEST),1)
+ifeq ($(CONFIG_GUEST_EMBEDDED_IMAGE),1)
+ifneq ($(strip $(DOMAIN_GUEST_ELF)),)
 $(DOMAIN_MANAGER_GUEST_BLOB_OBJ): $(SRCTREE)/src/user/servers/domain/guest_blob.S $(DOMAIN_GUEST_ELF)
 	@mkdir -p $(dir $@)
 	@printf '  GAS     %s\n' '$@'
 	@$(CC) $(TARGET_FLAGS) -march=armv8-a -ffreestanding -DDOMAIN_GUEST_ELF_PATH=\"$(DOMAIN_GUEST_ELF)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+endif
 endif
 endif
 

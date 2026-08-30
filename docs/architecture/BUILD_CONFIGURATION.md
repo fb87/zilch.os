@@ -1,9 +1,10 @@
 # Build configuration architecture
 
-Status: **planned migration**. The current build still derives configuration
-directly from `BUILD_VARIANT` in `mk/config.mk`. This document defines the
-target configuration contract and must not be cited as completed evidence until
-the generated Kconfig artifacts and gates described below exist.
+Status: **in progress**. Kconfig generation, debug/release defconfigs, generated
+Make/C configuration artifacts, profile compiler flags, release test-client
+pruning, formatted printk timestamps, CI migration, release debug-section
+gates, and standalone Zephyr sample verification are implemented. Legacy
+profile aliases and remaining platform-specific verification stay open.
 
 ## Configuration source of truth
 
@@ -79,9 +80,9 @@ The intended compiler policy is `-O2 -DNDEBUG`. Kconfig dependencies must make
 the forbidden release combination unrepresentable, and release ELF checks must
 independently reject test markers, debug strings, fixtures, and DWARF sections.
 
-The existing `development`, `certification`, and `release` variants remain
-transitional until every internal command, CI job, and evidence reference has
-been migrated. Historical documents retain the names used when they were
+The existing `development` and `certification` variants remain transitional
+aliases for debug until every internal command, CI job, and evidence reference
+has been migrated. Historical documents retain the names used when they were
 written.
 
 ## Guest configuration
@@ -113,9 +114,9 @@ shell, build orchestration, generated output, and acceptance procedure. The
 root Zilch flake contains only core kernel build dependencies. Generated sample
 content stays below `samples/guests/<name>/out/` and is ignored by Git.
 
-The Zephyr migration target is `samples/guests/zephyr/`. Until the move is
-implemented, its sources remain under `src/user/guests/zephyr/` and its fetch
-helper remains under `tools/guests/`.
+Zephyr is owned by `samples/guests/zephyr/`. Its sample-local flake and Makefile
+own the Zephyr toolchain and generated output; the root build consumes only an
+explicit external guest artifact.
 
 ## Kernel log timestamps
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <sys/arch/cpu.hh>
 #include <sys/arch/irq.hh>
+#include <sys/arch/timer.hh>
 #include <sys/kernel/emergency.hh>
 #include <sys/kernel/interrupt/timing.hh>
 #include <sys/platform/platform.hh>
@@ -11,6 +12,8 @@
 namespace sys::printk
 {
     inline volatile u32 raw_lock{};
+    inline u64 timestamp_baseline{};
+    inline bool timestamp_initialized{};
 
     [[nodiscard]] inline bool lock() noexcept {
         constexpr u32 maximum_attempts = 4096U;
@@ -84,6 +87,36 @@ namespace sys::printk
             return 1U + put_unsigned(static_cast<u64>(-(value + 1)) + 1U, 10U);
         }
         return put_unsigned(static_cast<u64>(value), 10U);
+    }
+
+    inline void put_timestamp() noexcept {
+#if CONFIG_PRINTK_TIME
+        const u64 frequency = arch::timer::frequency();
+        u64 seconds = 0U;
+        u64 microseconds = 0U;
+        if (frequency != 0U) {
+            const u64 now = arch::timer::counter();
+            if (!timestamp_initialized) {
+                timestamp_baseline = now;
+                timestamp_initialized = true;
+            }
+            const u64 elapsed = now - timestamp_baseline;
+            seconds = elapsed / frequency;
+            microseconds = (elapsed % frequency) * 1000000U / frequency;
+        }
+        putc('[');
+        u32 digits = 1U;
+        for (u64 value = seconds; value >= 10U; value /= 10U)
+            ++digits;
+        for (u32 width = digits; width < 5U; ++width)
+            putc(' ');
+        put_unsigned(seconds, 10U);
+        putc('.');
+        const u64 divisors[] = {100000U, 10000U, 1000U, 100U, 10U, 1U};
+        for (const u64 divisor : divisors)
+            putc(static_cast<char>('0' + microseconds / divisor % 10U));
+        puts("] ");
+#endif
     }
 
     inline int vprintk(const char* format, va_list arguments) noexcept {
@@ -216,6 +249,8 @@ namespace sys::printk
 
         // Keep the timing sample on the lock path only.
         kernel::interrupt::timing::restore(irq_state);
+
+        put_timestamp();
 
         va_list arguments;
         va_start(arguments, format);

@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  certification:
+  debug:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -14,12 +14,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang clang-tidy lld llvm qemu-system-arm device-tree-compiler
       - name: Static and ABI gates
         run: make format-check abi-check boundary-check ubsan-check host-tests doc-check
-      - name: ARM64 certification boot
+      - name: ARM64 debug boot
         shell: bash
         run: |
           set -o pipefail
-          timeout 180 make BUILD_VARIANT=certification run 2>&1 | tee certification.log || test $? -eq 124
-          grep -F "[ACCEPTANCE] suite=root-only boot=root-only result=PASS failures=0" certification.log
+          timeout 180 make BUILD_VARIANT=debug run 2>&1 | tee debug.log || test $? -eq 124
+          grep -F "[ACCEPTANCE] suite=root-only boot=root-only result=PASS failures=0" debug.log
 
   release:
     runs-on: ubuntu-24.04
