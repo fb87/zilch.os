@@ -7,3 +7,9 @@ name = "init"
 path = "/bin/init"
 role = "root-task"
 required = true
+
+[[program]]
+name = "domain-manager"
+path = "/bin/domain-manager"
+role = "domain-manager"
+required = false

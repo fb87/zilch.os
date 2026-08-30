@@ -20,6 +20,7 @@ KBUILD_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(KERNEL_TEST_INCLUDES) $(KERNE
     -DUSER_ELF_PATH=\"$(USER_OBJDIR)/init.elf\" \
     -DMEMORY_SERVER_ELF_PATH=\"$(USER_OBJDIR)/memory-server.elf\" \
     -DCONTROL_PLANE_ELF_PATH=\"$(USER_OBJDIR)/control-plane.elf\" \
+    -DDOMAIN_MANAGER_ELF_PATH=\"$(USER_OBJDIR)/domain-manager.elf\" \
     -DPAGER_CLIENT_ELF_PATH=\"$(USER_OBJDIR)/pager-client.elf\" \
     -DMEMORY_CLIENT_ELF_PATH=\"$(USER_OBJDIR)/memory-client.elf\" \
     -DGUEST_TEST_BIN_PATH=\"$(GUEST_TEST_BIN)\"

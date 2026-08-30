@@ -349,14 +349,14 @@ Every completed requirement must link to:
 
 ## 7.5 Domain manager
 
-- [ ] **USR-025** Userspace domain manager/VMM implemented.
+- [-] **USR-025** Userspace domain manager/VMM implemented; PL3 domain-manager service, role-specific image loading, a dedicated load operation, VM launch/destroy request handling, and earlyfs packaging exist, but production guest deployment remains open.
 - [ ] **USR-026** VM creation uses capability-authorized kernel APIs.
 - [ ] **USR-027** Guest image loading performed in userspace.
 - [ ] **USR-028** VM memory and device assignment policy remains in userspace.
-- [ ] **USR-029** VM lifecycle exposed through stable management API.
+- [-] **USR-029** VM lifecycle exposed through stable management API; `sys::domain_manager::manager`, the domain-role control-plane request path, and the dedicated load op cover create/destroy in certification, but the production management protocol remains open.
 - [ ] **USR-030** Linux guest launch demonstrated.
 - [ ] **USR-031** BSD guest launch demonstrated.
-- [ ] **USR-032** Zephyr guest launch demonstrated.
+- [x] **USR-032** Pinned Zephyr v4.0.0 boots through the PL3 domain manager with section-level W^X loading, bounded vGIC/timer support, delegated PL011, and a native interactive shell that accepts `help` and returns the command list.
 
 ## 7.6 Supervision
 

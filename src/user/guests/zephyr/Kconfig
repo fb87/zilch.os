@@ -1,0 +1,3 @@
+mainmenu "Zilch Zephyr guest"
+
+source "$ZEPHYR_BASE/Kconfig.zephyr"

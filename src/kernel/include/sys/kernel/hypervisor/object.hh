@@ -10,13 +10,13 @@
 
 namespace sys::kernel::hypervisor
 {
-    inline constexpr u32 maximum_stage2_mappings = 16U;
+    inline constexpr u32 maximum_stage2_mappings = 33U;
     inline constexpr u32 maximum_stage2_table_pages = 33U;
     inline constexpr u32 stage2_entries_per_table = 512U;
     inline constexpr u64 page_size = 4096U;
     inline constexpr u64 guest_ipa_limit = 1ULL << 32U;
     inline constexpr u32 diagnostic_magic = 0x48563031U; // HV01
-    inline constexpr u32 guest_ram_pages = 16U;
+    inline constexpr u32 guest_ram_pages = 32U;
     inline constexpr u32 maximum_vcpus_per_vm = 4U;
     inline constexpr u32 maximum_vmids = 64U;
     inline constexpr u64 guest_ram_size = guest_ram_pages * page_size;
@@ -155,6 +155,18 @@ namespace sys::kernel::hypervisor
         u64 ich_ap0r0_el2{};
         u64 ich_ap1r0_el2{};
         u64 ich_lr_el2[16]{};
+        u64 gic_enabled{};
+        u64 gic_pending{};
+        u64 gic_active{};
+        u64 gic_group1{};
+        u64 gic_edge{};
+        u8 gic_priority[64]{};
+        u8 gic_pmr{0xffU};
+        u8 gic_bpr{};
+        u16 gic_last_iar{1023U};
+        u32 gicd_ctlr{};
+        u32 gicr_waker{};
+        bool native_gic{};
         u64 report_mask{};
     };
 

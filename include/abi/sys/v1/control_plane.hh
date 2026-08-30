@@ -16,6 +16,11 @@ namespace sys::abi::v1
         health = 0U,
         describe = 1U,
         stop = 2U,
+        launch = 3U,
+        destroy = 4U,
+        load = 5U,
+        run = 6U,
+        serve = 7U,
     };
 
     inline constexpr word_t control_plane_role_count = 5U;

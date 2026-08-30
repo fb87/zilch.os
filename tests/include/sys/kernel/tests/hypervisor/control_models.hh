@@ -198,7 +198,7 @@ namespace sys::kernel::hypervisor::test
         constexpr u32 all_cpus = (1U << maximum_vcpus_per_vm) - 1U;
         u32 spins = 0U;
         while (__atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE) != all_cpus &&
-               spins++ < 100000000U)
+               spins++ < 1000000U)
             arch::cpu::relax();
         __atomic_store_n(&real_smp_active, false, __ATOMIC_RELEASE);
         return __atomic_load_n(&real_smp_done_mask, __ATOMIC_ACQUIRE) == all_cpus;
@@ -979,6 +979,8 @@ namespace sys::kernel::hypervisor::test
         return true;
     }
 
+    inline bool baseline_accepted = false;
+
     [[nodiscard]] inline error_t run_all() noexcept {
         virtual_machine_t& vm = bootstrap_vm;
         virtual_cpu_t& vcpu = bootstrap_vcpu;
@@ -1235,13 +1237,16 @@ namespace sys::kernel::hypervisor::test
         pr_info("[HV-MODEL-M] multi-vm-isolation result=PASS vms=2 execution=modeled\n");
         pr_info("[HV-N] vm-teardown-vmid-reuse result=PASS\n");
         pr_info("[HV-MODEL-0.3] multi-vcpu-multivm-lifecycle result=PASS execution=modeled\n");
+        baseline_accepted = true;
         return error_t::success;
     }
 
     [[nodiscard]] inline error_t run_runtime_acceptance() noexcept {
-        const error_t baseline = run_all();
-        if (baseline != error_t::success)
-            return baseline;
+        if (!baseline_accepted) {
+            const error_t baseline = run_all();
+            if (baseline != error_t::success)
+                return baseline;
+        }
         if (!real_smp_acceptance() || !real_multivm_acceptance())
             return error_t::invalid_argument;
         return error_t::success;

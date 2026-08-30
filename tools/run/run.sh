@@ -16,13 +16,19 @@ readelf_tool=$(command -v llvm-readelf 2>/dev/null || command -v readelf)
 machine=$($readelf_tool -h "$kernel" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
 cpus=${CPUS:-4}
 memory_mb=${MEMORY_MB:-256}
+run_arm64_qemu() {
+    if [ -n "${QEMU_CPUSET:-}" ]; then
+        exec taskset -c "$QEMU_CPUSET" qemu-system-aarch64 "$@"
+    fi
+    exec qemu-system-aarch64 "$@"
+}
 case "$machine" in
     AArch64)
         dtb=$(mktemp)
         trap 'rm -f "$dtb"' EXIT HUP INT TERM
         qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on,dumpdtb=$dtb" \
             -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -display none
-        qemu-system-aarch64 -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 \
+        run_arm64_qemu -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 \
             -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" \
             -device "loader,file=$dtb,addr=0x48000000,force-raw=on" "$@"
         ;;

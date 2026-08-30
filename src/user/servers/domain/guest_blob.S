@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+.section .rodata.domain_guest,"a"
+.balign 4096
+.global sys_arm64_domain_guest_image_start
+.global sys_arm64_domain_guest_image_end
+sys_arm64_domain_guest_image_start:
+.incbin DOMAIN_GUEST_ELF_PATH
+sys_arm64_domain_guest_image_end:

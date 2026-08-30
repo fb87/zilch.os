@@ -10,8 +10,8 @@
 
 namespace sys::control_plane_certification
 {
-    template <typename Create, typename Destroy, typename Wait>
-    [[nodiscard]] bool run(Create create, Destroy destroy, Wait wait) noexcept {
+    template <typename Create, typename Destroy, typename Wait, typename Probe>
+    [[nodiscard]] bool run(Create create, Destroy destroy, Wait wait, Probe probe) noexcept {
         constexpr word_t selector_base = 40U;
         constexpr word_t selector_stride = 3U;
         constexpr word_t endpoint_base = 16U;
@@ -46,6 +46,8 @@ namespace sys::control_plane_certification
                      reply.message0 == abi::v1::control_plane_health_magic &&
                      reply.message1 == first_role + index;
         }
+        for (word_t index = 0U; passed && index < abi::v1::control_plane_role_count; ++index)
+            passed = probe(index, endpoint_base + index) && passed;
 
         constexpr word_t restart_index = 0U;
         const word_t restart_role = first_role + restart_index;

@@ -4,6 +4,7 @@
 
 #if CONFIG_SELFTEST
 #include <sys/certification.hh>
+#include <sys/domain_manager.hh>
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/control_plane_certification.hh>
@@ -53,15 +54,18 @@ namespace
         security_hardening_gate = 33U,
         kernel_core_1_0_gate = 34U,
         userspace_control_plane_graph = 35U,
-        hypervisor_dynamic_lifecycle = 36U,
-        hypervisor_vm_create = 37U,
-        hypervisor_vcpu_create = 38U,
-        hypervisor_vm_busy = 39U,
-        hypervisor_vcpu_destroy = 40U,
-        hypervisor_vcpu_stale = 41U,
-        hypervisor_vm_destroy = 42U,
-        hypervisor_vm_stale = 43U,
-        hypervisor_vm_reuse = 44U,
+        domain_manager_api = 36U,
+        hypervisor_dynamic_lifecycle = 37U,
+        hypervisor_vm_create = 38U,
+        hypervisor_vcpu_create = 39U,
+        hypervisor_vm_busy = 40U,
+        hypervisor_vcpu_destroy = 41U,
+        hypervisor_vcpu_stale = 42U,
+        hypervisor_vm_destroy = 43U,
+        hypervisor_vm_stale = 44U,
+        hypervisor_vm_reuse = 45U,
+        domain_guest_load = 46U,
+        domain_guest_run = 47U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -826,6 +830,105 @@ namespace
         return passed;
     }
 
+    [[nodiscard]] bool test_domain_manager_api() noexcept {
+        constexpr sys::capability_id_t vm_selector = 61U;
+        constexpr sys::capability_id_t vcpu_selector = 62U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+
+        sys::domain_manager::manager domain{};
+        bool passed = domain.create(vm_selector, vcpu_selector, 0U, 0x3000U) == success;
+        if (passed)
+            passed = domain.configure(0x40000000U, 0x3c5U, 0x50000000U) == success;
+        if (passed)
+            passed = domain.destroy() == success;
+        return passed;
+    }
+
+    [[nodiscard]] bool test_domain_manager_lifecycle(sys::capability_id_t endpoint) noexcept {
+        constexpr sys::capability_id_t domain_task_selector = 50U;
+        constexpr sys::capability_id_t device_frame_selector = 60U;
+        constexpr sys::capability_id_t device_frame_destination = 16U;
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        constexpr sys::word_t read_write = 3U;
+        if (sys::control(sys::abi::v1::control_operation::device_frame_create, device_frame_selector,
+                         0x09000000U) != success)
+            return false;
+        if (sys::control(sys::abi::v1::control_operation::capability_mint, domain_task_selector,
+                         device_frame_destination, device_frame_selector, read_write) != success) {
+            (void)sys::control(sys::abi::v1::control_operation::frame_destroy,
+                               device_frame_selector);
+            return false;
+        }
+        const auto launch = sys::ipc_call(endpoint,
+                                          static_cast<sys::word_t>(
+                                              sys::abi::v1::control_plane_operation::launch),
+                                          0U);
+        if (launch.status != success || launch.message0 != success ||
+            launch.message1 != static_cast<sys::word_t>(sys::domain_manager::state::created))
+            return false;
+
+        const auto load = sys::ipc_call(endpoint,
+                                        static_cast<sys::word_t>(
+                                            sys::abi::v1::control_plane_operation::load),
+                                        0U);
+        const bool load_pass = load.status == success && load.message0 == success &&
+                               load.message1 == static_cast<sys::word_t>(
+                                                    sys::domain_manager::state::runnable);
+        (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_report,
+                                           static_cast<sys::word_t>(test_id::domain_guest_load),
+                                           load_pass ? 1U : 0U);
+        if (!load_pass) {
+            (void)sys::certification::control(
+                sys::test_abi::v1::control_operation::domain_manager_detail, load.message1);
+            return false;
+        }
+
+#if CONFIG_DOMAIN_GUEST_INTERACTIVE
+        const auto served = sys::ipc_call(
+            endpoint, static_cast<sys::word_t>(sys::abi::v1::control_plane_operation::serve), 0U);
+        (void)sys::certification::control(
+            sys::test_abi::v1::control_operation::domain_manager_detail,
+            served.message1 != 0U ? served.message1 : served.message0 & 0xffffffffU);
+        return false;
+#else
+        const auto run = sys::ipc_call(endpoint,
+                                       static_cast<sys::word_t>(
+                                           sys::abi::v1::control_plane_operation::run),
+                                       0U);
+        const bool run_pass = run.status == success && run.message0 == success;
+        (void)sys::certification::control(sys::test_abi::v1::control_operation::acceptance_report,
+                                           static_cast<sys::word_t>(test_id::domain_guest_run),
+                                           run_pass ? 1U : 0U);
+        if (!run_pass)
+            return false;
+#endif
+
+        const auto destroy = sys::ipc_call(endpoint,
+                                           static_cast<sys::word_t>(
+                                               sys::abi::v1::control_plane_operation::destroy),
+                                           0U);
+        if (destroy.status != success || destroy.message0 != success ||
+            destroy.message1 != static_cast<sys::word_t>(sys::domain_manager::state::empty))
+            return false;
+
+        const auto relaunch = sys::ipc_call(endpoint,
+                                            static_cast<sys::word_t>(
+                                                sys::abi::v1::control_plane_operation::launch),
+                                            0U);
+        if (relaunch.status != success || relaunch.message0 != success ||
+            relaunch.message1 != static_cast<sys::word_t>(sys::domain_manager::state::created))
+            return false;
+
+        const bool destroyed =
+            sys::ipc_call(endpoint,
+                          static_cast<sys::word_t>(sys::abi::v1::control_plane_operation::destroy),
+                          0U).status == success;
+        const bool released =
+            sys::control(sys::abi::v1::control_operation::frame_destroy, device_frame_selector) ==
+            success;
+        return destroyed && released;
+    }
+
     [[nodiscard]] bool test_memory_authority_revoke() noexcept {
         constexpr sys::word_t frame_selector = 16U;
         constexpr sys::word_t derived_selector = 17U;
@@ -1163,8 +1266,12 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
                dynamic_ipc_pass && memory_lifecycle_pass && mapping_database_pass &&
                authority_revoke_pass && pressure_rollback_pass && fuzz_pass && destroyed && reused);
     record(ledger, test_id::userspace_control_plane_graph,
-           sys::control_plane_certification::run(create_service_process, destroy_service_process,
-                                                 wait_for_badges));
+           sys::control_plane_certification::run(
+               create_service_process, destroy_service_process, wait_for_badges,
+               [](sys::word_t index, sys::capability_id_t endpoint) noexcept {
+                   return index != 3U ? true : test_domain_manager_lifecycle(endpoint);
+               }));
+    record(ledger, test_id::domain_manager_api, test_domain_manager_api());
     const sys::word_t hypervisor_lifecycle = sys::hypervisor_lifecycle_certification::run();
     record(ledger, test_id::hypervisor_dynamic_lifecycle,
            hypervisor_lifecycle == sys::hypervisor_lifecycle_certification::complete_mask);

@@ -21,7 +21,6 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                                  static_cast<sys::u32>(level), frame->vector, 0U, 0U,
                                  frame->instruction_pointer);
     }
-    const sys::kernel::object::read_guard object_read_guard{};
     const sys::u64 vector = frame->vector;
     const sys::u64 syndrome = sys::arch::exception::syndrome(static_cast<sys::u32>(level));
     sys::kernel::emergency::append(sys::kernel::emergency::event::exception_entry, level, vector,
@@ -44,24 +43,29 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                                            level);
         }
         if (irq == sys::platform::interrupt::virtual_timer_irq) {
-            const sys::kernel::interrupt::timing::latency_scope preemption_latency{
-                sys::kernel::interrupt::timing::latency_kind::preemption_service};
-            const sys::u64 ticks = sys::platform::timer::handle_interrupt();
-            sys::kernel::hypervisor::poll_virtual_timers(sys::arch::cpu::current_id(),
-                                                         sys::arch::timer::counter());
-            if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
-                if (vector == 9U) {
-                    sys::kernel::thread::schedule_user(*frame);
-                } else if (vector == 5U) {
-                    (void)sys::kernel::thread::resume_user_from_idle(*frame);
+            if (level != 2U || !sys::arch::hypervisor::handle_guest_virtual_timer_irq()) {
+                const sys::kernel::interrupt::timing::latency_scope preemption_latency{
+                    sys::kernel::interrupt::timing::latency_kind::preemption_service};
+                const sys::u64 ticks = sys::platform::timer::handle_interrupt();
+                {
+                    const sys::kernel::object::read_guard object_read_guard{};
+                    sys::kernel::hypervisor::poll_virtual_timers(sys::arch::cpu::current_id(),
+                                                                  sys::arch::timer::counter());
                 }
-            } else {
-                sys::kernel::scheduler::on_timer_tick();
-            }
-            if (ticks == 1U && sys::arch::cpu::current_id() == 0U) {
-                sys::printk::defer(sys::kernel::emergency::event::irq,
-                                            static_cast<sys::u64>(sys::arch::cpu::current_id()),
-                                            ticks);
+                if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
+                    if (vector == 9U) {
+                        sys::kernel::thread::schedule_user(*frame);
+                    } else if (vector == 5U) {
+                        (void)sys::kernel::thread::resume_user_from_idle(*frame);
+                    }
+                } else {
+                    sys::kernel::scheduler::on_timer_tick();
+                }
+                if (ticks == 1U && sys::arch::cpu::current_id() == 0U) {
+                    sys::printk::defer(sys::kernel::emergency::event::irq,
+                                                static_cast<sys::u64>(sys::arch::cpu::current_id()),
+                                                ticks);
+                }
             }
         } else if (irq == sys::platform::interrupt::virtual_gic_maintenance_irq) {
             (void)sys::arch::hypervisor::virtual_gic_maintenance_status();
@@ -69,7 +73,10 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             sys::kernel::interrupt::timing::complete_cross_cpu_wake(sys::arch::cpu::current_id());
             sys::arch::smp::record_reschedule_ipi();
 #if CONFIG_HYPERVISOR_SELFTEST
-            sys::kernel::hypervisor::test::service_real_smp_job(sys::arch::cpu::current_id());
+            {
+                const sys::kernel::object::read_guard object_read_guard{};
+                sys::kernel::hypervisor::test::service_real_smp_job(sys::arch::cpu::current_id());
+            }
 #endif
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
@@ -84,9 +91,10 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             sys::arch::memory::invalidate_tlb_all();
             sys::arch::smp::record_tlb_shootdown_ipi();
         } else {
+            const sys::kernel::object::read_guard object_read_guard{};
             userspace_deactivate = sys::kernel::interrupt::dispatch(irq);
         }
-        if (irq == sys::platform::interrupt::virtual_timer_irq ||
+        if ((irq == sys::platform::interrupt::virtual_timer_irq && level != 2U) ||
             irq == sys::platform::interrupt::reschedule_ipi) {
             const sys::cpu_id_t cpu = sys::arch::cpu::current_id();
             const sys::u64 now = sys::platform::timer::ticks(cpu);
@@ -103,6 +111,7 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
     }
 
     if (exception_class == 0U) {
+        const sys::kernel::object::read_guard object_read_guard{};
         if (level == 2U && sys::arch::hypervisor::dispatch(*frame, syndrome)) {
             return;
         }

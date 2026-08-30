@@ -11,7 +11,7 @@ namespace sys::arch::space::elf64
     inline constexpr u32 program_type_load = 1U;
     inline constexpr u32 program_flag_execute = 1U;
     inline constexpr u32 program_flag_write = 2U;
-    inline constexpr usize_t bootstrap_pages = 16U;
+    inline constexpr usize_t bootstrap_pages = 64U;
     inline constexpr usize_t bootstrap_size = bootstrap_pages * memory::page_size;
 
     struct header {

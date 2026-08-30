@@ -99,7 +99,7 @@ namespace sys::kernel::hypervisor
 
     [[nodiscard]] inline error_t configure_vcpu(virtual_cpu_t& vcpu, u64 pc, u64 pstate,
                                                 u64 sp) noexcept {
-        if (!aligned(pc) || !aligned(sp))
+        if ((pc & 3U) != 0U || !aligned(sp))
             return error_t::invalid_argument;
         vcpu.context.pc = pc;
         vcpu.context.pstate = arch::hypervisor::sanitize_guest_pstate(pstate);
@@ -108,6 +108,10 @@ namespace sys::kernel::hypervisor
         vcpu.context.tcr_el1 = arch::hypervisor::sanitize_guest_tcr_el1(0U);
         vcpu.context.cpacr_el1 = arch::hypervisor::sanitize_guest_cpacr_el1(0U);
         vcpu.context.cntkctl_el1 = arch::hypervisor::sanitize_guest_cntkctl_el1(0U);
+        vcpu.context.gic_pmr = 0xffU;
+        vcpu.context.gic_last_iar = 1023U;
+        for (u32 index = 0U; index < maximum_virtual_irqs; ++index)
+            vcpu.context.gic_priority[index] = default_virtual_irq_priority;
         vcpu.interrupt_state.reset();
         vcpu.timer.reset();
         vcpu.virtual_irq_pending = false;
@@ -135,15 +139,29 @@ namespace sys::kernel::hypervisor
          * early pending LR would otherwise vector through uninitialized guest
          * exception state before its bootstrap masks are established.
          */
-        state.hardware_active = arch::hypervisor::virtual_gic_hardware_available() &&
+        state.hardware_active = !vcpu.context.native_gic &&
+                                arch::hypervisor::virtual_gic_hardware_available() &&
                                 vcpu.run_generation > 1U && vcpu.context.vbar_el1 != 0U &&
                                 vcpu.virtual_irq >= 16U;
-        vcpu.context.ich_hcr_el2 = state.hardware_active ? 1U : 0U;
+        vcpu.context.ich_hcr_el2 = vcpu.context.native_gic
+                                               ? ((1ULL << 12U) | (1ULL << 10U) | 1U)
+                                                             : (state.hardware_active ? 1U : 0U);
         vcpu.context.ich_vmcr_el2 = (static_cast<u64>(state.priority_mask) << 24U) |
                                     (static_cast<u64>(state.binary_point & 7U) << 18U) |
                                     (1ULL << 1U);
         for (u32 index = 0U; index < 16U; ++index)
             vcpu.context.ich_lr_el2[index] = 0U;
+        if (vcpu.context.native_gic) {
+            vcpu.context.gic_pending = state.pending;
+            vcpu.context.gic_active = state.active;
+            vcpu.context.gic_enabled = ~state.masked;
+            vcpu.context.gic_group1 = ~0ULL;
+            vcpu.context.gic_edge = state.edge_triggered;
+            for (u32 index = 0U; index < maximum_virtual_irqs; ++index)
+                vcpu.context.gic_priority[index] = state.priority[index];
+            vcpu.context.gic_pmr = state.priority_mask;
+            return;
+        }
         if (!state.hardware_active)
             return;
         u16 irq{};
@@ -159,6 +177,17 @@ namespace sys::kernel::hypervisor
     }
 
     inline void complete_virtual_gic(virtual_cpu_t& vcpu) noexcept {
+        if (vcpu.context.native_gic) {
+            vcpu.interrupt_state.pending = vcpu.context.gic_pending;
+            vcpu.interrupt_state.active = vcpu.context.gic_active;
+            vcpu.interrupt_state.masked = ~vcpu.context.gic_enabled;
+            vcpu.interrupt_state.edge_triggered = vcpu.context.gic_edge;
+            vcpu.interrupt_state.priority_mask = vcpu.context.gic_pmr;
+            vcpu.interrupt_state.binary_point = vcpu.context.gic_bpr;
+            for (u32 index = 0U; index < maximum_virtual_irqs; ++index)
+                vcpu.interrupt_state.priority[index] = vcpu.context.gic_priority[index];
+            return;
+        }
         if (!vcpu.interrupt_state.hardware_active)
             return;
         const u64 lr = vcpu.context.ich_lr_el2[0];

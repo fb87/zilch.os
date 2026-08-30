@@ -210,8 +210,6 @@ namespace sys::kernel::hypervisor
             if (table_result != error_t::success) {
                 mapping = {};
                 --vm.mapping_count;
-                vm.mapped_pages -= pages;
-                --vm.map_operations;
                 (void)rebuild_stage2(vm);
                 unlock_vm(vm);
                 return table_result;

@@ -133,6 +133,18 @@ namespace sys::arch::hypervisor
         u64 ich_ap0r0_el2;
         u64 ich_ap1r0_el2;
         u64 ich_lr_el2[16];
+        u64 gic_enabled;
+        u64 gic_pending;
+        u64 gic_active;
+        u64 gic_group1;
+        u64 gic_edge;
+        u8 gic_priority[64];
+        u8 gic_pmr;
+        u8 gic_bpr;
+        u16 gic_last_iar;
+        u32 gicd_ctlr;
+        u32 gicr_waker;
+        bool native_gic;
         u64 report_mask;
     };
 
@@ -252,6 +264,284 @@ namespace sys::arch::hypervisor
         context.sp_el0 = frame.stack_pointer;
         context.pc = frame.instruction_pointer;
         context.pstate = frame.status;
+    }
+
+    inline constexpr u64 gicd_base = 0x08000000ULL;
+    inline constexpr u64 gicr_base = 0x080a0000ULL;
+    inline constexpr u16 gic_spurious_intid = 1023U;
+
+    [[nodiscard]] inline u64 native_gic_deliverable(const guest_context_layout& state) noexcept {
+        if ((state.gicd_ctlr & 2U) == 0U)
+            return 0U;
+        u64 candidates = state.gic_pending & state.gic_enabled & state.gic_group1;
+        for (u32 intid = 0U; intid < 64U; ++intid) {
+            const u64 bit = 1ULL << intid;
+            if ((candidates & bit) != 0U && state.gic_priority[intid] >= state.gic_pmr)
+                candidates &= ~bit;
+        }
+        return candidates;
+    }
+
+    inline void update_native_gic_vi(const guest_context_layout& state) noexcept {
+        u64 hcr = 0U;
+        __asm__ volatile("mrs %0, hcr_el2" : "=r"(hcr));
+        if (native_gic_deliverable(state) != 0U)
+            hcr |= 1ULL << 7U;
+        else
+            hcr &= ~(1ULL << 7U);
+        __asm__ volatile("msr hcr_el2, %0; isb" : : "r"(hcr) : "memory");
+    }
+
+    [[nodiscard]] inline bool handle_guest_virtual_timer_irq() noexcept {
+        const cpu_id_t id = cpu::current_id();
+        if (id >= maximum_cpu_count || !guest_active[id] || active_context[id] == nullptr ||
+            !active_context[id]->native_gic)
+            return false;
+        u64 control = 0U;
+        __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(control));
+        control |= 1U << 1U;
+        __asm__ volatile("msr cntv_ctl_el0, %0; isb" : : "r"(control) : "memory");
+        active_context[id]->gic_pending |= 1ULL << 27U;
+        update_native_gic_vi(*active_context[id]);
+        return true;
+    }
+
+    [[nodiscard]] inline u32 native_gic_read(const guest_context_layout& state, bool redistributor,
+                                              u32 offset) noexcept {
+        if (redistributor && offset < 0x10000U) {
+            if (offset == 0x8U)
+                return 1U << 4U; // Last: this VM exposes exactly one redistributor.
+            if (offset == 0x14U)
+                return state.gicr_waker & 2U;
+            return 0U;
+        }
+        const u32 local_offset = redistributor ? offset - 0x10000U : offset;
+        const auto bitmap = [redistributor, local_offset](u64 value, u32 base) {
+            const u32 register_index = (local_offset - base) / 4U;
+            const u32 shift = redistributor ? 0U : register_index * 32U;
+            return shift >= 64U ? 0U : static_cast<u32>(value >> shift);
+        };
+        if (!redistributor && local_offset == 0U)
+            return state.gicd_ctlr;
+        if (!redistributor && local_offset == 0x4U)
+            return 1U; // 64 INTIDs (ITLinesNumber == 1), no affinity routing/ITS.
+        if (local_offset >= 0x80U && local_offset < 0x88U)
+            return bitmap(state.gic_group1, 0x80U);
+        if ((local_offset >= 0x100U && local_offset < 0x108U) ||
+            (local_offset >= 0x180U && local_offset < 0x188U))
+            return bitmap(state.gic_enabled, local_offset < 0x180U ? 0x100U : 0x180U);
+        if ((local_offset >= 0x200U && local_offset < 0x208U) ||
+            (local_offset >= 0x280U && local_offset < 0x288U))
+            return bitmap(state.gic_pending, local_offset < 0x280U ? 0x200U : 0x280U);
+        if ((local_offset >= 0x300U && local_offset < 0x308U) ||
+            (local_offset >= 0x380U && local_offset < 0x388U))
+            return bitmap(state.gic_active, local_offset < 0x380U ? 0x300U : 0x380U);
+        if (local_offset >= 0x400U && local_offset < 0x440U) {
+            u32 value = 0U;
+            const u32 first = local_offset - 0x400U;
+            for (u32 byte = 0U; byte < 4U && first + byte < 64U; ++byte)
+                value |= static_cast<u32>(state.gic_priority[first + byte]) << (byte * 8U);
+            return value;
+        }
+        if (local_offset >= 0xc00U && local_offset < 0xc08U) {
+            u32 value = 0U;
+            const u32 first = (local_offset - 0xc00U) * 16U;
+            for (u32 bit = 0U; bit < 16U && first + bit < 64U; ++bit)
+                if ((state.gic_edge & (1ULL << (first + bit))) != 0U)
+                    value |= 2U << (bit * 2U);
+            return value;
+        }
+        return 0U;
+    }
+
+    inline void native_gic_write(guest_context_layout& state, bool redistributor, u32 offset,
+                                 u32 value) noexcept {
+        if (redistributor && offset < 0x10000U) {
+            if (offset == 0x14U)
+                state.gicr_waker = value & 2U;
+            return;
+        }
+        const u32 local_offset = redistributor ? offset - 0x10000U : offset;
+        const auto bitmap_shift = [redistributor, local_offset](u32 base) {
+            return redistributor ? 0U : ((local_offset - base) / 4U) * 32U;
+        };
+        const bool bitmap_register = (local_offset >= 0x80U && local_offset < 0x88U) ||
+                                     (local_offset >= 0x100U && local_offset < 0x108U) ||
+                                     (local_offset >= 0x180U && local_offset < 0x188U) ||
+                                     (local_offset >= 0x200U && local_offset < 0x208U) ||
+                                     (local_offset >= 0x280U && local_offset < 0x288U) ||
+                                     (local_offset >= 0x300U && local_offset < 0x308U) ||
+                                     (local_offset >= 0x380U && local_offset < 0x388U);
+        const u32 base = local_offset & ~7U;
+        const u32 shift = bitmap_register ? bitmap_shift(base) : 0U;
+        const u64 bits = static_cast<u64>(value) << shift;
+        const u64 valid = shift == 0U ? 0xffffffffULL : 0xffffffff00000000ULL;
+        if (!redistributor && local_offset == 0U) {
+            state.gicd_ctlr = value & 3U;
+        } else if (local_offset >= 0x80U && local_offset < 0x88U) {
+            state.gic_group1 = (state.gic_group1 & ~valid) | bits;
+        } else if (local_offset >= 0x100U && local_offset < 0x108U) {
+            state.gic_enabled |= bits;
+        } else if (local_offset >= 0x180U && local_offset < 0x188U) {
+            state.gic_enabled &= ~bits;
+        } else if (local_offset >= 0x200U && local_offset < 0x208U) {
+            state.gic_pending |= bits;
+        } else if (local_offset >= 0x280U && local_offset < 0x288U) {
+            state.gic_pending &= ~bits;
+        } else if (local_offset >= 0x300U && local_offset < 0x308U) {
+            state.gic_active |= bits;
+        } else if (local_offset >= 0x380U && local_offset < 0x388U) {
+            state.gic_active &= ~bits;
+        } else if (local_offset >= 0x400U && local_offset < 0x440U) {
+            const u32 first = local_offset - 0x400U;
+            for (u32 byte = 0U; byte < 4U && first + byte < 64U; ++byte)
+                state.gic_priority[first + byte] = static_cast<u8>(value >> (byte * 8U));
+        } else if (local_offset >= 0xc00U && local_offset < 0xc08U) {
+            const u32 first = (local_offset - 0xc00U) * 16U;
+            for (u32 bit = 0U; bit < 16U && first + bit < 64U; ++bit) {
+                const u64 mask = 1ULL << (first + bit);
+                if ((value & (2U << (bit * 2U))) != 0U)
+                    state.gic_edge |= mask;
+                else
+                    state.gic_edge &= ~mask;
+            }
+        }
+    }
+
+    [[nodiscard]] inline bool emulate_native_gic_mmio(exception::frame_t& frame, u64 syndrome,
+                                                       u64 ipa) noexcept {
+        const bool distributor = ipa >= gicd_base && ipa < gicd_base + 0x10000ULL;
+        const bool redistributor = ipa >= gicr_base && ipa < gicr_base + 0x20000ULL;
+        const u32 bytes = 1U << ((syndrome >> 22U) & 3U);
+        const u32 offset = static_cast<u32>(redistributor ? ipa - gicr_base : ipa - gicd_base);
+        if ((!distributor && !redistributor) || bytes > 8U || (offset & (bytes - 1U)) != 0U ||
+            (bytes <= 4U && (offset & 3U) + bytes > 4U))
+            return false;
+        const cpu_id_t id = cpu::current_id();
+        auto* state = active_context[id];
+        if (state == nullptr)
+            return false;
+        state->native_gic = true;
+        const u32 target = static_cast<u32>((syndrome >> 16U) & 0x1fU);
+        if (bytes == 8U) {
+            if (!redistributor || offset != 0x8U || ((syndrome >> 6U) & 1U) != 0U)
+                return false;
+            if (target != 31U) {
+                u64 mpidr = 0U;
+                __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+                const u64 affinity = (mpidr & 0x00ffffffU) | ((mpidr >> 8U) & 0xff000000U);
+                frame.x[target] = (affinity << 32U) | (1U << 4U);
+            }
+            frame.instruction_pointer += 4U;
+            return true;
+        }
+        const u32 aligned_offset = offset & ~3U;
+        const u32 shift = (offset & 3U) * 8U;
+        const u32 mask = bytes == 4U ? 0xffffffffU : ((1U << (bytes * 8U)) - 1U);
+        if (((syndrome >> 6U) & 1U) != 0U) {
+            const u32 previous = native_gic_read(*state, redistributor, aligned_offset);
+            const u32 operand = target == 31U ? 0U : static_cast<u32>(frame.x[target]);
+            const u32 local_offset = redistributor ? aligned_offset - 0x10000U : aligned_offset;
+            const bool command_register =
+                (local_offset >= 0x100U && local_offset < 0x108U) ||
+                (local_offset >= 0x180U && local_offset < 0x188U) ||
+                (local_offset >= 0x200U && local_offset < 0x208U) ||
+                (local_offset >= 0x280U && local_offset < 0x288U) ||
+                (local_offset >= 0x300U && local_offset < 0x308U) ||
+                (local_offset >= 0x380U && local_offset < 0x388U);
+            const u32 write_value = (operand & mask) << shift;
+            native_gic_write(*state, redistributor, aligned_offset,
+                             command_register ? write_value
+                                              : (previous & ~(mask << shift)) | write_value);
+        } else if (target != 31U) {
+            const u32 value = (native_gic_read(*state, redistributor, aligned_offset) >> shift) & mask;
+            frame.x[target] = value;
+        }
+        __asm__ volatile("msr ich_hcr_el2, %0; isb"
+                         :
+                         : "r"((1ULL << 12U) | (1ULL << 10U) | 1U)
+                         : "memory");
+        update_native_gic_vi(*state);
+        frame.instruction_pointer += 4U;
+        return true;
+    }
+
+    [[nodiscard]] inline bool emulate_native_gic_system_register(exception::frame_t& frame,
+                                                                   u64 syndrome) noexcept {
+        const cpu_id_t id = cpu::current_id();
+        auto* state = active_context[id];
+        if (state == nullptr || !state->native_gic)
+            return false;
+        constexpr u32 icc_pmr_el1 = 0xc230U;
+        constexpr u32 icc_iar1_el1 = 0xc660U;
+        constexpr u32 icc_eoir1_el1 = 0xc661U;
+        constexpr u32 icc_dir_el1 = 0xc659U;
+        constexpr u32 icc_bpr1_el1 = 0xc663U;
+        constexpr u32 icc_ctlr_el1 = 0xc664U;
+        constexpr u32 icc_sre_el1 = 0xc665U;
+        constexpr u32 icc_igrpen1_el1 = 0xc667U;
+        const u32 encoding = trapped_system_register(syndrome);
+        const u32 target = static_cast<u32>((syndrome >> 5U) & 0x1fU);
+        const bool read = (syndrome & 1U) != 0U;
+        u64 value = target == 31U ? 0U : frame.x[target];
+        bool handled = true;
+        if (read) {
+            if (encoding == icc_pmr_el1)
+                value = state->gic_pmr;
+            else if (encoding == icc_iar1_el1) {
+                const u64 candidates = native_gic_deliverable(*state);
+                value = gic_spurious_intid;
+                if (candidates != 0U) {
+                    const u16 intid = static_cast<u16>(__builtin_ctzll(candidates));
+                    state->gic_pending &= ~(1ULL << intid);
+                    state->gic_active |= 1ULL << intid;
+                    state->gic_last_iar = intid;
+                    value = intid;
+                }
+            } else if (encoding == icc_bpr1_el1)
+                value = state->gic_bpr;
+            else if (encoding == icc_ctlr_el1)
+                value = 0U;
+            else if (encoding == icc_sre_el1)
+                value = 1U;
+            else if (encoding == icc_igrpen1_el1)
+                value = (state->gicd_ctlr >> 1U) & 1U;
+            else
+                handled = false;
+            if (handled && target != 31U)
+                frame.x[target] = value;
+        } else {
+            if (encoding == icc_pmr_el1)
+                state->gic_pmr = static_cast<u8>(value);
+            else if (encoding == icc_bpr1_el1)
+                state->gic_bpr = static_cast<u8>(value & 7U);
+            else if (encoding == icc_eoir1_el1 || encoding == icc_dir_el1) {
+                const u16 intid = static_cast<u16>(value);
+                if (intid < 64U) {
+                    state->gic_active &= ~(1ULL << intid);
+                    if (intid == 27U) {
+                        u64 control = 0U;
+                        __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(control));
+                        control &= ~(1U << 1U);
+                        __asm__ volatile("msr cntv_ctl_el0, %0; isb"
+                                         :
+                                         : "r"(control)
+                                         : "memory");
+                    }
+                }
+            } else if (encoding == icc_sre_el1) {
+                // System-register interface is always enabled for this virtual CPU.
+            } else if (encoding == icc_igrpen1_el1) {
+                state->gicd_ctlr =
+                    (state->gicd_ctlr & ~2U) | static_cast<u32>((value & 1U) << 1U);
+            } else
+                handled = false;
+        }
+        if (!handled)
+            return false;
+        update_native_gic_vi(*state);
+        frame.instruction_pointer += 4U;
+        return true;
     }
 
     [[nodiscard]] inline u64 call(call_id function, u64 argument0 = 0U, u64 argument1 = 0U,
@@ -662,6 +952,8 @@ namespace sys::arch::hypervisor
                 return true;
             }
             if (exception_class == 0x18U) {
+                if (emulate_native_gic_system_register(frame, syndrome))
+                    return true;
                 constexpr u32 sctlr_el1 = 0xc080U;
                 constexpr u32 ttbr0_el1 = 0xc100U;
                 constexpr u32 ttbr1_el1 = 0xc101U;
@@ -739,6 +1031,13 @@ namespace sys::arch::hypervisor
             }
             const bool data_abort = exception_class == 0x24U || exception_class == 0x25U;
             const bool valid_access = data_abort && ((syndrome >> 24U) & 1U) != 0U;
+            if (valid_access) {
+                u64 hpfar = 0U;
+                __asm__ volatile("mrs %0, hpfar_el2" : "=r"(hpfar));
+                const u64 ipa = guest_fault_ipa(syndrome, exception::fault_address(2U), hpfar);
+                if (emulate_native_gic_mmio(frame, syndrome, ipa))
+                    return true;
+            }
             const auto reason = valid_access ? abi::v1::vm_exit_reason::mmio
                                 : data_abort ? abi::v1::vm_exit_reason::stage2_fault
                                              : abi::v1::vm_exit_reason::unexpected;
@@ -783,7 +1082,7 @@ namespace sys::arch::hypervisor
                 u64 vtr = 0U;
                 __asm__ volatile("mrs %0, hcr_el2" : "=r"(hcr));
                 __asm__ volatile("mrs %0, ich_vtr_el2" : "=r"(vtr));
-                hcr |= (1ULL << 31U) | (1ULL << 13U) | (1ULL << 14U);
+                hcr |= 1ULL << 31U;
                 __asm__ volatile("msr hcr_el2, %0; isb" ::"r"(hcr) : "memory");
                 __atomic_store_n(&ich_vtr[id], vtr, __ATOMIC_RELEASE);
                 frame.x[0] = 0U;
@@ -834,7 +1133,7 @@ namespace sys::arch::hypervisor
                                      vtcr_orgn0_wbwa | vtcr_irgn0_wbwa | vtcr_sl0_level1 |
                                      vtcr_t0sz_32bit;
                 u64 hcr = saved_hcr[id] | 1ULL | (1ULL << 31U) | (1ULL << 3U) | (1ULL << 4U) |
-                          (1ULL << 5U);
+                          (1ULL << 5U) | (1ULL << 13U) | (1ULL << 14U);
                 /*
                  * VI is per-vCPU run state, not persistent host HCR state.
                  * Clear a stale saved value before applying this run's request.

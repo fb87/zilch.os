@@ -13,6 +13,7 @@ namespace sys::test_abi::v1
         memory_invariant_snapshot = 0x80000005U,
         memory_server_protocol_detail = 0x80000006U,
         hypervisor_self_test = 0x80000100U,
+        domain_manager_detail = 0x80000101U,
     };
 
     enum class hypervisor_operation : word_t {

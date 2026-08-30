@@ -402,31 +402,40 @@ namespace sys::kernel::syscall
                         name = "userspace_control_plane_graph";
                         break;
                     case 36U:
-                        name = "hypervisor_dynamic_lifecycle";
+                        name = "domain_manager_api";
                         break;
                     case 37U:
-                        name = "hypervisor_vm_create";
+                        name = "hypervisor_dynamic_lifecycle";
                         break;
                     case 38U:
-                        name = "hypervisor_vcpu_create";
+                        name = "hypervisor_vm_create";
                         break;
                     case 39U:
-                        name = "hypervisor_vm_parent_busy";
+                        name = "hypervisor_vcpu_create";
                         break;
                     case 40U:
-                        name = "hypervisor_vcpu_destroy";
+                        name = "hypervisor_vm_parent_busy";
                         break;
                     case 41U:
-                        name = "hypervisor_vcpu_stale";
+                        name = "hypervisor_vcpu_destroy";
                         break;
                     case 42U:
-                        name = "hypervisor_vm_destroy";
+                        name = "hypervisor_vcpu_stale";
                         break;
                     case 43U:
-                        name = "hypervisor_vm_stale";
+                        name = "hypervisor_vm_destroy";
                         break;
                     case 44U:
+                        name = "hypervisor_vm_stale";
+                        break;
+                    case 45U:
                         name = "hypervisor_vm_reuse";
+                        break;
+                    case 46U:
+                        name = "domain_guest_load";
+                        break;
+                    case 47U:
+                        name = "domain_guest_run";
                         break;
                     default:
                         break;
@@ -673,6 +682,15 @@ namespace sys::kernel::syscall
 #else
                 set_control_result(frame, error_t::unsupported);
 #endif
+                return true;
+            case test_abi::v1::control_operation::domain_manager_detail:
+                if (current.owner == nullptr || !current.owner->root) {
+                    set_control_result(frame, error_t::denied);
+                    return true;
+                }
+                pr_err("[DOMAIN-LOAD] detail=%llx\n",
+                       static_cast<unsigned long long>(arch::syscall::argument(frame, 1U)));
+                set_control_result(frame, error_t::success);
                 return true;
         }
 #endif

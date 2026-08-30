@@ -11,10 +11,10 @@ namespace sys::arch::space
     inline constexpr bool user_available = true;
 #if CONFIG_ROOT_ONLY_BOOT
     inline constexpr vaddr_t user_code = 0x20000000ULL;
-    inline constexpr vaddr_t user_stack_base = 0x20010000ULL;
+    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
 #else
     inline constexpr vaddr_t user_code = 0x10000000ULL;
-    inline constexpr vaddr_t user_stack_base = 0x10010000ULL;
+    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
 #endif
 
     // TTBR0 currently preserves the kernel identity block at 0x40000000.
@@ -34,6 +34,8 @@ namespace sys::arch::space
     extern "C" char sys_arm64_memory_client_image_end[];
     extern "C" char sys_arm64_control_plane_image_start[];
     extern "C" char sys_arm64_control_plane_image_end[];
+    extern "C" char sys_arm64_domain_manager_image_start[];
+    extern "C" char sys_arm64_domain_manager_image_end[];
 
     inline constexpr word_t memory_server_image_role = 0x100U;
     inline constexpr word_t pager_client_image_role_base = 0x101U;
@@ -42,6 +44,7 @@ namespace sys::arch::space
     inline constexpr word_t ipc_lifecycle_client_role_base = 0x110U;
     inline constexpr word_t control_plane_image_role_base = 0x200U;
     inline constexpr word_t control_plane_image_role_count = 5U;
+    inline constexpr word_t domain_manager_image_role = 0x203U;
 
     struct image_view {
         char* start;
@@ -65,7 +68,11 @@ namespace sys::arch::space
             return {sys_arm64_memory_client_image_start, sys_arm64_memory_client_image_end};
         if (role >= control_plane_image_role_base &&
             role < control_plane_image_role_base + control_plane_image_role_count)
-            return {sys_arm64_control_plane_image_start, sys_arm64_control_plane_image_end};
+            return role == domain_manager_image_role
+                       ? image_view{sys_arm64_domain_manager_image_start,
+                                    sys_arm64_domain_manager_image_end}
+                       : image_view{sys_arm64_control_plane_image_start,
+                                    sys_arm64_control_plane_image_end};
         return {sys_arm64_user_image_start, sys_arm64_user_image_end};
     }
 
