@@ -81,8 +81,7 @@ namespace sys::root_graph
             const auto& dev = manifest.devices[index];
             const capability_id_t frame = device_frame_base + index;
             const capability_id_t domain_frame = domain_device_frame_base + index;
-            if (control(abi::v1::control_operation::device_frame_create, frame, dev.ipa) !=
-                success)
+            if (control(abi::v1::control_operation::device_frame_create, frame, dev.ipa) != success)
                 return false;
             if (control(abi::v1::control_operation::capability_mint, domain_task, domain_frame,
                         frame, read_write) != success)
@@ -155,11 +154,11 @@ namespace sys::root_graph
         const word_t attrs = abi::v1::encode_mapping_attributes(
             abi::v1::memory_type::device, abi::v1::memory_shareability::non_shareable);
         if (control(abi::v1::control_operation::map_frame, self_space_selector,
-                    earlyfs_frame_selector, earlyfs_scratch_address, read_only,
-                    attrs) != success)
+                    earlyfs_frame_selector, earlyfs_scratch_address, read_only, attrs) != success)
             return false;
 
-        const auto* page = reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
+        const auto* page =
+            reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
         constexpr usize_t directory_bound = 4096U; // one page: header + directory always fit here
 
         const role_image_entry bindings[] = {

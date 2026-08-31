@@ -13,14 +13,18 @@
 #endif
 #if CONFIG_SELFTEST
 #include <sys/kernel/tests/capability/derivation.hh>
+#include <sys/kernel/tests/capability/scale.hh>
 #include <sys/kernel/tests/capability/selector.hh>
 #include <sys/kernel/tests/earlyfs/directory.hh>
 #include <sys/kernel/tests/earlyfs/role_binding.hh>
 #include <sys/kernel/tests/elf64/dynamic_loader.hh>
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
+#include <sys/kernel/tests/memory/physical_region_layout.hh>
 #include <sys/kernel/tests/object/generation.hh>
+#include <sys/kernel/tests/scheduling/donation.hh>
 #include <sys/kernel/tests/scheduling/sporadic.hh>
+#include <sys/kernel/tests/space/asid_rollover.hh>
 #endif
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/bootstrap.hh>
@@ -680,6 +684,28 @@ namespace sys::kernel::thread
     }
 
 #if CONFIG_SELFTEST
+} // namespace sys::kernel::thread
+
+/*
+ * Unlike the other tests/ includes at the top of this file, these two
+ * depend on sys::kernel::thread-internal symbols (user_threads[],
+ * store_state(), current_user_thread[], etc.) declared earlier in this same
+ * file -- they must be included here, after those declarations, not at the
+ * top. See each file's own header comment. Also: this #include must sit
+ * OUTSIDE the sys::kernel::thread namespace block (hence closing and
+ * reopening it here) -- included while still lexically nested inside it,
+ * the file's own `namespace sys::kernel::tests::fault_lifecycle { }` would
+ * bind as a nested member of sys::kernel::thread instead of reopening the
+ * real top-level sys::kernel::tests::fault_lifecycle, and unqualified
+ * `thread::` inside it would then resolve to the sys::kernel::thread::thread
+ * *struct* (a member of the namespace it got nested under) rather than the
+ * sys::kernel::thread namespace itself.
+ */
+#include <sys/kernel/tests/fault/lifecycle.hh>
+#include <sys/kernel/tests/hardening/boot_checks.hh>
+
+namespace sys::kernel::thread
+{
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
         if (tests::scheduling::run_sporadic_server() != error_t::success)
             return error_t::invalid_argument;
@@ -694,76 +720,15 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
         if (!memory::verify_page_reuse_scrubbing())
             return error_t::invalid_argument;
-        const u64 asid_rollovers_before = arch::space::asid::rollovers;
-        const u32 asid_generation_before = arch::space::asid::generation;
-        for (u32 iteration = 0U; iteration < arch::space::asid::capacity + 4U; ++iteration) {
-            arch::space::asid::handle probe{};
-            if (arch::space::asid::allocate(probe) != error_t::success)
-                return error_t::invalid_argument;
-            arch::space::asid::release(probe);
-        }
-        arch::space::asid::handle root_asid{user_threads[0].address_space.native.asid,
-                                            user_threads[0].address_space.native.asid_generation};
-        if (arch::space::asid::refresh(root_asid) != error_t::success ||
-            arch::space::asid::rollovers <= asid_rollovers_before ||
-            arch::space::asid::generation == asid_generation_before)
+        if (tests::space::run_rollover_reuse(user_threads[0]) != error_t::success)
             return error_t::invalid_argument;
-        user_threads[0].address_space.native.asid = root_asid.value;
-        user_threads[0].address_space.native.asid_generation = root_asid.generation;
-        pr_info("[TEST] name=asid_rollover_reuse result=PASS generation=%u rollovers=%llu\n",
-                static_cast<unsigned int>(root_asid.generation),
-                static_cast<unsigned long long>(arch::space::asid::rollovers));
-        if (memory::physical_region_count == 0U ||
-            memory::physical_region_count > memory::maximum_physical_regions ||
-            memory::managed_pages == 0U || memory::free_pages >= memory::managed_pages)
+        if (tests::physical_memory::run_layout_check() != error_t::success)
             return error_t::invalid_argument;
-        u64 discovered_pages{};
-        for (u32 index = 0U; index < memory::physical_region_count; ++index) {
-            const auto& region = memory::physical_regions[index];
-            if (!region.allocatable || region.pages == 0U ||
-                (region.base & (memory::page_size - 1U)) != 0U ||
-                region.bitmap_offset != discovered_pages)
-                return error_t::invalid_argument;
-            if (index != 0U) {
-                const auto& previous = memory::physical_regions[index - 1U];
-                const paddr_t previous_end =
-                    previous.base + static_cast<paddr_t>(previous.pages) * memory::page_size;
-                if (previous_end > region.base)
-                    return error_t::invalid_argument;
-            }
-            discovered_pages += region.pages;
-        }
-        if (discovered_pages != memory::managed_pages ||
-            boot::root_bootinfo.memory_region_count != memory::physical_region_count ||
-            boot::root_bootinfo.memory_total_pages != memory::managed_pages ||
-            boot::root_bootinfo.memory_page_size != memory::page_size)
-            return error_t::invalid_argument;
-
-        constexpr vaddr_t scratch_mapping_address = arch::space::user_code + 0x8000ULL;
-        constexpr vaddr_t dynamic_mapping_address = arch::space::user_code + 0x9000ULL;
-        static_assert(dynamic_mapping_address < arch::space::user_stack_base);
 
         task::task& root = user_tasks[0];
-        error_t result = capability::copy(root.cspace, 16U, root.cspace, 10U,
-                                          capability::rights(capability::right_t::write));
+        error_t result = tests::capability_scale::run_basic_lifecycle(root);
         if (result != error_t::success)
             return result;
-        result = capability::move(root.cspace, 17U, root.cspace, 16U);
-        if (result != error_t::success)
-            return result;
-        result = capability::delete_capability(root.cspace, 17U);
-        if (result != error_t::success)
-            return result;
-        result = capability::mint(root.cspace, 18U, root.cspace, 10U,
-                                  capability::rights(capability::right_t::write), 0x5aU);
-        if (result != error_t::success)
-            return result;
-        const capability::derivation_id_t root_derivation =
-            capability::slot_at(root.cspace, 10U).derivation;
-        if (capability::revoke_descendants(root_derivation) != 1U ||
-            capability::slot_at(root.cspace, 18U).object.type != object::type_t::none ||
-            capability::slot_at(root.cspace, 10U).object.type == object::type_t::none)
-            return error_t::invalid_argument;
 
         result = tests::capability_derivation::run_derivation_generation_aba(root);
         if (result != error_t::success)
@@ -785,109 +750,16 @@ namespace sys::kernel::thread
             return result;
 
         static capability::cspace_t guarded_cspace{};
-        static capability_id_t scalable_selectors[193]{};
-        capability::initialize(guarded_cspace);
-        result = capability::set_guard(guarded_cspace, 0x5aU);
+        result = tests::capability_scale::run_guarded_scale_and_fuzz(root, guarded_cspace);
         if (result != error_t::success)
             return result;
-        for (u32 index = 0U; index < 193U; ++index) {
-            result = capability::allocate_slot(guarded_cspace, scalable_selectors[index]);
-            if (result != error_t::success)
-                return result;
-            result = capability::copy(guarded_cspace, scalable_selectors[index], root.cspace, 10U,
-                                      capability::rights(capability::right_t::write));
-            if (result != error_t::success)
-                return result;
-        }
-        object::header_t* guarded_result = nullptr;
-        result =
-            capability::lookup(guarded_cspace, scalable_selectors[192U], object::type_t::endpoint,
-                               capability::right_t::write, guarded_result);
-        if (result != error_t::success || guarded_result == nullptr ||
-            capability::lookup(guarded_cspace, capability::encode_selector(0x5bU, 192U),
-                               object::type_t::endpoint, capability::right_t::write,
-                               guarded_result) != error_t::not_found)
-            return error_t::invalid_argument;
-        if (capability::revoke_descendants(root_derivation) != 193U)
-            return error_t::invalid_argument;
-        for (u32 leaf = 0U; leaf < capability::cspace_leaf_count; ++leaf) {
-            if (guarded_cspace.leaves[leaf].occupied != 0U)
-                return error_t::invalid_argument;
-        }
-        u32 transfer_fuzz_state = 0x7f4a7c15U;
-        for (u32 operation = 0U; operation < 4096U; ++operation) {
-            transfer_fuzz_state ^= transfer_fuzz_state << 13U;
-            transfer_fuzz_state ^= transfer_fuzz_state >> 17U;
-            transfer_fuzz_state ^= transfer_fuzz_state << 5U;
-            capability_id_t destination{};
-            result = capability::allocate_slot(guarded_cspace, destination);
-            if (result != error_t::success)
-                return result;
-            const capability::right_t selected_right = (transfer_fuzz_state & 1U) != 0U
-                                                           ? capability::right_t::read
-                                                           : capability::right_t::write;
-            result = capability::copy(guarded_cspace, destination, root.cspace, 10U,
-                                      capability::rights(selected_right));
-            if (result != error_t::success)
-                return result;
-            guarded_result = nullptr;
-            result = capability::lookup(guarded_cspace, destination, object::type_t::endpoint,
-                                        selected_right, guarded_result);
-            if (result != error_t::success || guarded_result == nullptr)
-                return error_t::invalid_argument;
-            if ((operation & 31U) == 0U &&
-                capability::lookup(
-                    guarded_cspace,
-                    capability::encode_selector(0xa5U, static_cast<u32>(destination) &
-                                                           (capability::cspace_slot_count - 1U)),
-                    object::type_t::endpoint, selected_right, guarded_result) != error_t::not_found)
-                return error_t::invalid_argument;
-            result = capability::delete_capability(guarded_cspace, destination);
-            if (result != error_t::success)
-                return result;
-        }
-        pr_info("[TEST] name=guarded_cspace_scale result=PASS slots=193 leaves=4 guard=5a\n");
-        pr_info("[TEST] name=cross_cspace_transfer_fuzz result=PASS operations=4096\n");
 
-        scheduling::context donation_caller{};
-        scheduling::context donation_middle{};
-        scheduling::context donation_server{};
-        scheduling::initialize(donation_caller, 0U);
-        scheduling::initialize(donation_middle, 0U);
-        scheduling::initialize(donation_server, 0U);
-        result = scheduling::configure(donation_caller, 240U, 10U, 20U, 0U, 0U);
-        if (result == error_t::success)
-            result = scheduling::configure(donation_middle, 80U, 5U, 20U, 0U, 0U);
-        if (result == error_t::success)
-            result = scheduling::configure(donation_server, 20U, 4U, 20U, 0U, 0U);
-        if (result != error_t::success || !scheduling::charge(donation_caller, 2U) ||
-            scheduling::donate(donation_middle, donation_caller) != error_t::success ||
-            donation_middle.effective_priority != 240U || donation_middle.donated_ticks != 8U ||
-            !scheduling::charge(donation_middle, 3U) ||
-            scheduling::donate(donation_server, donation_middle) != error_t::success ||
-            donation_server.donation_depth != 2U || donation_server.effective_priority != 240U ||
-            donation_server.donated_ticks != 10U || !scheduling::charge(donation_server, 4U))
-            return error_t::invalid_argument;
-        scheduling::revoke_donation(donation_server, donation_middle);
-        scheduling::revoke_donation(donation_middle, donation_caller);
-        donation_middle.donation_depth = scheduling::maximum_donation_depth;
-        if (donation_caller.donated_ticks != 6U ||
-            scheduling::donate(donation_server, donation_middle) != error_t::busy ||
-            !scheduling::eligible(donation_caller, 0U) || !scheduling::charge(donation_caller, 6U))
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=scheduling_context_donation result=PASS depth=2 returned=6\n");
-        pr_info("[TEST] name=priority_inheritance result=PASS inherited=240 base=20\n");
-        pr_info("[TEST] name=donation_chain_bound result=PASS maximum=8\n");
-
-        if (lock_order::violation_count() != 0U)
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=lock_hold_measurement result=PASS max_ticks=%llu\n",
-                static_cast<unsigned long long>(lock_order::maximum_hold()));
-        pr_info("[METRIC] name=irq_disabled_duration max_ticks=%llu reference_ticks=%llu "
-                "samples=%llu\n",
-                static_cast<unsigned long long>(interrupt::timing::maximum()),
-                static_cast<unsigned long long>(interrupt::timing::target_ticks()),
-                static_cast<unsigned long long>(interrupt::timing::sample_count()));
+        result = tests::scheduling::run_donation_chain();
+        if (result != error_t::success)
+            return result;
+        result = tests::scheduling::run_lock_order_check();
+        if (result != error_t::success)
+            return result;
 
         result = tests::interrupt::run(root, guarded_cspace);
         if (result != error_t::success)
@@ -896,186 +768,9 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
 
-        result =
-            memory::map(user_threads[0].address_space, memory::frames[0], scratch_mapping_address,
-                        static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                                        static_cast<u8>(memory::permission::write)),
-                        0U, 0U);
+        result = tests::fault_lifecycle::run(root);
         if (result != error_t::success)
             return result;
-        result = memory::unmap(user_threads[0].address_space, memory::frames[0]);
-        if (result != error_t::success)
-            return result;
-
-        const paddr_t old_page = memory::frames[3].physical_address;
-        auto* old_words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(old_page));
-        old_words[0] = 0xa5a55a5af00dcafeULL;
-        result = memory::release_frame(memory::frames[3]);
-        if (result != error_t::success)
-            return result;
-        result = memory::assign_frame(memory::frames[3], root.address_space_id);
-        if (result != error_t::success || memory::frames[3].physical_address != old_page)
-            return error_t::invalid_argument;
-        const auto* new_words = reinterpret_cast<const volatile u64*>(
-            static_cast<uintptr_t>(memory::frames[3].physical_address));
-        if (new_words[0] != 0U)
-            return error_t::invalid_argument;
-
-        const u32 owned_before = root.memory_pages_owned;
-        result = memory::create_frame(root, 18U);
-        if (result != error_t::success || root.memory_pages_owned != owned_before + 1U)
-            return error_t::invalid_argument;
-        object::header_t* dynamic_header = nullptr;
-        result = capability::lookup(root.cspace, 18U, object::type_t::frame,
-                                    capability::right_t::control, dynamic_header);
-        if (result != error_t::success || dynamic_header == nullptr)
-            return error_t::invalid_argument;
-        auto& dynamic_frame = *reinterpret_cast<memory::frame*>(dynamic_header);
-        result =
-            memory::map(user_threads[0].address_space, dynamic_frame, dynamic_mapping_address,
-                        static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                                        static_cast<u8>(memory::permission::write)),
-                        0U, 0U);
-        if (result != error_t::success)
-            return result;
-        if (memory::destroy_frame(root, 18U) != error_t::busy)
-            return error_t::invalid_argument;
-        result = memory::unmap(user_threads[0].address_space, dynamic_frame);
-        if (result != error_t::success)
-            return result;
-        result = memory::destroy_frame(root, 18U);
-        if (result != error_t::success || root.memory_pages_owned != owned_before)
-            return error_t::invalid_argument;
-
-        result = memory::create_page_table(root, 19U, 3U);
-        if (result != error_t::success || root.memory_pages_owned != owned_before + 1U)
-            return error_t::invalid_argument;
-        result = memory::destroy_page_table(root, 19U);
-        if (result != error_t::success || root.memory_pages_owned != owned_before)
-            return error_t::invalid_argument;
-        const u32 pages_before_pager = root.memory_pages_owned;
-        result = create_user_bundle(root, 1U, fault_client_role, 20U, 21U, 22U);
-        if (result != error_t::success)
-            return result;
-        object::header_t* pager_target_header = nullptr;
-        result = capability::lookup(root.cspace, 20U, object::type_t::thread,
-                                    capability::right_t::control, pager_target_header);
-        if (result != error_t::success || pager_target_header == nullptr)
-            return error_t::invalid_argument;
-        auto& pager_target = *reinterpret_cast<thread*>(pager_target_header);
-        result = memory::create_frame(root, 23U);
-        if (result != error_t::success)
-            return result;
-        object::header_t* pager_frame_header = nullptr;
-        result = capability::lookup(root.cspace, 23U, object::type_t::frame,
-                                    capability::right_t::control, pager_frame_header);
-        if (result != error_t::success || pager_frame_header == nullptr)
-            return error_t::invalid_argument;
-        auto& pager_frame = *reinterpret_cast<memory::frame*>(pager_frame_header);
-        pager_target.last_fault = {fault::kind::data_abort,
-                                   pager_target.id,
-                                   pager_target.object.generation,
-                                   0x96000044U,
-                                   (arch::space::user_code + 0x4000ULL),
-                                   pager_target.context.instruction_pointer};
-        pager_target.fault_disposition = fault::disposition::pending;
-        pager_target.waiting_endpoint = 10U;
-        store_state(pager_target, state::blocked_fault);
-        result = resolve_fault_with_frame(
-            user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x5000ULL,
-            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                            static_cast<u8>(memory::permission::write)));
-        if (result != error_t::invalid_argument ||
-            load_state(pager_target) != state::blocked_fault ||
-            pager_target.fault_disposition != fault::disposition::pending ||
-            pager_frame.mapping_count != 0U)
-            return error_t::invalid_argument;
-        result =
-            resolve_fault_with_frame(user_threads[0], pager_target, pager_frame,
-                                     arch::space::user_code + 0x4000ULL, memory::permission::read);
-        if (result != error_t::denied || load_state(pager_target) != state::blocked_fault ||
-            pager_target.fault_disposition != fault::disposition::pending ||
-            pager_frame.mapping_count != 0U)
-            return error_t::invalid_argument;
-        result = resolve_fault_with_frame(
-            user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x4000ULL,
-            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                            static_cast<u8>(memory::permission::write)));
-        if (result != error_t::success || load_state(pager_target) != state::ready ||
-            pager_target.fault_disposition != fault::disposition::resume ||
-            pager_frame.mapping_count != 1U)
-            return error_t::invalid_argument;
-        pager_target.last_fault = {fault::kind::data_abort,
-                                   pager_target.id,
-                                   pager_target.object.generation,
-                                   0x96000004U,
-                                   (arch::space::user_code + 0x4000ULL),
-                                   pager_target.context.instruction_pointer};
-        pager_target.fault_disposition = fault::disposition::pending;
-        pager_target.waiting_endpoint = 10U;
-        store_state(pager_target, state::blocked_fault);
-        result = resolve_fault_with_frame(
-            user_threads[0], pager_target, pager_frame, arch::space::user_code + 0x4000ULL,
-            static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
-                                            static_cast<u8>(memory::permission::write)));
-        if (result != error_t::success || load_state(pager_target) != state::ready ||
-            pager_frame.mapping_count != 1U)
-            return error_t::invalid_argument;
-        pager_target.last_fault = {fault::kind::data_abort,
-                                   pager_target.id,
-                                   pager_target.object.generation,
-                                   0x96000004U,
-                                   (arch::space::user_code + 0x5000ULL),
-                                   pager_target.context.instruction_pointer};
-        pager_target.fault_disposition = fault::disposition::pending;
-        if (deliver_fault_ipc(pager_target, pager_target.context, 0x96000004U,
-                              arch::space::user_code + 0x5000ULL, fault::kind::data_abort) ||
-            load_state(pager_target) != state::ready)
-            return error_t::invalid_argument;
-        pager_target.last_fault = {fault::kind::data_abort,
-                                   pager_target.id,
-                                   pager_target.object.generation,
-                                   0x96000004U,
-                                   (arch::space::user_code + 0x6000ULL),
-                                   pager_target.context.instruction_pointer};
-        pager_target.fault_disposition = fault::disposition::pending;
-        pager_target.waiting_endpoint = 10U;
-        pager_target.ipc_timeout_active = true;
-        pager_target.ipc_deadline = 1U;
-        store_state(pager_target, state::blocked_fault);
-        arm_ipc_timeout(pager_target);
-        if (timeout_queue_counts[pager_target.pinned_cpu] != 1U ||
-            timeout_queues[pager_target.pinned_cpu][0].deadline != 1U)
-            return error_t::invalid_argument;
-        expire_ipc_timeouts(pager_target.pinned_cpu, 2U);
-        if (load_state(pager_target) != state::terminated ||
-            pager_target.fault_disposition != fault::disposition::terminate ||
-            pager_target.ipc_timeout_active)
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=same_page_fault_serialization result=PASS mappings=1\n");
-        pr_info("[TEST] name=pager_invalid_reply result=PASS wrong_page=reject write_ro=reject\n");
-        pr_info("[TEST] name=nested_fault_bound result=PASS depth=1\n");
-        pr_info("[TEST] name=pager_timeout_death result=PASS disposition=terminate\n");
-        pr_info("[TEST] name=timeout_queue_order result=PASS expired=1 remaining=0\n");
-        result = memory::unmap(pager_target.address_space, pager_frame,
-                               arch::space::user_code + 0x4000ULL);
-        if (result != error_t::success)
-            return result;
-        result = memory::destroy_frame(root, 23U);
-        if (result != error_t::success)
-            return result;
-        store_state(pager_target, state::suspended);
-        result = destroy_user_bundle(root, 20U, 21U, 22U);
-        if (result != error_t::success || root.memory_pages_owned != pages_before_pager)
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=pager_fault_reply result=PASS address=%llx\n",
-                static_cast<unsigned long long>(arch::space::user_code + 0x4000ULL));
-
-        pr_info("[TEST] name=dynamic_memory_objects result=PASS free=%u managed=%u\n",
-                static_cast<unsigned int>(memory::free_pages),
-                static_cast<unsigned int>(memory::managed_pages));
-        if (!memory::mapping_database_valid())
-            return error_t::invalid_argument;
 
         notification::signal(bootstrap::root_notification, 1U);
         if (notification::consume(bootstrap::root_notification) != 1U)
@@ -1089,36 +784,12 @@ namespace sys::kernel::thread
                     static_cast<unsigned long long>(hypervisor::test::operations),
                     static_cast<unsigned long long>(hypervisor::test::failures_total));
         }
-        const auto& root_space = user_threads[0].address_space.native;
-        if (!user_access::valid_range(root_space, arch::space::user_code, 4U, false) ||
-            user_access::valid_range(root_space, arch::space::user_code, 4U, true) ||
-            !user_access::valid_range(root_space, arch::space::user_stack_base, 16U, true) ||
-            user_access::valid_range(root_space, arch::space::kernel_identity_base - 1U, 2U,
-                                     false) ||
-            user_access::valid_range(root_space, ~static_cast<vaddr_t>(0U) - 1U, 4U, false) ||
-            user_access::valid_range(root_space, arch::space::user_image_end() + 0x1000U, 16U,
-                                     false) ||
-            classify_user_fault(0x00U) != fault::kind::instruction_abort ||
-            classify_user_fault(0x24U) != fault::kind::data_abort ||
-            classify_user_fault(0x3fU) != fault::kind::none ||
-            !arch::hardening::inventory_valid(arch::smp::online_count()))
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=user_range_and_arm_hardening result=PASS\n");
-        const cpu_id_t panic_cpu = arch::cpu::current_id();
-        const u32 saved_current = current_user_thread[panic_cpu];
-        const u32 saved_printk_lock = ::sys::printk::raw_lock;
-        current_user_thread[panic_cpu] = user_thread_count + 1U;
-        ::sys::printk::raw_lock = 1U;
-        panic::capture(panic::reason::internal_failure, 1U, 0xf0U, 0xdeadU, 0xbeefU, 0xcafef00dU);
-        ::sys::printk::raw_lock = saved_printk_lock;
-        current_user_thread[panic_cpu] = saved_current;
-        if (!emergency::crash_valid() || emergency::preserved_crash.level != 1U ||
-            emergency::preserved_crash.vector != 0xf0U ||
-            emergency::preserved_crash.syndrome != 0xdeadU ||
-            emergency::preserved_crash.fault_address != 0xbeefU ||
-            emergency::preserved_crash.instruction_pointer != 0xcafef00dU)
-            return error_t::invalid_argument;
-        pr_info("[TEST] name=scheduler_independent_panic result=PASS\n");
+        result = tests::hardening::run_user_range_and_arch_check();
+        if (result != error_t::success)
+            return result;
+        result = tests::hardening::run_independent_panic_check();
+        if (result != error_t::success)
+            return result;
         return error_t::success;
     }
 #endif
