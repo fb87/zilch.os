@@ -145,4 +145,120 @@ namespace sys::arch::space::elf64
             return {};
         return {error_t::success, elf->entry, highest_page};
     }
+
+    using page_allocate_fn = error_t (*)(paddr_t&) noexcept;
+    using page_release_fn = error_t (*)(paddr_t) noexcept;
+
+    /*
+     * Same validation and semantics as load(), but segment bytes land in
+     * individually allocated physical pages (via the caller-supplied
+     * allocator) instead of one fixed 256 KiB scratch buffer embedded in
+     * every address-space slot. Only pages a segment actually touches get
+     * allocated. Kept as a separate function -- not a load() rewrite -- so
+     * the existing, already-proven path is untouched; see
+     * tests/include/sys/kernel/tests/elf64/dynamic_loader.hh for the
+     * differential self-test that checks this produces identical results
+     * to load() for every real image this kernel boots.
+     *
+     * No dependency on sys::kernel::memory is introduced here deliberately
+     * (elf64.hh has none today): the allocator/releaser are passed in by
+     * the caller, which already has that dependency.
+     */
+    [[nodiscard]] inline result load_dynamic(const u8* image, usize_t image_size, vaddr_t base,
+                                             paddr_t (&backing)[bootstrap_pages],
+                                             page_permissions (&permissions)[bootstrap_pages],
+                                             page_allocate_fn allocate_page,
+                                             page_release_fn release_page) noexcept {
+        for (usize_t index = 0U; index < bootstrap_pages; ++index) {
+            backing[index] = 0U;
+            permissions[index] = {};
+        }
+
+        const auto fail = [&]() noexcept -> result {
+            for (usize_t index = 0U; index < bootstrap_pages; ++index) {
+                if (backing[index] != 0U) {
+                    release_page(backing[index]);
+                    backing[index] = 0U;
+                }
+            }
+            for (usize_t index = 0U; index < bootstrap_pages; ++index)
+                permissions[index] = {};
+            return {};
+        };
+
+        if (image == nullptr || image_size < sizeof(header))
+            return fail();
+        const auto* elf = reinterpret_cast<const header*>(image);
+        if (!valid_header(*elf))
+            return fail();
+        if (add_overflows(elf->program_offset,
+                          static_cast<u64>(elf->program_count) * sizeof(program_header)))
+            return fail();
+        const u64 program_end =
+            elf->program_offset + static_cast<u64>(elf->program_count) * sizeof(program_header);
+        if (program_end > image_size)
+            return fail();
+
+        bool entry_executable = false;
+        usize_t highest_page = 0U;
+        for (u16 index = 0U; index < elf->program_count; ++index) {
+            const u64 location =
+                elf->program_offset + static_cast<u64>(index) * sizeof(program_header);
+            const auto* segment =
+                reinterpret_cast<const program_header*>(image + static_cast<usize_t>(location));
+            if (segment->type != program_type_load)
+                continue;
+            if (segment->file_size > segment->memory_size ||
+                add_overflows(segment->offset, segment->file_size) ||
+                segment->offset + segment->file_size > image_size ||
+                add_overflows(segment->virtual_address, segment->memory_size))
+                return fail();
+            if (segment->alignment != 0U && segment->alignment != 1U &&
+                segment->alignment != memory::page_size)
+                return fail();
+            if (segment->alignment == memory::page_size &&
+                ((segment->virtual_address - segment->offset) & (memory::page_size - 1U)) != 0U)
+                return fail();
+            if ((segment->flags & program_flag_write) != 0U &&
+                (segment->flags & program_flag_execute) != 0U)
+                return fail();
+            if (segment->virtual_address < base)
+                return fail();
+            const u64 relative = segment->virtual_address - base;
+            if (relative > bootstrap_size || segment->memory_size > bootstrap_size - relative)
+                return fail();
+
+            const u64 segment_end = relative + segment->memory_size;
+            const usize_t first_page = static_cast<usize_t>(relative / memory::page_size);
+            const usize_t end_page =
+                static_cast<usize_t>((segment_end + memory::page_size - 1U) / memory::page_size);
+            if (end_page > bootstrap_pages)
+                return fail();
+            for (usize_t page = first_page; page < end_page; ++page) {
+                if (permissions[page].present)
+                    return fail();
+                permissions[page].present = true;
+                permissions[page].writable = (segment->flags & program_flag_write) != 0U;
+                permissions[page].executable = (segment->flags & program_flag_execute) != 0U;
+                if (backing[page] == 0U && allocate_page(backing[page]) != error_t::success)
+                    return fail();
+            }
+            for (u64 byte = 0U; byte < segment->file_size; ++byte) {
+                const u64 destination = relative + byte;
+                auto* target = reinterpret_cast<u8*>(static_cast<uintptr_t>(
+                    backing[static_cast<usize_t>(destination / memory::page_size)]));
+                target[destination % memory::page_size] =
+                    image[static_cast<usize_t>(segment->offset + byte)];
+            }
+            if (end_page > highest_page)
+                highest_page = end_page;
+            if (elf->entry >= segment->virtual_address &&
+                elf->entry < segment->virtual_address + segment->memory_size &&
+                (segment->flags & program_flag_execute) != 0U)
+                entry_executable = true;
+        }
+        if (!entry_executable)
+            return fail();
+        return {error_t::success, elf->entry, highest_page};
+    }
 } // namespace sys::arch::space::elf64

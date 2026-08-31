@@ -5,6 +5,7 @@
 #include <sys/arch/thread/context.hh>
 #include <sys/kernel/fault/fault.hh>
 #include <sys/kernel/lock/order.hh>
+#include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/object.hh>
 #include <sys/kernel/scheduling/context.hh>
 #include <sys/kernel/space/address_space.hh>
@@ -167,8 +168,9 @@ namespace sys::kernel::thread
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
         __atomic_store_n(&value.executing, false, __ATOMIC_RELAXED);
-        const error_t space_result =
-            value.address_space.initialize(static_cast<space_id_t>(id), argument0);
+        const error_t space_result = value.address_space.initialize(
+            static_cast<space_id_t>(id), argument0, &memory::allocate_physical_page,
+            &memory::release_physical_page);
         if (space_result != error_t::success)
             return space_result;
         arch::thread::initialize_user(value.context, arch::space::entry(value.address_space.native),

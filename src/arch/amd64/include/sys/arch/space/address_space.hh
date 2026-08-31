@@ -22,12 +22,17 @@ namespace sys::arch::space
     struct address_space {
         memory::table_t l3{};
     };
-    [[nodiscard]] inline error_t initialize(address_space&, word_t) noexcept {
+    // Matches sys::arch::space::elf64::page_allocate_fn/page_release_fn on
+    // arm64; amd64 has no ELF loader to feed them to yet.
+    using page_allocate_fn = error_t (*)(paddr_t&) noexcept;
+    using page_release_fn = error_t (*)(paddr_t) noexcept;
+    [[nodiscard]] inline error_t initialize(address_space&, word_t, page_allocate_fn,
+                                            page_release_fn) noexcept {
         return error_t::unsupported;
     }
     inline void activate(address_space&) noexcept {}
     inline void activate_kernel() noexcept {}
-    inline void release(address_space&) noexcept {}
+    inline void release(address_space&, page_release_fn) noexcept {}
     inline void invalidate_asid(u16) noexcept {}
     inline error_t map_page(address_space&, vaddr_t, void*, bool, bool, bool, bool) noexcept {
         return error_t::unsupported;

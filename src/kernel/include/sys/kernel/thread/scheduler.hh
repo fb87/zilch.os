@@ -15,6 +15,7 @@
 #include <sys/kernel/tests/capability/derivation.hh>
 #include <sys/kernel/tests/capability/selector.hh>
 #include <sys/kernel/tests/earlyfs/directory.hh>
+#include <sys/kernel/tests/elf64/dynamic_loader.hh>
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
 #include <sys/kernel/tests/object/generation.hh>
@@ -382,7 +383,7 @@ namespace sys::kernel::thread
     }
 
     inline void clear_user_bundle(thread& target, task::task& owner) noexcept {
-        target.address_space.release();
+        target.address_space.release(&memory::release_physical_page);
         arch::thread::clear(target.context);
         for (usize_t index = 0U; index < 4U; ++index) {
             target.message[index] = 0U;
@@ -773,6 +774,9 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
         result = tests::earlyfs::run_directory_scan();
+        if (result != error_t::success)
+            return result;
+        result = tests::elf64_dynamic_loader::run_differential_check();
         if (result != error_t::success)
             return result;
 

@@ -159,12 +159,18 @@ namespace sys::arch::space
         __asm__ volatile("dsb ish\n\tisb" : : : "memory");
     }
 
+    // Re-exported so generic kernel code (sys::kernel::space::address_space)
+    // can name these without knowing they're arm64's elf64 loader's types --
+    // amd64 provides the same two names directly under sys::arch::space.
+    using page_allocate_fn = elf64::page_allocate_fn;
+    using page_release_fn = elf64::page_release_fn;
+
     struct address_space {
         memory::table_t l0{};
         memory::table_t l1{};
         memory::table_t l2{};
         memory::table_t l3{};
-        alignas(memory::page_size) u8 image_storage[elf64::bootstrap_size]{};
+        paddr_t image_backing[elf64::bootstrap_pages]{};
         elf64::page_permissions image_permissions[elf64::bootstrap_pages]{};
         alignas(memory::page_size) u8 stack[memory::page_size]{};
         vaddr_t image_entry{user_code};
@@ -174,7 +180,28 @@ namespace sys::arch::space
         volatile u32 active_cpu_mask{};
     };
 
-    [[nodiscard]] inline error_t initialize(address_space& value, word_t role) noexcept {
+    /*
+     * Releases any physical pages this slot's ELF image currently holds.
+     * Bootstrap slots are reused across many process create/destroy cycles
+     * (see the reuse note in activate() below), so this runs both when a
+     * slot is torn down (release()) and defensively before a reused slot
+     * loads a new image (initialize()) -- without it, dynamic frame-backed
+     * loading would leak one physical page per slot per reuse.
+     */
+    inline void release_image_backing(address_space& value, elf64::page_release_fn release_page) noexcept {
+        for (usize_t page = 0U; page < elf64::bootstrap_pages; ++page) {
+            if (value.image_backing[page] != 0U) {
+                (void)release_page(value.image_backing[page]);
+                value.image_backing[page] = 0U;
+            }
+        }
+    }
+
+    [[nodiscard]] inline error_t initialize(address_space& value, word_t role,
+                                            elf64::page_allocate_fn allocate_page,
+                                            elf64::page_release_fn release_page) noexcept {
+        release_image_backing(value, release_page);
+
         asid::handle identifier{};
         const error_t asid_result = asid::allocate(identifier);
         if (asid_result != error_t::success)
@@ -189,23 +216,23 @@ namespace sys::arch::space
 
         const image_view image = image_for_role(role);
         const usize_t image_size = static_cast<usize_t>(image.end - image.start);
-        const elf64::result loaded =
-            elf64::load(reinterpret_cast<const u8*>(image.start), image_size, user_code,
-                        value.image_storage, value.image_permissions);
+        const elf64::result loaded = elf64::load_dynamic(
+            reinterpret_cast<const u8*>(image.start), image_size, user_code, value.image_backing,
+            value.image_permissions, allocate_page, release_page);
         value.image_status = loaded.status;
         value.image_entry = loaded.entry;
         if (loaded.status == error_t::success) {
-            synchronize_instruction_cache(value.image_storage, elf64::bootstrap_size);
             const usize_t first_index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
             for (usize_t page = 0U; page < elf64::bootstrap_pages; ++page) {
                 const auto permission = value.image_permissions[page];
                 if (!permission.present)
                     continue;
-                u64 descriptor =
-                    (reinterpret_cast<u64>(&value.image_storage[page * memory::page_size]) &
-                     ~0xfffULL) |
-                    memory::descriptor_page | memory::access_flag | memory::inner_shareable |
-                    memory::attr_normal;
+                auto* page_address = reinterpret_cast<void*>(
+                    static_cast<uintptr_t>(value.image_backing[page]));
+                synchronize_instruction_cache(page_address, memory::page_size);
+                u64 descriptor = (reinterpret_cast<u64>(page_address) & ~0xfffULL) |
+                                 memory::descriptor_page | memory::access_flag |
+                                 memory::inner_shareable | memory::attr_normal;
                 descriptor |= permission.writable ? memory::ap_el0_rw : memory::ap_el0_ro;
                 if (!permission.executable)
                     descriptor |= memory::pxn | memory::uxn;
@@ -274,7 +301,8 @@ namespace sys::arch::space
         memory::activate(reinterpret_cast<paddr_t>(&memory::kernel_l0));
     }
 
-    inline void release(address_space& value) noexcept {
+    inline void release(address_space& value, elf64::page_release_fn release_page) noexcept {
+        release_image_backing(value, release_page);
         asid::handle identifier{value.asid, value.asid_generation};
         asid::release(identifier);
         value.asid = 0U;
