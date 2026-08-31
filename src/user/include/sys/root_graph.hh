@@ -123,7 +123,16 @@ namespace sys::root_graph
      * by the time image_for_role() is consulted for it.
      */
     inline constexpr capability_id_t earlyfs_frame_selector = 90U;
-    inline constexpr word_t earlyfs_scratch_address = 0x20041000U;
+    /*
+     * map_page() only accepts addresses in [user_code, user_stack_base) --
+     * the stack page and anything at or past it are rejected outright, not
+     * just "already occupied". This is one page below user_stack_base
+     * (0x20040000), the same convention domain-manager's own scratch_address
+     * (0x2003f000) uses: inside root's own 256 KiB image region, but past
+     * where root's own (small) ELF segments actually land, so this L3 slot
+     * is free for a one-off scratch mapping.
+     */
+    inline constexpr word_t earlyfs_scratch_address = 0x2003f000U;
     inline constexpr capability_id_t self_space_selector = 3U;
 
     struct role_image_entry final {
@@ -137,8 +146,14 @@ namespace sys::root_graph
             success)
             return false;
         const word_t read_only = static_cast<word_t>(abi::v1::CapabilityRight::read);
+        // create_earlyfs_frame() marks the frame device=true (its physical
+        // address is a fixed kernel-image address, not pool-allocator
+        // backed -- same reason create_device_frame() sets it), and
+        // memory::valid_attributes() requires memory_type::device with
+        // outer/non-shareable for any frame with that flag, regardless of
+        // what the underlying memory actually is.
         const word_t attrs = abi::v1::encode_mapping_attributes(
-            abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
+            abi::v1::memory_type::device, abi::v1::memory_shareability::non_shareable);
         if (control(abi::v1::control_operation::map_frame, self_space_selector,
                     earlyfs_frame_selector, earlyfs_scratch_address, read_only,
                     attrs) != success)

@@ -1028,11 +1028,19 @@ namespace sys::kernel::memory
     /*
      * Mirrors create_device_frame() exactly, but for a page of the kernel's
      * own linked-in earlyfs image instead of an MMIO device page -- lets a
-     * root-privileged task map the image read-only into its own address
-     * space to do its own path-based lookup (see
-     * sys::arch::space::bind_role_image()) instead of the kernel/arch layer
-     * hardcoding which role maps to which binary name. Read-only: earlyfs
-     * is immutable kernel image data, so no write right is ever granted.
+     * root-privileged task map the image into its own address space to do
+     * its own path-based lookup (see sys::arch::space::bind_role_image())
+     * instead of the kernel/arch layer hardcoding which role maps to which
+     * binary name.
+     *
+     * The capability grants `write` because control::map_frame requires
+     * write authority over the frame object for any mapping request,
+     * regardless of what page permission is actually requested (see its
+     * lookup_slot() check) -- this is a gate on "may establish a mapping at
+     * all", not the resulting page's permission. The page itself stays
+     * read-only in practice because the only caller (root_graph.hh) always
+     * requests a read-only mapping; earlyfs is immutable kernel image data
+     * either way.
      */
     [[nodiscard]] inline error_t create_earlyfs_frame(task::task& owner,
                                                       capability_id_t destination,
@@ -1063,6 +1071,7 @@ namespace sys::kernel::memory
             for (auto& mapping : target->mappings)
                 mapping = {};
             const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
+                                              static_cast<u32>(capability::right_t::write) |
                                               static_cast<u32>(capability::right_t::grant) |
                                               static_cast<u32>(capability::right_t::control)};
             result = capability::install(owner.cspace, destination,
