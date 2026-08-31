@@ -131,7 +131,38 @@ namespace
         inline sys::word_t cr{};
         inline bool rx_pending{};
         inline sys::u8 rx_byte{};
+
+        // TX FIFO: DR writes land here instead of forwarding to the
+        // console-server synchronously (one blocking IPC round-trip per
+        // guest register write, which dominated observed serial output
+        // latency -- vPL011 still traps per access, real hardware register
+        // granularity, but the *IPC* cost after each trap doesn't need to
+        // be paid per byte too). tx_buffer holds up to
+        // console_write_max_bytes - 1 data bytes plus room for the NUL
+        // terminator console::write() expects; see flush_console_output().
+        inline constexpr sys::word_t tx_buffer_capacity =
+            sys::abi::v1::console_write_max_bytes - 1U;
+        inline sys::u8 tx_buffer[sys::abi::v1::console_write_max_bytes]{};
+        inline sys::word_t tx_length{};
     } // namespace vpl011
+
+    /*
+     * Flushes any buffered vPL011 TX bytes through the console-server's
+     * existing NUL-terminated string write() op. A literal NUL byte
+     * mid-buffer would truncate the rest of that flush -- guest console
+     * text is never binary, so this matches write()'s own already-
+     * documented truncation behavior rather than adding a new
+     * length-based op just for this. No-op (no IPC call) when nothing is
+     * buffered, so calling it liberally on idle exits is cheap.
+     */
+    inline void flush_console_output() noexcept {
+        if (vpl011::tx_length == 0U)
+            return;
+        vpl011::tx_buffer[vpl011::tx_length] = 0U;
+        (void)sys::console::write(console_endpoint_selector,
+                                  reinterpret_cast<const char*>(vpl011::tx_buffer));
+        vpl011::tx_length = 0U;
+    }
 
     [[nodiscard]] inline constexpr sys::word_t load_error(sys::word_t stage,
                                                            sys::word_t status) noexcept {
@@ -322,8 +353,9 @@ namespace
         switch (offset) {
             case vpl011::offset_dr:
                 if (write) {
-                    (void)sys::console::write_byte(console_endpoint_selector,
-                                                   static_cast<sys::u8>(value));
+                    vpl011::tx_buffer[vpl011::tx_length++] = static_cast<sys::u8>(value);
+                    if (vpl011::tx_length == vpl011::tx_buffer_capacity)
+                        flush_console_output();
                 } else {
                     value = vpl011::rx_pending ? static_cast<sys::word_t>(vpl011::rx_byte) : 0U;
                     vpl011::rx_pending = false;
@@ -606,6 +638,7 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
                         exit.reason == sys::abi::v1::vm_exit_reason::mmio &&
                         handle_vpl011_mmio(exit))
                         continue;
+                    flush_console_output();
                     result0 = exit.status;
                     result1 = static_cast<sys::word_t>(exit.reason);
                     break;
@@ -617,16 +650,39 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             } else {
                 for (;;) {
                     forward_device_irqs();
-                    forward_console_input();
                     const auto& exit = domain.run();
                     if (exit.status == static_cast<sys::word_t>(sys::error_t::success) &&
                         (exit.reason == sys::abi::v1::vm_exit_reason::wait ||
-                         exit.reason == sys::abi::v1::vm_exit_reason::virtual_timer))
+                         exit.reason == sys::abi::v1::vm_exit_reason::virtual_timer)) {
+                        // forward_console_input() is a blocking IPC call to
+                        // the console-server, only cheap when nothing is
+                        // pending; measured at ~2.7x the dominant cost of
+                        // TX throughput when called on every loop iteration
+                        // (as it originally was), since the guest's TX poll
+                        // pattern (read FR, write DR) produces two mmio
+                        // exits per output byte and each one paid this
+                        // call's scheduling cost. Only polling here, on
+                        // genuinely idle exits, keeps RX responsive between
+                        // characters without taxing every register access
+                        // during an active print burst -- the console-
+                        // server and real hardware FIFO both cushion a few
+                        // bytes typed while the guest is mid-output, so
+                        // this doesn't drop input, just delays noticing it
+                        // until the guest is next idle.
+                        forward_console_input();
+                        // Flush promptly on idle rather than waiting for the
+                        // buffer to fill -- a partial line (e.g. a shell
+                        // prompt) should still appear without delay. No-op
+                        // when nothing is buffered, so this costs nothing
+                        // on the common (no pending output) tick.
+                        flush_console_output();
                         continue;
+                    }
                     if (exit.status == static_cast<sys::word_t>(sys::error_t::success) &&
                         exit.reason == sys::abi::v1::vm_exit_reason::mmio &&
                         handle_vpl011_mmio(exit))
                         continue;
+                    flush_console_output();
                     result0 = exit.status;
                     result1 = (static_cast<sys::word_t>(exit.reason) << 32U) |
                               (exit.qualification & 0xffffffffU);
