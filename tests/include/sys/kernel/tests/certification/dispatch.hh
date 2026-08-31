@@ -34,20 +34,30 @@
 namespace sys::kernel::tests::certification
 {
     [[nodiscard]] inline bool process_lifecycle_valid() noexcept {
+        /*
+         * owner is followed via value.owner rather than indexed as
+         * thread::user_tasks[index]: create_user_bundle() always allocates
+         * a task+thread pair at the same array index, but
+         * create_user_thread() (thread_create, an additional thread
+         * sharing an EXISTING task's cspace/authority rather than a fresh
+         * one) legitimately has value.owner pointing at a task:task living
+         * at a DIFFERENT index -- the paired user_tasks[index] at the
+         * thread's own index stays default/unused in that case. Following
+         * the real pointer instead of assuming same-index pairing keeps
+         * this check correct for both cases.
+         */
         for (u32 index = 0U; index < thread::user_thread_count; ++index) {
             const thread::thread& value = thread::user_threads[index];
-            const task::task& owner = thread::user_tasks[index];
             const thread::state current = thread::load_state(value);
             if (value.object.type == kernel::object::type_t::none) {
                 if (current != thread::state::inactive || value.owner != nullptr ||
-                    owner.object.type != kernel::object::type_t::none ||
                     value.address_space.object.type != kernel::object::type_t::none ||
                     value.scheduling_context.object.type != kernel::object::type_t::none)
                     return false;
                 continue;
             }
-            if (value.object.type != kernel::object::type_t::thread || value.owner != &owner ||
-                owner.object.type != kernel::object::type_t::task ||
+            if (value.object.type != kernel::object::type_t::thread || value.owner == nullptr ||
+                value.owner->object.type != kernel::object::type_t::task ||
                 value.address_space.object.type != kernel::object::type_t::address_space ||
                 value.scheduling_context.object.type !=
                     kernel::object::type_t::scheduling_context ||

@@ -50,5 +50,6 @@ namespace sys::abi::v1
         interrupt_create = 43U,
         earlyfs_frame_create = 44U,
         role_image_bind = 45U,
+        thread_create = 46U,
     };
 } // namespace sys::abi::v1

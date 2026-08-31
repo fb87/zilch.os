@@ -549,8 +549,125 @@ namespace sys::kernel::thread
 
         if (id >= active_user_thread_count)
             __atomic_store_n(&active_user_thread_count, id + 1U, __ATOMIC_RELEASE);
-        certification_operations[id] = 0U;
-        certification_failures[id] = 0U;
+        /*
+         * Indexed by cpu, NOT by id: these two arrays are sized
+         * [maximum_cpu_count] (4) and every reader in the certification
+         * harness indexes them by CPU, but id is a thread-slot id ranging
+         * over user_thread_count (10). Indexing them by id wrote zeros out
+         * of bounds for any id >= 4, landing directly on the globals that
+         * follow them in .bss -- memory::mapping_lock, object::table_lock,
+         * and the first bytes of ipc::endpoints[0].object, whose zeroed
+         * generation field then made root's own fault-endpoint capability
+         * (root cspace slot 10) fail object::resolve(). cpu is already
+         * bounds-checked against maximum_cpu_count at function entry, and
+         * matches what the harness's own acceptance_query(cpu) reads back.
+         */
+        certification_operations[cpu] = 0U;
+        certification_failures[cpu] = 0U;
+
+        store_state(target, state::ready);
+        return error_t::success;
+    }
+
+    /*
+     * Unlike create_user_bundle(), this attaches a fresh thread to the
+     * CALLER's own EXISTING task instead of allocating a new one -- no
+     * task_selector, no root-gating (you can only ever add a thread to
+     * yourself, never inject one into another task, so there's no new
+     * privilege-escalation surface the way process_create's root check
+     * guards against). The new thread shares owner's cspace (and thus its
+     * root flag and every capability already in it) automatically, since
+     * capability resolution always goes through current.owner->cspace --
+     * nothing extra to wire up for that. It gets its own independent
+     * address_space (own page tables, loaded from role's bound image),
+     * same as any other thread; address_space is thread-owned, not
+     * task-owned, in this object model, so "sharing a task" here means
+     * sharing capabilities/authority, not memory.
+     *
+     * user_tasks[]/user_threads[] share one user_thread_count-sized pool
+     * with no separate free list for tasks vs threads (find_free_user_slot
+     * only inspects user_threads[]); this consumes one of those slots and
+     * the paired user_tasks[id] at that index goes permanently unused.
+     * Accepted, documented waste given the pool is small and this is only
+     * ever used to give root a second thread.
+     */
+    [[nodiscard]] inline error_t create_user_thread(task::task& owner, cpu_id_t cpu, word_t role,
+                                                    capability_id_t thread_selector,
+                                                    capability_id_t space_selector) noexcept {
+        if (cpu >= maximum_cpu_count || thread_selector >= capability::cspace_slot_count ||
+            space_selector >= capability::cspace_slot_count || thread_selector == space_selector) {
+            return error_t::invalid_argument;
+        }
+        if (capability::slot_at(owner.cspace, thread_selector).object.type != object::type_t::none ||
+            capability::slot_at(owner.cspace, space_selector).object.type != object::type_t::none)
+            return error_t::busy;
+
+        const u32 id = find_free_user_slot(cpu);
+        if (id >= user_thread_count)
+            return error_t::no_memory;
+
+        thread& target = user_threads[id];
+        error_t result =
+            initialize_user(target, static_cast<thread_id_t>(id), cpu, role, initial_fuzz_seed(id));
+        if (result != error_t::success)
+            return result;
+        target.owner = &owner;
+
+        result = object::register_dynamic_object(target.object, object::type_t::thread);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.address_space.object,
+                                                     object::type_t::address_space);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.scheduling_context.object,
+                                                     object::type_t::scheduling_context);
+
+        const capability::rights_t control_rights{static_cast<u32>(capability::right_t::read) |
+                                                  static_cast<u32>(capability::right_t::write) |
+                                                  static_cast<u32>(capability::right_t::grant) |
+                                                  static_cast<u32>(capability::right_t::control)};
+        if (result == error_t::success)
+            result = capability::install(owner.cspace, thread_selector,
+                                         object::reference(target.object), control_rights);
+        if (result == error_t::success)
+            result = capability::install(owner.cspace, space_selector,
+                                         object::reference(target.address_space.object),
+                                         control_rights);
+
+        if (result != error_t::success) {
+            (void)capability::delete_capability(owner.cspace, thread_selector);
+            (void)capability::delete_capability(owner.cspace, space_selector);
+            capability::revoke_reference(object::reference(target.scheduling_context.object));
+            capability::revoke_reference(object::reference(target.address_space.object));
+            capability::revoke_reference(object::reference(target.object));
+            if (target.scheduling_context.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.scheduling_context.object));
+            if (target.address_space.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.address_space.object));
+            if (target.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.object));
+            /*
+             * Deliberately NOT clear_user_bundle(): that also wipes the
+             * OWNER task (capability::initialize(owner.cspace), root =
+             * false, quota reset, ...) -- correct when tearing down a
+             * bundle this function itself allocated the task for, wrong
+             * here since owner is the caller's own live task. Only the
+             * new thread's own state is rolled back.
+             */
+            target.address_space.release(&memory::release_physical_page);
+            arch::thread::clear(target.context);
+            target.owner = nullptr;
+            target.object = {};
+            target.address_space.object = {};
+            target.scheduling_context.object = {};
+            store_state(target, state::inactive);
+            return result;
+        }
+
+        if (id >= active_user_thread_count)
+            __atomic_store_n(&active_user_thread_count, id + 1U, __ATOMIC_RELEASE);
+        // Indexed by cpu, not id -- see create_user_bundle() above.
+        certification_operations[cpu] = 0U;
+        certification_failures[cpu] = 0U;
 
         store_state(target, state::ready);
         return error_t::success;

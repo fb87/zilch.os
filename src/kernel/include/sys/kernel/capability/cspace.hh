@@ -663,12 +663,17 @@ namespace sys::kernel::capability
 
     [[nodiscard]] inline bool database_valid() noexcept {
         static u8 live_derivations[maximum_derivations]{};
-        for (u32 index = 0U; index < maximum_derivations; ++index)
-            live_derivations[index] = 0U;
 
         bool valid = true;
         lock_authority();
         spin_lock(cspace_registry_lock, lock_order::rank::capability_registry);
+        // Reset only after both locks are held: this scratch buffer is
+        // shared across every call, so clearing it before acquiring the
+        // locks that serialize this function's callers would race a
+        // concurrent caller's in-progress pass. Matches how
+        // revoke_descendants_locked() treats its own revoke_marks[][].
+        for (u32 index = 0U; index < maximum_derivations; ++index)
+            live_derivations[index] = 0U;
         for (u32 space_index = 0U; space_index < maximum_registered_cspaces; ++space_index) {
             cspace_t* cspace = cspace_registry[space_index];
             if (cspace == nullptr)

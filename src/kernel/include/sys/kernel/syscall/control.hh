@@ -719,6 +719,18 @@ namespace sys::kernel::syscall
                     platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
                 }
                 break;
+            case abi::v1::control_operation::thread_create:
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                result = thread::create_user_thread(
+                    *current.owner, static_cast<cpu_id_t>(a1), a2, static_cast<capability_id_t>(a3),
+                    static_cast<capability_id_t>(a4));
+                if (result == error_t::success) {
+                    platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+                }
+                break;
             case abi::v1::control_operation::child_destroy:
             case abi::v1::control_operation::process_destroy:
                 if (current.owner == nullptr || !current.owner->root) {

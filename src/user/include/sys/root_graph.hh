@@ -267,6 +267,58 @@ namespace sys::root_graph
      */
     inline constexpr word_t dynamic_launch_role = 0x300U;
 
+    /*
+     * Root has exactly one thread at boot (kernel bootstrap gives it
+     * initial_threads=1), and in the embedded-guest production
+     * configuration, that one thread ends up permanently blocked inside
+     * start_embedded_guest()'s call to the domain-manager's serve
+     * operation -- which, per domain/main.cc's serve() loop, does not
+     * return until the guest hits a genuinely terminal VM exit, i.e.
+     * effectively never for a healthy guest. From that point on root was
+     * not polling drain_fault_reports() at all: any fault in any other
+     * service got zero application-level handling, falling back entirely
+     * to the kernel's own 500-tick fault timeout.
+     *
+     * root_supervisor_role gives root a second thread (via thread_create,
+     * which attaches a new thread to the CALLER's own existing task rather
+     * than allocating a new one -- see create_user_thread() in
+     * thread/scheduler.hh) that runs root's own binary (bin/init is
+     * already earlyfs-addressable, see image.mk) under this reserved role
+     * instead of root's normal bootstrap entry, and does nothing but drain
+     * faults for the rest of the system's uptime. It shares root's cspace
+     * (and thus its capabilities and root authority) automatically --
+     * thread_create needs no minting step for that, unlike process_create.
+     * It does not restart anything (USR-034, a separate, later item that
+     * needs a way to map a fault's sender badge back to "which role
+     * crashed" -- process_create doesn't return the id it allocated today).
+     */
+    inline constexpr word_t root_supervisor_role = 0x301U;
+    inline constexpr capability_id_t supervisor_thread_selector = 150U;
+    inline constexpr capability_id_t supervisor_space_selector = 151U;
+
+    // Defined below, next to the fault-endpoint constants it depends on.
+    inline void drain_fault_reports() noexcept;
+
+    [[noreturn]] inline void supervision_thread_entry() noexcept {
+        for (;;)
+            drain_fault_reports();
+    }
+
+    [[nodiscard]] inline bool spawn_supervision_thread() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const auto* page =
+            reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
+        constexpr usize_t directory_bound = 4096U;
+        const auto found = platform::v1::earlyfs::find_span(page, directory_bound, "bin/init");
+        if (!found.found)
+            return false;
+        if (control(abi::v1::control_operation::role_image_bind, root_supervisor_role,
+                    static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success)
+            return false;
+        return control(abi::v1::control_operation::thread_create, 0U, root_supervisor_role,
+                       supervisor_thread_selector, supervisor_space_selector) == success;
+    }
+
     [[nodiscard]] inline bool launch_path(const char* name, word_t cpu,
                                           capability_id_t thread_selector,
                                           capability_id_t task_selector,
@@ -344,6 +396,7 @@ namespace sys::root_graph
             ((1U << abi::v1::control_plane_role_count) - 1U) | abi::v1::memory_service_ready_badge;
         word_t ready = 0U;
         bool console_verified = false;
+        bool supervisor_spawned = false;
         for (;;) {
             drain_fault_reports();
             word_t badges = 0U;
@@ -370,6 +423,11 @@ namespace sys::root_graph
                         static_cast<word_t>(error_t::success))
                         return 6;
                     console_verified = true;
+                }
+                if (!supervisor_spawned) {
+                    if (!spawn_supervision_thread())
+                        return 7;
+                    supervisor_spawned = true;
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE
                 return start_embedded_guest() ? 0 : 5;

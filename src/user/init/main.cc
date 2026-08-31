@@ -67,6 +67,7 @@ namespace
         hypervisor_vm_reuse = 45U,
         domain_guest_load = 46U,
         domain_guest_run = 47U,
+        thread_create_lifecycle = 48U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -86,6 +87,80 @@ namespace
     inline constexpr sys::word_t capability_race_server_role = 0x115U;
     inline constexpr sys::word_t capability_race_sender_role = 0x116U;
     inline constexpr sys::word_t object_race_worker_role = 0x117U;
+
+    /*
+     * thread_create's own role namespace: 0x301, clear of the 1-4 CPU-seed
+     * "roles" worker() uses, the 0x100-range service roles above, and
+     * root_graph.hh's control_plane_role (0x200-0x204) / dynamic_launch_role
+     * (0x300) -- this legacy harness never includes root_graph.hh, so this
+     * is a local, independent choice, not a shared constant.
+     */
+    inline constexpr sys::word_t thread_create_test_role = 0x301U;
+    inline constexpr sys::word_t thread_create_test_notification_selector = 200U;
+    inline constexpr sys::word_t thread_create_test_thread_selector = 201U;
+    inline constexpr sys::word_t thread_create_test_space_selector = 202U;
+    inline constexpr sys::word_t thread_create_test_endpoint_selector = 203U;
+    inline constexpr sys::word_t thread_create_test_badge = 1U;
+
+    /*
+     * Proves create_user_thread() (thread_create) actually shares the
+     * caller's cspace rather than merely succeeding: this entry point only
+     * has a working capability at thread_create_test_notification_selector
+     * because it inherited root's cspace wholesale -- nothing was minted
+     * into it individually, there is nothing to mint since sharing a
+     * cspace is the entire mechanism. Signals once to prove it is alive
+     * and can act through that shared capability, then parks on a
+     * dedicated endpoint (created before this thread is spawned, so no
+     * ordering race) via a genuinely blocking ipc_receive -- NOT a
+     * notification_poll busy-loop, which pinned this thread's CPU at 100%
+     * forever and starved whatever else needed it, hanging the rest of the
+     * test run. There is no thread_destroy to clean this thread up with,
+     * so it persists harmlessly (one thread slot, and now zero CPU) for
+     * the rest of this run, same as the existing worker() test threads
+     * already do.
+     */
+    [[noreturn]] void thread_create_test_entry(sys::word_t, sys::word_t) noexcept {
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal,
+                           thread_create_test_notification_selector, thread_create_test_badge);
+        for (;;)
+            (void)sys::ipc_receive(thread_create_test_endpoint_selector);
+    }
+
+    [[nodiscard]] bool test_thread_create_lifecycle() noexcept {
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        if (sys::control(sys::abi::v1::control_operation::notification_create,
+                         thread_create_test_notification_selector) != success)
+            return false;
+        // Created before thread_create, not after: unlike minting a
+        // capability into a freshly process_create()d child's own new
+        // cspace (which must happen after -- the destination task
+        // capability doesn't exist yet), this endpoint lands in the SAME
+        // cspace thread_create's new thread will share, so there is no
+        // ordering race to worry about here.
+        if (sys::control(sys::abi::v1::control_operation::endpoint_create,
+                         thread_create_test_endpoint_selector) != success)
+            return false;
+        // Negative case: identical thread/space selectors must be rejected
+        // before anything is allocated.
+        if (sys::control(sys::abi::v1::control_operation::thread_create, 1U,
+                         thread_create_test_role, thread_create_test_thread_selector,
+                         thread_create_test_thread_selector) !=
+            static_cast<sys::word_t>(sys::error_t::invalid_argument))
+            return false;
+        if (sys::control(sys::abi::v1::control_operation::thread_create, 1U,
+                         thread_create_test_role, thread_create_test_thread_selector,
+                         thread_create_test_space_selector) != success)
+            return false;
+        for (sys::word_t spins = 0U; spins < 10000000U; ++spins) {
+            sys::word_t badges = 0U;
+            const sys::word_t status = sys::control_result1(
+                badges, sys::abi::v1::control_operation::notification_poll,
+                thread_create_test_notification_selector);
+            if (status == success && (badges & thread_create_test_badge) != 0U)
+                return true;
+        }
+        return false;
+    }
 
     [[nodiscard]] bool create_service_process(sys::word_t cpu, sys::word_t role,
                                               sys::word_t thread_selector,
@@ -1182,6 +1257,8 @@ namespace
 } // namespace
 
 extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
+    if (argument0 == thread_create_test_role)
+        thread_create_test_entry(argument0, argument1);
     if (argument0 != 0U)
         worker(argument0, argument1);
 
@@ -1220,6 +1297,7 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
             break;
     }
     record(ledger, test_id::capability_control, capability_pass);
+    record(ledger, test_id::thread_create_lifecycle, test_thread_create_lifecycle());
 
     const sys::word_t hv_self_test =
         sys::certification::control(sys::test_abi::v1::control_operation::hypervisor_self_test);
@@ -1346,7 +1424,9 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
 #include <sys/root_graph.hh>
 #include <sys/types.hh>
 
-extern "C" int main(sys::word_t, sys::word_t) noexcept {
+extern "C" int main(sys::word_t argument0, sys::word_t) noexcept {
+    if (argument0 == sys::root_graph::root_supervisor_role)
+        sys::root_graph::supervision_thread_entry();
     return sys::root_graph::supervise();
 }
 #endif

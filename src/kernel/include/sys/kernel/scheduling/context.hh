@@ -43,7 +43,21 @@ namespace sys::kernel::scheduling
         value.period_ticks = 1U;
         value.consumed_ticks = 0U;
         value.donated_ticks = 0U;
-        value.next_replenishment = 1U;
+        /*
+         * maximum_time ("never due"), not 1: replenishment_count is 0 here,
+         * and the invariant everywhere else in this file is that an empty
+         * replenishment queue pairs with next_replenishment == maximum_time
+         * (see replenish_if_due()'s own tail assignment and replenish()).
+         * replenish_if_due() early-returns on an empty queue, so nothing
+         * ever reads this value in that state -- but a freshly created
+         * thread that is still alive and idle when the certification
+         * harness runs scheduler_database_valid() would otherwise be
+         * reported as an invalid context. Latent until thread_create made
+         * it possible for a created-but-idle thread to still exist at
+         * acceptance time; every previous thread was either busy enough to
+         * have accumulated replenishments or destroyed before the check.
+         */
+        value.next_replenishment = maximum_time;
         value.affinity = affinity;
         value.enabled = true;
         value.throttled = false;
