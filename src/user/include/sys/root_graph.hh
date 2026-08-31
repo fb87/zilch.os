@@ -4,10 +4,12 @@
 #include <sys/control_plane.hh>
 #include <sys/guest_manifest.hh>
 #include <sys/ipc.hh>
+#include <sys/platform/v1/earlyfs.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/memory.hh>
 
 namespace sys::root_graph
 {
@@ -110,7 +112,69 @@ namespace sys::root_graph
     }
 #endif
 
+    /*
+     * Root-driven path lookup, wired up: resolves each PL3 server role's
+     * binary by name in the earlyfs image (the same one the kernel embeds
+     * and image_for_role() falls back to) and registers the result via
+     * role_image_bind(), so the kernel/arch layer no longer needs to know
+     * "role 0x203 means bin/domain-manager" for these roles -- it only
+     * knows there's a (bounds-checked) span bound to that role number. Runs
+     * once, before any process_create call, so every role is already bound
+     * by the time image_for_role() is consulted for it.
+     */
+    inline constexpr capability_id_t earlyfs_frame_selector = 90U;
+    inline constexpr word_t earlyfs_scratch_address = 0x20041000U;
+    inline constexpr capability_id_t self_space_selector = 3U;
+
+    struct role_image_entry final {
+        word_t role;
+        const char* name;
+    };
+
+    [[nodiscard]] inline bool bind_role_images() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        if (control(abi::v1::control_operation::earlyfs_frame_create, earlyfs_frame_selector, 0U) !=
+            success)
+            return false;
+        const word_t read_only = static_cast<word_t>(abi::v1::CapabilityRight::read);
+        const word_t attrs = abi::v1::encode_mapping_attributes(
+            abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
+        if (control(abi::v1::control_operation::map_frame, self_space_selector,
+                    earlyfs_frame_selector, earlyfs_scratch_address, read_only,
+                    attrs) != success)
+            return false;
+
+        const auto* page = reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
+        constexpr usize_t directory_bound = 4096U; // one page: header + directory always fit here
+
+        const role_image_entry bindings[] = {
+            {memory_role, "bin/memory-server"},
+            {static_cast<word_t>(abi::v1::control_plane_role::process), "bin/control-plane"},
+            {static_cast<word_t>(abi::v1::control_plane_role::device), "bin/control-plane"},
+            {static_cast<word_t>(abi::v1::control_plane_role::console), "bin/control-plane"},
+            {static_cast<word_t>(abi::v1::control_plane_role::domain), "bin/domain-manager"},
+            {static_cast<word_t>(abi::v1::control_plane_role::supervisor), "bin/control-plane"},
+        };
+        for (const auto& entry : bindings) {
+            // find_span() only reads the directory (mapped here, one page) and
+            // returns the entry's raw offset/size without dereferencing its
+            // data -- the real binary data lives well beyond this one mapped
+            // page. role_image_bind() independently re-validates the span
+            // against the kernel's own known full image size.
+            const auto found = platform::v1::earlyfs::find_span(page, directory_bound, entry.name);
+            if (!found.found)
+                return false;
+            if (control(abi::v1::control_operation::role_image_bind, entry.role,
+                        static_cast<word_t>(found.offset),
+                        static_cast<word_t>(found.size)) != success)
+                return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] inline int supervise() noexcept {
+        if (!bind_role_images())
+            return 1;
         if (control(abi::v1::control_operation::process_create, 1U, memory_role, memory_selector,
                     memory_selector + 1U,
                     memory_selector + 2U) != static_cast<word_t>(error_t::success))

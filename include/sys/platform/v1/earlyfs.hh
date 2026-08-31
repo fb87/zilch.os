@@ -33,6 +33,12 @@ namespace sys::platform::v1::earlyfs
         }
     };
 
+    struct span {
+        u64 offset{};
+        u64 size{};
+        bool found{};
+    };
+
     [[nodiscard]] inline constexpr bool add_overflows(u64 left, u64 right) noexcept {
         return right > ~left;
     }
@@ -87,6 +93,44 @@ namespace sys::platform::v1::earlyfs
             if (add_overflows(entry.offset, entry.size) || entry.offset + entry.size > image_size)
                 return {};
             return {image + entry.offset, static_cast<usize_t>(entry.size)};
+        }
+        return {};
+    }
+
+    /*
+     * Metadata-only lookup: reads the header and directory (bounded by
+     * directory_size, the amount actually mapped) and returns an entry's
+     * raw (offset, size) WITHOUT validating that the entry's data itself
+     * fits within directory_size or dereferencing it. Intended for a
+     * caller that only maps the directory (typically one page -- the
+     * header and up to max_entries entries always fit in 4096 bytes) and
+     * needs the offset/size to hand to something else that independently
+     * re-validates them against the full image (e.g.
+     * arch::space::bind_role_image()), never to read the entry's bytes
+     * through this pointer. Use find() instead when the entry's data will
+     * actually be read through the returned view.
+     */
+    [[nodiscard]] inline span find_span(const u8* directory, usize_t directory_size,
+                                        const char* name) noexcept {
+        if (directory == nullptr || name == nullptr || directory_size < sizeof(header_t))
+            return {};
+        const auto* header = reinterpret_cast<const header_t*>(directory);
+        if (header->magic[0] != magic[0] || header->magic[1] != magic[1] ||
+            header->magic[2] != magic[2] || header->magic[3] != magic[3] ||
+            header->version != format_version || header->entry_count > max_entries)
+            return {};
+        const u64 directory_bytes = static_cast<u64>(header->entry_count) * sizeof(entry_t);
+        if (add_overflows(sizeof(header_t), directory_bytes) ||
+            sizeof(header_t) + directory_bytes > directory_size)
+            return {};
+        const auto* entries = reinterpret_cast<const entry_t*>(directory + sizeof(header_t));
+        for (u32 index = 0U; index < header->entry_count; ++index) {
+            const entry_t& entry = entries[index];
+            if (!name_equal(entry.name, name))
+                continue;
+            if (add_overflows(entry.offset, entry.size))
+                return {};
+            return {entry.offset, entry.size, true};
         }
         return {};
     }
