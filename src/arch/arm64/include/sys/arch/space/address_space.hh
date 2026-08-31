@@ -4,6 +4,7 @@
 #include <sys/arch/memory.hh>
 #include <sys/arch/space/asid.hh>
 #include <sys/arch/space/elf64.hh>
+#include <sys/platform/v1/earlyfs.hh>
 #include <sys/types.hh>
 
 namespace sys::arch::space
@@ -24,20 +25,13 @@ namespace sys::arch::space
     static_assert(user_code < kernel_identity_base);
     static_assert(user_stack_base < kernel_identity_base);
 
+#if CONFIG_ROOT_ONLY_BOOT
+    extern "C" char sys_arm64_earlyfs_image_start[];
+    extern "C" char sys_arm64_earlyfs_image_end[];
+#else
     extern "C" char sys_arm64_user_image_start[];
     extern "C" char sys_arm64_user_image_end[];
-    extern "C" char sys_arm64_memory_server_image_start[];
-    extern "C" char sys_arm64_memory_server_image_end[];
-#if CONFIG_TESTS
-    extern "C" char sys_arm64_pager_client_image_start[];
-    extern "C" char sys_arm64_pager_client_image_end[];
-    extern "C" char sys_arm64_memory_client_image_start[];
-    extern "C" char sys_arm64_memory_client_image_end[];
 #endif
-    extern "C" char sys_arm64_control_plane_image_start[];
-    extern "C" char sys_arm64_control_plane_image_end[];
-    extern "C" char sys_arm64_domain_manager_image_start[];
-    extern "C" char sys_arm64_domain_manager_image_end[];
 
     inline constexpr word_t memory_server_image_role = 0x100U;
     inline constexpr word_t pager_client_image_role_base = 0x101U;
@@ -53,32 +47,83 @@ namespace sys::arch::space
         char* end;
     };
 
+    /*
+     * Every PL3 server binary lives as one named entry in a single earlyfs
+     * image instead of being individually .incbin'd -- see
+     * include/sys/platform/v1/earlyfs.hh. This function still maps a role
+     * word onto a name (that policy hasn't moved to userspace yet -- see the
+     * project roadmap's "remove role-to-image policy from the architecture
+     * backend" item, deliberately out of scope for this pass), but the
+     * bytes themselves come from one shared image looked up by path.
+     */
+#if CONFIG_ROOT_ONLY_BOOT
     [[nodiscard]] inline image_view image_for_role(word_t role) noexcept {
+        const char* name = "bin/init";
         if (role == memory_server_image_role)
-            return {sys_arm64_memory_server_image_start, sys_arm64_memory_server_image_end};
+            name = "bin/memory-server";
 #if CONFIG_TESTS
-        if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
-            role == undefined_instruction_image_role || role == ipc_lifecycle_client_role_base ||
-            role == ipc_lifecycle_client_role_base + 1U ||
-            role == ipc_lifecycle_client_role_base + 2U ||
-            role == ipc_lifecycle_client_role_base + 3U ||
-            role == ipc_lifecycle_client_role_base + 4U ||
-            role == ipc_lifecycle_client_role_base + 5U ||
-            role == ipc_lifecycle_client_role_base + 6U ||
-            role == ipc_lifecycle_client_role_base + 7U)
-            return {sys_arm64_pager_client_image_start, sys_arm64_pager_client_image_end};
-        if (role >= memory_client_image_role_base && role < memory_client_image_role_base + 3U)
-            return {sys_arm64_memory_client_image_start, sys_arm64_memory_client_image_end};
+        else if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
+                 role == undefined_instruction_image_role ||
+                 role == ipc_lifecycle_client_role_base ||
+                 role == ipc_lifecycle_client_role_base + 1U ||
+                 role == ipc_lifecycle_client_role_base + 2U ||
+                 role == ipc_lifecycle_client_role_base + 3U ||
+                 role == ipc_lifecycle_client_role_base + 4U ||
+                 role == ipc_lifecycle_client_role_base + 5U ||
+                 role == ipc_lifecycle_client_role_base + 6U ||
+                 role == ipc_lifecycle_client_role_base + 7U)
+            name = "bin/pager-client";
+        else if (role >= memory_client_image_role_base && role < memory_client_image_role_base + 3U)
+            name = "bin/memory-client";
 #endif
-        if (role >= control_plane_image_role_base &&
-            role < control_plane_image_role_base + control_plane_image_role_count)
-            return role == domain_manager_image_role
-                       ? image_view{sys_arm64_domain_manager_image_start,
-                                    sys_arm64_domain_manager_image_end}
-                       : image_view{sys_arm64_control_plane_image_start,
-                                    sys_arm64_control_plane_image_end};
+        else if (role >= control_plane_image_role_base &&
+                 role < control_plane_image_role_base + control_plane_image_role_count)
+            name = role == domain_manager_image_role ? "bin/domain-manager" : "bin/control-plane";
+
+        const auto* earlyfs_begin = reinterpret_cast<const u8*>(sys_arm64_earlyfs_image_start);
+        const auto earlyfs_size = static_cast<usize_t>(sys_arm64_earlyfs_image_end -
+                                                        sys_arm64_earlyfs_image_start);
+        const auto found = platform::v1::earlyfs::find(earlyfs_begin, earlyfs_size, name);
+        if (!found.valid())
+            return {sys_arm64_earlyfs_image_start, sys_arm64_earlyfs_image_start};
+        auto* start = const_cast<char*>(reinterpret_cast<const char*>(found.data));
+        return {start, start + found.size};
+    }
+#else
+    [[nodiscard]] inline image_view image_for_role(word_t) noexcept {
         return {sys_arm64_user_image_start, sys_arm64_user_image_end};
     }
+#endif
+
+    /*
+     * Self-test entry point for the linked-in earlyfs image, called from
+     * portable kernel test code (tests/include/sys/kernel/tests/earlyfs/
+     * directory.hh) -- kept arch-specific because the underlying symbols
+     * only exist on this arch/boot-profile combination; amd64 provides a
+     * trivial matching stub so shared test code stays portable.
+     */
+#if CONFIG_ROOT_ONLY_BOOT
+    [[nodiscard]] inline bool validate_earlyfs_image() noexcept {
+        const auto* begin = reinterpret_cast<const u8*>(sys_arm64_earlyfs_image_start);
+        const auto size =
+            static_cast<usize_t>(sys_arm64_earlyfs_image_end - sys_arm64_earlyfs_image_start);
+        if (!platform::v1::earlyfs::find(begin, size, "bin/init").valid())
+            return false;
+        if (!platform::v1::earlyfs::find(begin, size, "bin/memory-server").valid())
+            return false;
+        if (!platform::v1::earlyfs::find(begin, size, "bin/control-plane").valid())
+            return false;
+        if (!platform::v1::earlyfs::find(begin, size, "bin/domain-manager").valid())
+            return false;
+        if (platform::v1::earlyfs::find(begin, size, "no/such/entry").valid())
+            return false;
+        return true;
+    }
+#else
+    [[nodiscard]] inline bool validate_earlyfs_image() noexcept {
+        return true;
+    }
+#endif
 
     [[nodiscard]] inline constexpr vaddr_t user_image_end() noexcept {
         return user_code + elf64::bootstrap_size;

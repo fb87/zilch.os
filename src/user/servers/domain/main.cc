@@ -6,6 +6,8 @@
 #include <sys/thread.hh>
 #include <sys/types.hh>
 
+#include <sys/platform/v1/earlyfs.hh>
+
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/memory.hh>
@@ -91,8 +93,15 @@ namespace
     }
 
 #if CONFIG_GUEST_EMBEDDED_IMAGE
-    extern "C" const sys::u8 sys_arm64_domain_guest_image_start[];
-    extern "C" const sys::u8 sys_arm64_domain_guest_image_end[];
+    extern "C" const sys::u8 sys_arm64_guest_earlyfs_image_start[];
+    extern "C" const sys::u8 sys_arm64_guest_earlyfs_image_end[];
+
+    [[nodiscard]] inline sys::platform::v1::earlyfs::view guest_elf_view() noexcept {
+        const auto size = static_cast<sys::usize_t>(sys_arm64_guest_earlyfs_image_end -
+                                                     sys_arm64_guest_earlyfs_image_start);
+        return sys::platform::v1::earlyfs::find(sys_arm64_guest_earlyfs_image_start, size,
+                                                "guest.elf");
+    }
 #endif
 
     [[maybe_unused]] inline void cleanup_loaded_guest() noexcept {
@@ -420,11 +429,11 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         } else if (operation == sys::abi::v1::control_plane_operation::load) {
 #if CONFIG_GUEST_EMBEDDED_IMAGE
             const auto& manifest = ::sys_arm64_domain_guest_manifest;
+            const auto guest_elf = guest_elf_view();
             sys::word_t entry = 0U;
-            result0 = sys::guest_manifest::valid(manifest) &&
-                             load_guest_image(sys_arm64_domain_guest_image_start,
-                                              sys_arm64_domain_guest_image_end, manifest.ram_size,
-                                              entry)
+            result0 = sys::guest_manifest::valid(manifest) && guest_elf.valid() &&
+                             load_guest_image(guest_elf.data, guest_elf.data + guest_elf.size,
+                                              manifest.ram_size, entry)
                           ? map_manifest_devices(manifest)
                           : static_cast<sys::word_t>(sys::error_t::invalid_argument);
             if (result0 == static_cast<sys::word_t>(sys::error_t::success))

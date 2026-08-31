@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-EARLYFS := $(OBJTREE)/image/earlyfs.tar
-MANIFEST ?= $(SRCTREE)/src/image/manifests/minimal.toml
+EARLYFS := $(OBJTREE)/image/earlyfs.img
 BOOTSTRAP_IMAGE_OBJ :=
 KERNEL_DATA_OBJECTS :=
 
@@ -12,14 +11,22 @@ endif
 .PHONY: image
 image: $(EARLYFS)
 
-$(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),) $(MANIFEST)
+$(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),)
 	@mkdir -p $(dir $@)
 	@printf '  EARLYFS %s\n' '$@'
-	@$(SRCTREE)/tools/image/make_earlyfs.sh $(USER_OBJDIR)/init.elf $(USER_OBJDIR)/memory-server.elf $(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) $(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) $(USER_OBJDIR)/domain-manager.elf $(MANIFEST) $@ $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),-)
+	@$(SRCTREE)/tools/image/make_earlyfs.py \
+		--entry bin/init=$(USER_OBJDIR)/init.elf \
+		--entry bin/memory-server=$(USER_OBJDIR)/memory-server.elf \
+		--entry bin/control-plane=$(USER_OBJDIR)/control-plane.elf \
+		--entry bin/domain-manager=$(USER_OBJDIR)/domain-manager.elf \
+		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
+		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \
+		--entry guests/test-arm64=$(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),-) \
+		--output $@
 
 ifeq ($(ARCH),arm64)
-$(BOOTSTRAP_IMAGE_OBJ): $(SRCTREE)/src/user/bootstrap/embedded_images.S $(USER_PROGRAM_ELFS)
+$(BOOTSTRAP_IMAGE_OBJ): $(SRCTREE)/src/user/bootstrap/embedded_images.S $(EARLYFS)
 	@mkdir -p $(dir $@)
 	@printf '  UDATA   %s\n' '$@'
-	@$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_AFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	@$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_AFLAGS) -DEARLYFS_IMAGE_PATH=\"$(EARLYFS)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 endif

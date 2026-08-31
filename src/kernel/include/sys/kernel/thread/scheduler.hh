@@ -14,6 +14,7 @@
 #if CONFIG_SELFTEST
 #include <sys/kernel/tests/capability/derivation.hh>
 #include <sys/kernel/tests/capability/selector.hh>
+#include <sys/kernel/tests/earlyfs/directory.hh>
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
 #include <sys/kernel/tests/object/generation.hh>
@@ -769,6 +770,9 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
         result = tests::object_generation::run_generation_retirement();
+        if (result != error_t::success)
+            return result;
+        result = tests::earlyfs::run_directory_scan();
         if (result != error_t::success)
             return result;
 

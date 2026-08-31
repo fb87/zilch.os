@@ -14,6 +14,11 @@ namespace sys::arch::space
         return 0U;
     }
 
+    // No earlyfs consumer on this arch yet; nothing to validate.
+    [[nodiscard]] inline bool validate_earlyfs_image() noexcept {
+        return true;
+    }
+
     struct address_space {
         memory::table_t l3{};
     };

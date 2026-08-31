@@ -14,7 +14,7 @@ failed=0
 for relative in \
     zilch.elf zilch.bin zilch.map \
     user/init.elf user/init.map \
-    image/earlyfs.tar; do
+    image/earlyfs.img; do
     left="$first/$relative"
     right="$second/$relative"
     if [ ! -f "$left" ] || [ ! -f "$right" ]; then

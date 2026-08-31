@@ -27,7 +27,7 @@ for target in arm64 amd64; do
     need "$build/$target/$project.bin"
     need "$build/$target/$project.map"
     need "$build/$target/user/init.elf"
-    need "$build/$target/image/earlyfs.tar"
+    need "$build/$target/image/earlyfs.img"
 done
 
 rm -rf "$release_root/stage"
@@ -51,7 +51,7 @@ copy_target()
     cp "$build/$build_name/$project.map" "$out/kernel.map"
     cp "$build/$build_name/user/init.elf" "$out/init.elf"
     cp "$build/$build_name/user/init.map" "$out/init.map"
-    cp "$build/$build_name/image/earlyfs.tar" "$out/earlyfs.tar"
+    cp "$build/$build_name/image/earlyfs.img" "$out/earlyfs.img"
     cp "$src/src/image/manifests/minimal.toml" "$out/manifest.toml"
 }
 

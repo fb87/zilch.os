@@ -102,6 +102,7 @@ GUEST_TEST_BIN := $(GUEST_TEST_DIR)/guest-test.bin
 GUEST_TEST_OBJ := $(GUEST_TEST_DIR)/entry.o
 GUEST_TEST_LDSCRIPT := $(SRCTREE)/src/user/guests/test-arm64/linker.ld
 DOMAIN_MANAGER_GUEST_BLOB_OBJ := $(USER_OBJDIR)/domain-manager/guest_blob.o
+DOMAIN_GUEST_EARLYFS := $(USER_OBJDIR)/domain-manager/guest.img
 DOMAIN_MANAGER_GUEST_MANIFEST_OBJ := $(USER_OBJDIR)/domain-manager/guest_manifest.o
 INIT_GUEST_MANIFEST_OBJ := $(USER_OBJDIR)/init/guest_manifest.o
 DOMAIN_GUEST_ELF ?= $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),)
@@ -130,10 +131,14 @@ endif
 ifeq ($(ARCH),arm64)
 ifeq ($(CONFIG_GUEST_EMBEDDED_IMAGE),1)
 ifneq ($(strip $(DOMAIN_GUEST_ELF)),)
-$(DOMAIN_MANAGER_GUEST_BLOB_OBJ): $(SRCTREE)/src/user/servers/domain/guest_blob.S $(DOMAIN_GUEST_ELF)
+$(DOMAIN_GUEST_EARLYFS): $(DOMAIN_GUEST_ELF)
+	@mkdir -p $(dir $@)
+	@printf '  EARLYFS %s\n' '$@'
+	@$(SRCTREE)/tools/image/make_earlyfs.py --entry guest.elf=$(DOMAIN_GUEST_ELF) --output $@
+$(DOMAIN_MANAGER_GUEST_BLOB_OBJ): $(SRCTREE)/src/user/servers/domain/guest_blob.S $(DOMAIN_GUEST_EARLYFS)
 	@mkdir -p $(dir $@)
 	@printf '  GAS     %s\n' '$@'
-	@$(CC) $(TARGET_FLAGS) -march=armv8-a -ffreestanding -DDOMAIN_GUEST_ELF_PATH=\"$(DOMAIN_GUEST_ELF)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+	@$(CC) $(TARGET_FLAGS) -march=armv8-a -ffreestanding -DGUEST_EARLYFS_PATH=\"$(DOMAIN_GUEST_EARLYFS)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 endif
 $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ) $(INIT_GUEST_MANIFEST_OBJ): $(DOMAIN_GUEST_MANIFEST)
 	@mkdir -p $(dir $@)

@@ -1,49 +1,12 @@
 #if CONFIG_ROOT_ONLY_BOOT
 .section .user_text,"ax"
 .balign 4096
-.global sys_arm64_user_image_start
-sys_arm64_user_image_start:
-.incbin USER_ELF_PATH
+.global sys_arm64_earlyfs_image_start
+sys_arm64_earlyfs_image_start:
+.incbin EARLYFS_IMAGE_PATH
 .balign 4096
-.global sys_arm64_user_image_end
-sys_arm64_user_image_end:
-
-.global sys_arm64_memory_server_image_start
-sys_arm64_memory_server_image_start:
-.incbin MEMORY_SERVER_ELF_PATH
-.balign 4096
-.global sys_arm64_memory_server_image_end
-sys_arm64_memory_server_image_end:
-
-#if CONFIG_TESTS
-.global sys_arm64_pager_client_image_start
-sys_arm64_pager_client_image_start:
-.incbin PAGER_CLIENT_ELF_PATH
-.balign 4096
-.global sys_arm64_pager_client_image_end
-sys_arm64_pager_client_image_end:
-
-.global sys_arm64_memory_client_image_start
-sys_arm64_memory_client_image_start:
-.incbin MEMORY_CLIENT_ELF_PATH
-.balign 4096
-.global sys_arm64_memory_client_image_end
-sys_arm64_memory_client_image_end:
-#endif
-
-.global sys_arm64_control_plane_image_start
-sys_arm64_control_plane_image_start:
-.incbin CONTROL_PLANE_ELF_PATH
-.balign 4096
-.global sys_arm64_control_plane_image_end
-sys_arm64_control_plane_image_end:
-
-.global sys_arm64_domain_manager_image_start
-sys_arm64_domain_manager_image_start:
-.incbin DOMAIN_MANAGER_ELF_PATH
-.balign 4096
-.global sys_arm64_domain_manager_image_end
-sys_arm64_domain_manager_image_end:
+.global sys_arm64_earlyfs_image_end
+sys_arm64_earlyfs_image_end:
 #else
 .section .user_text,"ax"
 .balign 4096
