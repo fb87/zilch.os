@@ -15,6 +15,7 @@
 #include <sys/kernel/tests/capability/derivation.hh>
 #include <sys/kernel/tests/capability/selector.hh>
 #include <sys/kernel/tests/earlyfs/directory.hh>
+#include <sys/kernel/tests/earlyfs/role_binding.hh>
 #include <sys/kernel/tests/elf64/dynamic_loader.hh>
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
@@ -777,6 +778,9 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
         result = tests::elf64_dynamic_loader::run_differential_check();
+        if (result != error_t::success)
+            return result;
+        result = tests::earlyfs::run_role_binding_check(root);
         if (result != error_t::success)
             return result;
 

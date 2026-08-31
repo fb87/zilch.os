@@ -1025,6 +1025,66 @@ namespace sys::kernel::memory
         return result;
     }
 
+    /*
+     * Mirrors create_device_frame() exactly, but for a page of the kernel's
+     * own linked-in earlyfs image instead of an MMIO device page -- lets a
+     * root-privileged task map the image read-only into its own address
+     * space to do its own path-based lookup (see
+     * sys::arch::space::bind_role_image()) instead of the kernel/arch layer
+     * hardcoding which role maps to which binary name. Read-only: earlyfs
+     * is immutable kernel image data, so no write right is ever granted.
+     */
+    [[nodiscard]] inline error_t create_earlyfs_frame(task::task& owner,
+                                                      capability_id_t destination,
+                                                      word_t page_index) noexcept {
+        paddr_t address = 0U;
+        if (!owner.root || destination >= capability::cspace_slot_count ||
+            !arch::space::earlyfs_page_address(page_index, address))
+            return error_t::denied;
+        frame* target = nullptr;
+        for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
+            bool expected = false;
+            if (__atomic_compare_exchange_n(&frames[index].in_use, &expected, true, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                target = &frames[index];
+                break;
+            }
+        }
+        if (target == nullptr)
+            return error_t::no_memory;
+        error_t result = object::register_dynamic_object(target->object, object::type_t::frame);
+        if (result == error_t::success) {
+            target->physical_address = address;
+            target->owner = owner.address_space_id;
+            target->owner_task = object::reference(owner.object);
+            target->mapping_count = 0U;
+            target->allocated = true;
+            target->device = true;
+            for (auto& mapping : target->mappings)
+                mapping = {};
+            const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
+                                              static_cast<u32>(capability::right_t::grant) |
+                                              static_cast<u32>(capability::right_t::control)};
+            result = capability::install(owner.cspace, destination,
+                                         object::reference(target->object), rights);
+        }
+        if (result != error_t::success) {
+            if (target->object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target->object));
+            target->object = {};
+            target->physical_address = 0U;
+            target->owner = 0U;
+            target->owner_task = {};
+            target->mapping_count = 0U;
+            target->allocated = false;
+            target->device = false;
+            for (auto& mapping : target->mappings)
+                mapping = {};
+            __atomic_store_n(&target->in_use, false, __ATOMIC_RELEASE);
+        }
+        return result;
+    }
+
     [[nodiscard]] inline error_t destroy_frame(task::task& owner,
                                                capability_id_t selector) noexcept {
         capability::authority_guard authority_transaction{};

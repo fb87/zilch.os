@@ -48,5 +48,7 @@ namespace sys::abi::v1
         memory_resource_destroy = 41U,
         thread_exit = 42U,
         interrupt_create = 43U,
+        earlyfs_frame_create = 44U,
+        role_image_bind = 45U,
     };
 } // namespace sys::abi::v1

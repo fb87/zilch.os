@@ -19,6 +19,17 @@ namespace sys::arch::space
         return true;
     }
 
+    // No earlyfs image on this arch yet -- no pages to hand out, nothing to bind.
+    [[nodiscard]] inline usize_t earlyfs_image_size() noexcept {
+        return 0U;
+    }
+    [[nodiscard]] inline bool earlyfs_page_address(word_t, paddr_t&) noexcept {
+        return false;
+    }
+    [[nodiscard]] inline error_t bind_role_image(word_t, u64, u64) noexcept {
+        return error_t::unsupported;
+    }
+
     struct address_space {
         memory::table_t l3{};
     };

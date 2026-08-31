@@ -56,8 +56,102 @@ namespace sys::arch::space
      * backend" item, deliberately out of scope for this pass), but the
      * bytes themselves come from one shared image looked up by path.
      */
+    /*
+     * Root-driven path lookup, phase 1: lets a root-privileged task bind a
+     * role to a (offset, size) span within the linked-in earlyfs image that
+     * IT resolved by name (via a mapped read-only earlyfs_page_address()
+     * frame and platform::v1::earlyfs::find(), both in userspace) instead
+     * of the kernel/arch layer hardcoding role->name policy. Bounds are
+     * re-validated here against the kernel's own known image size
+     * regardless of what the caller claims -- a bound bad offset/size is
+     * simply rejected, it can never cause an out-of-bounds read later,
+     * since image_for_role() only ever returns spans that passed this
+     * check.
+     *
+     * Deliberately additive and inert until used: image_for_role() below
+     * consults this table first and only falls back to the historical
+     * hardcoded switch for roles nobody has bound, so real boot behavior is
+     * unchanged unless/until root_graph.hh is updated to actually call
+     * this. That cutover -- and removing the hardcoded switch entirely --
+     * is a later, separate step, mirroring how elf64::load_dynamic() was
+     * introduced and proven before address_space::initialize() was cut
+     * over to it.
+     */
+    inline constexpr word_t maximum_role_bindings = 16U;
+    struct role_binding {
+        word_t role{};
+        u64 offset{};
+        u64 size{};
+        bool used{};
+    };
+    inline role_binding role_bindings[maximum_role_bindings]{};
+
+#if CONFIG_ROOT_ONLY_BOOT
+    [[nodiscard]] inline usize_t earlyfs_image_size() noexcept {
+        return static_cast<usize_t>(sys_arm64_earlyfs_image_end - sys_arm64_earlyfs_image_start);
+    }
+
+    [[nodiscard]] inline bool earlyfs_page_address(word_t page_index, paddr_t& address) noexcept {
+        const usize_t page_count =
+            (earlyfs_image_size() + memory::page_size - 1U) / memory::page_size;
+        if (page_index >= page_count)
+            return false;
+        address = reinterpret_cast<paddr_t>(sys_arm64_earlyfs_image_start) +
+                 static_cast<paddr_t>(page_index) * memory::page_size;
+        return true;
+    }
+#else
+    [[nodiscard]] inline usize_t earlyfs_image_size() noexcept {
+        return 0U;
+    }
+
+    [[nodiscard]] inline bool earlyfs_page_address(word_t, paddr_t&) noexcept {
+        return false;
+    }
+#endif
+
+    [[nodiscard]] inline error_t bind_role_image(word_t role, u64 offset, u64 size) noexcept {
+        const auto image_size = static_cast<u64>(earlyfs_image_size());
+        if (size == 0U || offset > image_size || size > image_size - offset)
+            return error_t::invalid_argument;
+        role_binding* slot = nullptr;
+        for (auto& entry : role_bindings) {
+            if (entry.used && entry.role == role) {
+                slot = &entry;
+                break;
+            }
+            if (slot == nullptr && !entry.used)
+                slot = &entry;
+        }
+        if (slot == nullptr)
+            return error_t::no_memory;
+        slot->role = role;
+        slot->offset = offset;
+        slot->size = size;
+        slot->used = true;
+        return error_t::success;
+    }
+
+    [[nodiscard]] inline bool find_role_binding(word_t role, u64& offset, u64& size) noexcept {
+        for (const auto& entry : role_bindings) {
+            if (entry.used && entry.role == role) {
+                offset = entry.offset;
+                size = entry.size;
+                return true;
+            }
+        }
+        return false;
+    }
+
 #if CONFIG_ROOT_ONLY_BOOT
     [[nodiscard]] inline image_view image_for_role(word_t role) noexcept {
+        u64 bound_offset = 0U;
+        u64 bound_size = 0U;
+        if (find_role_binding(role, bound_offset, bound_size)) {
+            auto* start = sys_arm64_earlyfs_image_start + bound_offset;
+            return {start, start + bound_size};
+        }
+
         const char* name = "bin/init";
         if (role == memory_server_image_role)
             name = "bin/memory-server";

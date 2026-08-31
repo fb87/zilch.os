@@ -1085,6 +1085,20 @@ namespace sys::kernel::syscall
                         static_cast<irq_id_t>(a2),
                         a3 != 0U ? interrupt::trigger::edge : interrupt::trigger::level);
                 break;
+            case abi::v1::control_operation::earlyfs_frame_create:
+                if (current.owner == nullptr)
+                    result = error_t::denied;
+                else
+                    result = memory::create_earlyfs_frame(*current.owner,
+                                                          static_cast<capability_id_t>(a1), a2);
+                break;
+            case abi::v1::control_operation::role_image_bind:
+                if (current.owner == nullptr || !current.owner->root)
+                    result = error_t::denied;
+                else
+                    result = arch::space::bind_role_image(a1, static_cast<u64>(a2),
+                                                          static_cast<u64>(a3));
+                break;
             case abi::v1::control_operation::notification_signal:
             case abi::v1::control_operation::notification_poll: {
                 if (current.owner == nullptr) {
