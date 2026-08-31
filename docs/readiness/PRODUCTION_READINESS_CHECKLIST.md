@@ -298,7 +298,7 @@ Every completed requirement must link to:
 - [x] **PLT-001** QEMU ARM64 virt is the complete versioned 1.0 virtual-platform profile.
 - [x] **PLT-002** Real ARM64 hardware qualification is explicitly separated from the virtual-platform gate and remains a distinct blocking release gate.
 - [x] **PLT-003** The profile imports RAM/reservations from DTB and validates its versioned fixed QEMU MMIO, GIC, CPU-count, timer, and userspace-SPI inventory at final acceptance.
-- [x] **PLT-004** The 1.0 virtual profile deliberately retains the polling UART as a kernel diagnostic console; device-driver ownership transfer is outside this root-only profile.
+- [x] **PLT-004** The 1.0 virtual profile deliberately retains the polling UART as a kernel diagnostic console (kernel `console_puts`/`pr_info` write the physical PL011 directly, bypassing the capability system entirely -- unaffected by anything below). Userspace/guest access to the same physical PL011 is now separately capability-mediated and exclusively owned by the console-server (USR-022/USR-023); the guest no longer gets direct passthrough at all -- see USR-020.
 - [x] **PLT-005** Watchdog hardware is explicitly unsupported by the QEMU 1.0 profile; bounded kernel panic/emergency diagnostics are the selected failure policy.
 - [x] **PLT-006** Reset and power-off are explicitly unsupported kernel operations for the QEMU 1.0 profile; runs terminate through the external machine controller.
 
@@ -336,20 +336,20 @@ Every completed requirement must link to:
 
 ## 7.3 Process and ELF loader
 
-- [ ] **USR-013** General ELF64 loader not yet implemented; current binaries use a controlled bootstrap image registry.
-- [ ] **USR-014** General ELF segment permission validation not yet implemented.
-- [ ] **USR-015** TLS, stack, and initial process image setup implemented.
-- [ ] **USR-016** Dynamic linker support plan implemented or explicitly deferred.
-- [-] **USR-017** Kernel process-bundle create/destroy exists; path-based userspace process-manager API remains open.
-- [ ] **USR-018** Process crash reporting implemented.
+- [-] **USR-013** Bootstrap loader resolves binaries by earlyfs pathname at runtime (`role_image_bind`/`bind_role_image`, dynamically allocated per-segment frames via `elf64::load_dynamic()`) and a userspace `launch_path()` API can resolve and launch an arbitrary earlyfs-resident path at any point after boot, not just the six roles bound at startup; still bounded to a fixed 256 KiB/64-page image window and a single concurrently-resolvable dynamic role (`root_graph.hh::dynamic_launch_role`) -- lifting either is explicitly deferred, no current binary or use case needs it.
+- [x] **USR-014** Per-segment W^X rejection, present-page overlap rejection, alignment validation, and explicit `ET_EXEC`-only acceptance (non-`ET_EXEC` types, e.g. PIE/`ET_DYN`, are now rejected by name in `valid_header()` rather than only incidentally via address-range math) are enforced by both `elf64::load()` and `elf64::load_dynamic()`. A permanent one-page unmapped guard gap is now reserved between an image's highest loadable page and the user stack (`elf64::loadable_pages`), closing a prior gap where a maximal-size image left zero gap before the stack.
+- [ ] **USR-015** TLS, argv/envp, and auxiliary-vector construction remain explicitly deferred: zero current consumer (every PL3 server is a small freestanding binary using file-scope statics, no thread-locals or command-line parsing), so building this now would be speculative and unverifiable. The stack-guard-gap half of this item is done (see USR-014). Revisit when a real consumer needs it.
+- [ ] **USR-016** Dynamic linker: explicitly deferred, no current consumer, per this item's own "implemented or explicitly deferred" allowance.
+- [x] **USR-017** `sys::root_graph::launch_path()` resolves an arbitrary earlyfs-resident path at runtime and launches it via the existing `role_image_bind` + `process_create` operations, with zero kernel/ABI changes -- verified end to end against a real release boot (dynamically bound `bin/control-plane` under a fresh role, process created and ran without disrupting the rest of boot). Scoped to earlyfs-resident paths only, and to one concurrently-resolvable dynamic role (see USR-013 note).
+- [-] **USR-018** Root now drains its own fault endpoint each supervision-loop iteration (bounded 1-tick `ipc_receive`, previously never called by anything in userspace) and replies `terminate` immediately, so a crashing child is reaped promptly instead of silently sitting `blocked_fault` for the kernel's full 500-tick fault timeout. Visibility (an actual crash *report*, as opposed to prompt termination) remains open: production userspace has no logging syscall today, and OBS-010 forbids raw fault address/PC/syndrome in release logs even if one existed, so a redaction-compliant reporting mechanism needs its own design pass. Restart-on-crash (USR-034) is a separate, later item building on this.
 
 ## 7.4 Device and IRQ management
 
-- [ ] **USR-019** Device resource database implemented.
-- [ ] **USR-020** MMIO delegation implemented.
+- [-] **USR-019** No generic device resource database exists; `memory::create_device_frame()` now rejects a second live device frame at the same physical address (a linear scan of `frames[]`, closing a real gap where two callers could otherwise both get capabilities to the same MMIO page), which is minimal exclusivity tracking, not a registry. A real database (enumerable inventory, ownership queries) remains open.
+- [-] **USR-020** MMIO delegation exists only as the pre-existing single-purpose `device_frame_create` + `capability_mint` mechanism, now exclusivity-checked (USR-019); no generic broker/policy layer. The one production consumer (the guest's UART) no longer uses it at all -- it was converted to trap-and-emulate (vPL011) specifically to resolve the console-server/guest ownership conflict the exclusivity check surfaced, since a single physical UART cannot be safely handed to two direct-passthrough owners. `domain-manager` decodes guest MMIO exits (`exit.qualification`, not `exit.fault_address` -- the latter is unreliable for stage-2-only faults) and emulates PL011 register semantics, forwarding real character I/O through the console-server.
 - [ ] **USR-021** IRQ broker implemented.
-- [ ] **USR-022** Userspace UART driver implemented.
-- [ ] **USR-023** Console server implemented.
+- [x] **USR-022** Userspace UART driver implemented (`src/user/servers/console/main.cc`): claims the physical PL011 device frame (root-minted, since `device_frame_create` is root-gated), configures it (`CR = UARTEN|TXE|RXE` -- QEMU's PL011 model accepts TX regardless but gates RX behind `CR.RXE`), and drives real hardware with zero kernel `printk` involvement. Proven end to end: a message sent purely through userspace IPC reached real QEMU serial output.
+- [x] **USR-023** Console server implemented (`src/user/servers/console/main.cc`): serves `health`/`describe`/`stop`/`write` (string)/`write_byte`/`read_byte` over IPC, with a bounded-timeout receive loop so it polls real hardware RX between requests. Verified end to end via `samples/guests/zephyr`'s `acceptance` target in release mode (`make MODE=release acceptance`, exit 0): guest boots, prints its banner, and its interactive shell responds correctly to a scripted `help` command through the entire real userspace-mediated I/O path (vPL011 MMIO trap/decode/resume, TX forwarding, RX polling, virtual IRQ 33 injection). Debug-mode (`CONFIG_VERBOSE_DIAGNOSTICS=y`) acceptance is functionally identical but its scripted exact-string grep fails on unrelated trace-log interleaving (`console_puts` in `arch/arm64/include/sys/arch/hypervisor.hh`'s per-guest-exit `[HV-TRAP]` diagnostic, pre-existing, now firing far more often since vPL011 makes every guest UART touch a real MMIO exit) -- not a functional gap, just a noisy debug config not designed for scripted matching.
 - [ ] **USR-024** Driver crash and restart policy implemented.
 
 ## 7.5 Domain manager
@@ -781,3 +781,55 @@ mapping authority transactions. `capability_transfer_revoke_race` runs the
 sender and receiver on separate CPUs and verifies that no receiver descendant
 exists after revoke returns, independent of which operation linearizes first.
 This completes CAP-021 and advances CAP-014 and SEC-018. -->
+
+<!-- 0124 evidence: elf64::load()/load_dynamic() now reject non-ET_EXEC ELF
+types by name and reserve a permanent one-page unmapped guard gap below the
+user stack (completes USR-014). sys::root_graph::launch_path() resolves an
+arbitrary earlyfs-resident path at runtime via the existing role_image_bind +
+process_create operations and was verified end to end against a real release
+boot (advances USR-013, completes the mechanism half of USR-017 -- scoped to
+earlyfs-resident paths and one concurrently-resolvable dynamic role). Root's
+supervision loop now drains its own fault endpoint each iteration and replies
+terminate immediately, reaping crashed children promptly instead of via the
+kernel's full 500-tick fault timeout (advances USR-018 -- termination is
+prompt, but visible crash reporting remains open pending a redaction-
+compliant design, since production userspace has no logging syscall and
+OBS-010 forbids raw fault detail in release logs regardless). TLS, argv/envp/
+auxv, and the dynamic linker remain explicitly deferred (USR-015, USR-016):
+no current consumer exists for any of them. -->
+
+<!-- 0130 evidence: a real userspace UART driver (console-server) now
+exclusively owns the physical PL011 (completes USR-022/USR-023); the guest's
+UART is no longer direct passthrough but vPL011 trap-and-emulate through
+domain-manager, verified end to end via samples/guests/zephyr's `acceptance`
+target in release mode (guest banner + interactive shell respond to a
+scripted `help` command through the real MMIO-trap/decode/resume + IRQ-
+injection path, exit 0). This was forced by a real, newly-closed gap:
+memory::create_device_frame() previously let two callers both get
+capabilities to the same physical MMIO page; once closed, the console-server
+and the guest's old direct passthrough became mutually exclusive claimants
+of the one physical UART, and vPL011 is the resolution (advances USR-019/
+USR-020, not completing either -- there is still no generic device database
+or MMIO delegation broker, just exclusivity-checked single-purpose
+mechanisms). Fixed a genuine latent kernel bug found along the way:
+vcpu_state_write's PC-field (31) write validation checked page alignment
+instead of 4-byte instruction alignment, rejecting every legitimate
+guest-resume PC write (vcpu.hh) -- never exercised before since nothing had
+called it. Also fixed: the separate CONFIG_SELFTEST legacy test harness
+(user/init/main.cc's test_domain_manager_lifecycle(), which never uses
+root_graph.hh) needed its own equivalent console-server-endpoint wiring
+after this change, since it constructs the domain-manager's control-plane
+graph independently; its non-interactive `run` control-plane operation
+needed a small internal loop to resolve vPL011 MMIO exits transparently,
+restoring the single-call semantic passthrough used to provide for free.
+Separately, default_manifest.cc (the built-in synthetic ARM64 verification
+guest's manifest, unrelated to the Zephyr sample) was still declaring a
+UART passthrough device it never actually touches (confirmed: no UART
+reference anywhere in guests/test-arm64/entry.S) -- corrected to zero
+devices, matching the guest's real needs. Newly discovered, explicitly out
+of scope here: a plain release build with no embedded guest
+(configs/release_defconfig as committed, CONFIG_GUEST_EMBEDDED_IMAGE unset)
+fails to link -- domain-manager's forward_device_irqs() references the
+guest-manifest symbol unconditionally, with no guard for the no-guest case.
+This predates this session's changes and was never previously exercised;
+worth its own pass. -->

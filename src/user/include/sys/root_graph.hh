@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sys/console_client.hh>
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/guest_manifest.hh>
@@ -9,6 +10,7 @@
 
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/fault.hh>
 #include <abi/sys/v1/memory.hh>
 
 namespace sys::root_graph
@@ -16,6 +18,15 @@ namespace sys::root_graph
     inline constexpr word_t selector_base = 33U;
     inline constexpr word_t selector_stride = 3U;
     inline constexpr capability_id_t root_notification = 14U;
+    /*
+     * Every launched child's fault-endpoint capability (its own slot 10) is
+     * minted from root's own slot 10 (create_user_bundle(),
+     * scheduler.hh:518), so root receiving on its own slot 10 gets every
+     * child's fault delivery, badged per-child via endpoint_badge(). Root
+     * itself was also given this same slot 10 as its own fault endpoint at
+     * boot (scheduler.hh's root bootstrap).
+     */
+    inline constexpr capability_id_t root_fault_endpoint = 10U;
     inline constexpr word_t memory_role = 0x100U;
     inline constexpr word_t memory_selector =
         selector_base + abi::v1::control_plane_role_count * selector_stride;
@@ -38,6 +49,36 @@ namespace sys::root_graph
             return false;
         return control(abi::v1::control_operation::capability_mint, selector + 1U, service_endpoint,
                        endpoint, read_write, index + 1U) == static_cast<word_t>(error_t::success);
+    }
+
+    /*
+     * device_frame_create() is root-gated, so the console-server can't
+     * claim the UART itself -- root creates the one live device frame for
+     * it (now exclusivity-checked, see memory::create_device_frame()) and
+     * mints it into the console-server's cspace at the fixed slot its own
+     * code expects (src/user/servers/console/main.cc's
+     * uart_frame_selector), mirroring how start_embedded_guest() mints
+     * device frames into the domain-manager. Capability slots are
+     * per-cspace, so root's own scratch slot here doesn't collide with
+     * anything in the console-server's cspace or vice versa.
+     */
+    inline constexpr word_t console_index = static_cast<word_t>(abi::v1::control_plane_role::console) -
+                                            static_cast<word_t>(abi::v1::control_plane_role::process);
+    inline constexpr capability_id_t console_uart_root_frame_selector = 95U;
+    inline constexpr capability_id_t console_uart_child_frame_selector = 20U;
+    inline constexpr word_t console_uart_physical_address = 0x09000000U;
+
+    [[nodiscard]] inline bool mint_console_uart_frame() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const capability_id_t console_task = selector_base + console_index * selector_stride + 1U;
+        if (control(abi::v1::control_operation::device_frame_create,
+                    console_uart_root_frame_selector, console_uart_physical_address) != success)
+            return false;
+        return control(abi::v1::control_operation::capability_mint, console_task,
+                       console_uart_child_frame_selector, console_uart_root_frame_selector,
+                       read_write) == success;
     }
 
     [[nodiscard]] inline bool healthy(word_t index) noexcept {
@@ -97,6 +138,25 @@ namespace sys::root_graph
                         write_control) != success)
                 return false;
         }
+        /*
+         * The guest's UART is virtual (vPL011, see domain/main.cc) rather
+         * than passed through -- the console-server (see mint_console_
+         * uart_frame() above) owns the real hardware exclusively. The
+         * domain-manager needs its own capability to call the
+         * console-server's service endpoint directly (to forward TX bytes
+         * and poll for RX) rather than going through root. This mints a
+         * second capability to the exact same endpoint object root already
+         * holds from the console-server's own launch() call -- no new
+         * endpoint is created, matching how every other inter-service
+         * capability in this codebase is derived from an
+         * already-created source.
+         */
+        constexpr capability_id_t domain_console_endpoint_selector = 19U;
+        constexpr word_t write_only = static_cast<word_t>(abi::v1::CapabilityRight::write);
+        if (control(abi::v1::control_operation::capability_mint, domain_task,
+                    domain_console_endpoint_selector, endpoint_base + console_index,
+                    write_only) != success)
+            return false;
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
                      0U)
                 .status != success)
@@ -165,7 +225,7 @@ namespace sys::root_graph
             {memory_role, "bin/memory-server"},
             {static_cast<word_t>(abi::v1::control_plane_role::process), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::device), "bin/control-plane"},
-            {static_cast<word_t>(abi::v1::control_plane_role::console), "bin/control-plane"},
+            {static_cast<word_t>(abi::v1::control_plane_role::console), "bin/console-server"},
             {static_cast<word_t>(abi::v1::control_plane_role::domain), "bin/domain-manager"},
             {static_cast<word_t>(abi::v1::control_plane_role::supervisor), "bin/control-plane"},
         };
@@ -186,6 +246,73 @@ namespace sys::root_graph
         return true;
     }
 
+    /*
+     * Path-based process launch: resolves an arbitrary earlyfs-resident
+     * path at runtime (not just the six roles bind_role_images() resolves
+     * once at boot) and launches it as a new process. Reuses the earlyfs
+     * frame bind_role_images() already mapped at earlyfs_scratch_address --
+     * that mapping is never torn down, so no new frame/map_frame calls are
+     * needed here.
+     *
+     * dynamic_launch_role is a single reserved role slot (clear of every
+     * role range used elsewhere: 0x100-0x117, 0x200-0x204). role_image_bind
+     * upserts by matching role first, so calling this again with a
+     * different path simply repoints this one role_bindings[] slot at the
+     * new path -- this deliberately supports only one dynamically-launched
+     * image resolvable at a time. Two different dynamically-launched
+     * programs cannot both remain independently re-launchable
+     * simultaneously without a second reserved role or an unbind
+     * operation, neither of which exists today; that is a known scope
+     * limit, not an oversight.
+     */
+    inline constexpr word_t dynamic_launch_role = 0x300U;
+
+    [[nodiscard]] inline bool launch_path(const char* name, word_t cpu,
+                                          capability_id_t thread_selector,
+                                          capability_id_t task_selector,
+                                          capability_id_t space_selector) noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const auto* page =
+            reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
+        constexpr usize_t directory_bound = 4096U;
+        const auto found = platform::v1::earlyfs::find_span(page, directory_bound, name);
+        if (!found.found)
+            return false;
+        if (control(abi::v1::control_operation::role_image_bind, dynamic_launch_role,
+                    static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success)
+            return false;
+        return control(abi::v1::control_operation::process_create, cpu, dynamic_launch_role,
+                       thread_selector, task_selector, space_selector) == success;
+    }
+
+    /*
+     * Baseline crash handling: drain root's own fault endpoint (see
+     * root_fault_endpoint above) and reply terminate immediately for
+     * whatever is waiting there, instead of leaving a crashed child to sit
+     * blocked_fault for the kernel's own 500-tick fault_timeout_ticks
+     * before it silently times out to state::terminated. This only makes
+     * termination prompt -- it does not report the crash anywhere
+     * (deferred: production userspace has no logging syscall today, and
+     * OBS-010 forbids raw fault address/PC/syndrome in release logs even
+     * if one existed, so a redaction-compliant visibility mechanism needs
+     * its own separate design pass) and does not restart anything
+     * (USR-034, a separate, later item).
+     *
+     * ipc_receive() is a genuinely blocking primitive (unlike
+     * notification_poll's instant memory read); a 1-tick bounded wait is
+     * used to keep this from stalling the readiness-detection loop below
+     * by more than one scheduler tick per iteration while a check is made.
+     */
+    inline constexpr word_t fault_poll_ticks = 1U;
+
+    inline void drain_fault_reports() noexcept {
+        const auto reply =
+            ipc_receive(root_fault_endpoint, abi::v1::encode_timeout(fault_poll_ticks));
+        if (reply.status != static_cast<word_t>(error_t::success))
+            return;
+        (void)ipc_reply(static_cast<word_t>(abi::v1::fault_disposition::terminate), 0U, 0U, 0U);
+    }
+
     [[nodiscard]] inline int supervise() noexcept {
         if (!bind_role_images())
             return 1;
@@ -193,14 +320,32 @@ namespace sys::root_graph
                     memory_selector + 1U,
                     memory_selector + 2U) != static_cast<word_t>(error_t::success))
             return 1;
-        for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index)
+        for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
             if (!launch(index))
                 return 1;
+            /*
+             * Minted immediately after this specific launch(), not after
+             * the whole loop: launch() schedules the new thread onto
+             * index % 4U's CPU right away (process_create's IPI wakes
+             * other CPUs), so the console-server could start running --
+             * and call map_frame on the slot this mints into -- before
+             * root reaches a later loop iteration or falls through the
+             * loop entirely. Racing root's own mint against the
+             * console-server's own map_frame is exactly the kind of
+             * ordering bug this session already found the hard way once
+             * (root_graph.hh's earlier earlyfs-binding fixes); minting
+             * right here keeps it impossible by construction instead.
+             */
+            if (index == console_index && !mint_console_uart_frame())
+                return 1;
+        }
 
         const word_t expected =
             ((1U << abi::v1::control_plane_role_count) - 1U) | abi::v1::memory_service_ready_badge;
         word_t ready = 0U;
+        bool console_verified = false;
         for (;;) {
+            drain_fault_reports();
             word_t badges = 0U;
             const word_t status = control_result1(
                 badges, abi::v1::control_operation::notification_poll, root_notification);
@@ -213,6 +358,19 @@ namespace sys::root_graph
                 for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index)
                     if (!healthy(index))
                         return 4;
+                /*
+                 * Proves the console-server can genuinely drive the UART
+                 * from userspace: this text reaches the real serial output
+                 * without any kernel printk call in its path. Guarded so it
+                 * fires exactly once -- without CONFIG_GUEST_EMBEDDED_IMAGE
+                 * this whole branch re-runs every loop iteration once ready.
+                 */
+                if (!console_verified) {
+                    if (console::write(endpoint_base + console_index, "console-server alive\n") !=
+                        static_cast<word_t>(error_t::success))
+                        return 6;
+                    console_verified = true;
+                }
 #if CONFIG_GUEST_EMBEDDED_IMAGE
                 return start_embedded_guest() ? 0 : 5;
 #endif

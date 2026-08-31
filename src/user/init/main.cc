@@ -96,6 +96,46 @@ namespace
                             space_selector) == static_cast<sys::word_t>(sys::error_t::success);
     }
 
+    /*
+     * root_graph.hh's production path mints the UART device frame into
+     * the console-server's cspace right after launching it
+     * (mint_console_uart_frame()) so it can drive real hardware. This
+     * legacy harness's generic create_service_process() has no
+     * equivalent step for any role, so the console-server process it
+     * creates would call map_uart() against a capability slot that was
+     * never populated -- map_uart()'s bounded retry would spin through
+     * its whole attempt budget failing every time, then report failure
+     * instead of ready, hanging the combined-ready wait() forever.
+     * Mirror the same device-frame setup here, but only for the console
+     * role -- every other role is unaffected.
+     */
+    [[nodiscard]] bool create_console_service_process(sys::word_t cpu, sys::word_t role,
+                                                       sys::word_t thread_selector,
+                                                       sys::word_t task_selector,
+                                                       sys::word_t space_selector) noexcept {
+        if (!create_service_process(cpu, role, thread_selector, task_selector, space_selector))
+            return false;
+        if (role != static_cast<sys::word_t>(sys::abi::v1::control_plane_role::console))
+            return true;
+        constexpr sys::capability_id_t console_uart_root_frame_selector = 70U;
+        constexpr sys::capability_id_t console_uart_child_frame_selector = 20U;
+        constexpr sys::word_t console_uart_physical_address = 0x09000000U;
+        constexpr sys::word_t read_write = static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
+                                           static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        if (sys::control(sys::abi::v1::control_operation::device_frame_create,
+                         console_uart_root_frame_selector, console_uart_physical_address) != success)
+            return false;
+        if (sys::control(sys::abi::v1::control_operation::capability_mint, task_selector,
+                         console_uart_child_frame_selector, console_uart_root_frame_selector,
+                         read_write) != success) {
+            (void)sys::control(sys::abi::v1::control_operation::frame_destroy,
+                               console_uart_root_frame_selector);
+            return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] bool destroy_service_process(sys::word_t thread_selector,
                                                sys::word_t task_selector,
                                                sys::word_t space_selector,
@@ -847,32 +887,34 @@ namespace
 
     [[nodiscard]] bool test_domain_manager_lifecycle(sys::capability_id_t endpoint) noexcept {
         constexpr sys::capability_id_t domain_task_selector = 50U;
-        constexpr sys::capability_id_t device_frame_selector = 60U;
-        constexpr sys::capability_id_t device_frame_destination = 100U;
-        constexpr sys::capability_id_t device_irq_selector = 63U;
-        constexpr sys::capability_id_t device_irq_destination = 116U;
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
-        constexpr sys::word_t read_write = 3U;
-        constexpr sys::word_t write_control =
-            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write) |
-            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::control);
-        if (sys::control(sys::abi::v1::control_operation::device_frame_create, device_frame_selector,
-                         0x09000000U) != success)
-            return false;
+        /* The guest's UART is vPL011-emulated (trap-and-emulate through
+         * the console-server), not passed through directly -- see
+         * root_graph.hh::start_embedded_guest(), which likewise no longer
+         * hands the domain-manager a direct device_frame_create/
+         * interrupt_create capability for it. The guest manifest lists
+         * zero devices now, so there is nothing for a manifest-driven
+         * passthrough loop to set up either; the only setup the
+         * domain-manager still needs is the console-server endpoint
+         * below, for vPL011 to forward real character I/O through. */
+        /* control_plane_certification::run() creates the console role's
+         * endpoint at endpoint_base(16) + console_index(2) = 18 in this
+         * process's own cspace, and that role has already been created
+         * and health-checked by the time probe() reaches index 3 (domain)
+         * -- see control_plane_certification.hh's health-check loop, which
+         * runs before the probe loop. Mint it into the domain-manager's
+         * cspace at slot 19, matching domain/main.cc's
+         * console_endpoint_selector, mirroring
+         * root_graph.hh::start_embedded_guest() on the production path
+         * now that the guest's UART is vPL011-emulated rather than
+         * passed through directly. */
+        constexpr sys::capability_id_t local_console_endpoint_selector = 18U;
+        constexpr sys::capability_id_t domain_console_endpoint_selector = 19U;
+        constexpr sys::word_t write_only =
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
         if (sys::control(sys::abi::v1::control_operation::capability_mint, domain_task_selector,
-                         device_frame_destination, device_frame_selector, read_write) != success) {
-            (void)sys::control(sys::abi::v1::control_operation::frame_destroy,
-                               device_frame_selector);
-            return false;
-        }
-        /* Domain-manager owns physical IRQ 33 (PL011) via a userspace-forwarded
-         * interrupt capability -- see root_graph.hh::start_embedded_guest() for
-         * the same setup used on the real boot path. */
-        if (sys::control(sys::abi::v1::control_operation::interrupt_create, device_irq_selector,
-                         33U, 0U) != success)
-            return false;
-        if (sys::control(sys::abi::v1::control_operation::capability_mint, domain_task_selector,
-                         device_irq_destination, device_irq_selector, write_control) != success)
+                         domain_console_endpoint_selector, local_console_endpoint_selector,
+                         write_only) != success)
             return false;
         const auto launch = sys::ipc_call(endpoint,
                                           static_cast<sys::word_t>(
@@ -938,10 +980,7 @@ namespace
             sys::ipc_call(endpoint,
                           static_cast<sys::word_t>(sys::abi::v1::control_plane_operation::destroy),
                           0U).status == success;
-        const bool released =
-            sys::control(sys::abi::v1::control_operation::frame_destroy, device_frame_selector) ==
-            success;
-        return destroyed && released;
+        return destroyed;
     }
 
     [[nodiscard]] bool test_memory_authority_revoke() noexcept {
@@ -1282,7 +1321,7 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
                authority_revoke_pass && pressure_rollback_pass && fuzz_pass && destroyed && reused);
     record(ledger, test_id::userspace_control_plane_graph,
            sys::control_plane_certification::run(
-               create_service_process, destroy_service_process, wait_for_badges,
+               create_console_service_process, destroy_service_process, wait_for_badges,
                [](sys::word_t index, sys::capability_id_t endpoint) noexcept {
                    return index != 3U ? true : test_domain_manager_lifecycle(endpoint);
                }));

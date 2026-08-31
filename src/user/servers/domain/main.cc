@@ -1,7 +1,9 @@
+#include <sys/console_client.hh>
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/domain_manager.hh>
 #include <sys/guest_manifest.hh>
+#include <sys/hypervisor.hh>
 #include <sys/ipc.hh>
 #include <sys/thread.hh>
 #include <sys/types.hh>
@@ -28,6 +30,9 @@ namespace
     [[maybe_unused]] inline constexpr sys::capability_id_t device_frame_base = 100U;
     [[maybe_unused]] inline constexpr sys::capability_id_t device_irq_base = 116U;
     [[maybe_unused]] inline constexpr sys::capability_id_t device_irq_notification_selector = 18U;
+    // Minted by root_graph.hh::start_embedded_guest() -- the console-
+    // server's own service endpoint, reused directly rather than a new one.
+    inline constexpr sys::capability_id_t console_endpoint_selector = 19U;
     inline constexpr sys::capability_id_t guest_frame_base = 20U;
     inline constexpr sys::word_t scratch_address = 0x2003f000U;
     inline constexpr sys::word_t guest_page_size = 4096U;
@@ -86,6 +91,47 @@ namespace
     inline sys::word_t mapped_device_ipa[sys::guest_manifest::maximum_devices]{};
     inline bool mapped_device[sys::guest_manifest::maximum_devices]{};
     inline sys::domain_manager::manager domain{};
+
+    /*
+     * vPL011: the guest's UART (manifest has zero passthrough devices, see
+     * samples/guests/zephyr/manifest.cc) is trapped and emulated here
+     * instead, with real character I/O forwarded through the
+     * console-server. Only the register state this guest's actual PL011
+     * driver touches is modeled (see the plan doc's investigation of the
+     * fetched Zephyr driver source): DR, FR (RXFE/TXFF), IMSC (RXIM), and
+     * CR are real; everything else in the 4 KiB IPA window is a safe
+     * write-and-discard / read-returns-0.
+     */
+    namespace vpl011
+    {
+        inline constexpr sys::word_t base_ipa = 0x09000000U;
+        inline constexpr sys::word_t size = 0x1000U;
+        inline constexpr sys::u16 irq = 33U;
+
+        inline constexpr sys::word_t offset_dr = 0x00U;
+        inline constexpr sys::word_t offset_fr = 0x18U;
+        inline constexpr sys::word_t offset_cr = 0x30U;
+        inline constexpr sys::word_t offset_imsc = 0x38U;
+
+        inline constexpr sys::word_t fr_rxfe = 1U << 4U;
+        // TXFF (bit 5) is never set in emulated FR reads below: TX is a
+        // synchronous forward to the console-server, so the guest never
+        // needs to wait for space.
+        inline constexpr sys::word_t imsc_rxim = 1U << 4U;
+
+        // qualification bit layout, matches
+        // src/arch/arm64/include/sys/arch/hypervisor.hh's mmio_qualification()
+        inline constexpr sys::word_t qualification_write_bit = 63U;
+        inline constexpr sys::word_t qualification_srt_shift = 55U;
+        inline constexpr sys::word_t qualification_srt_mask = 0x1fU;
+        inline constexpr sys::word_t pc_field = 31U;
+        inline constexpr sys::word_t xzr_register = 31U;
+
+        inline sys::word_t imsc{};
+        inline sys::word_t cr{};
+        inline bool rx_pending{};
+        inline sys::u8 rx_byte{};
+    } // namespace vpl011
 
     [[nodiscard]] inline constexpr sys::word_t load_error(sys::word_t stage,
                                                            sys::word_t status) noexcept {
@@ -218,13 +264,109 @@ namespace
     }
 
     /*
+     * Polls the console-server for one real-hardware RX byte and, if the
+     * guest has RX interrupts unmasked (IMSC.RXIM), injects vPL011's
+     * virtual IRQ -- same domain.vm.inject() call forward_device_irqs()
+     * already uses for the passthrough case, just software-triggered
+     * instead of driven by a real interrupt line. Called once per serve()
+     * iteration, same placement convention as forward_device_irqs().
+     */
+    inline void forward_console_input() noexcept {
+        if (vpl011::rx_pending)
+            return;
+        const auto polled = sys::console::read_byte(console_endpoint_selector);
+        if (!polled.available)
+            return;
+        vpl011::rx_pending = true;
+        vpl011::rx_byte = polled.value;
+        if ((vpl011::imsc & vpl011::imsc_rxim) != 0U)
+            (void)domain.vm.inject(vpl011::irq);
+    }
+
+    /*
+     * Resolves an mmio VM exit against the vPL011 IPA window. Returns
+     * false (untouched) for anything outside that window, so the caller's
+     * existing terminal-exit handling still applies unchanged for real
+     * unexpected accesses. Follows the same decode-emulate-advance-PC
+     * pattern as the kernel's own emulate_native_gic_mmio() (src/arch/
+     * arm64/include/sys/arch/hypervisor.hh), just from userspace via
+     * vcpu_state_read/write instead of direct register-frame access.
+     */
+    [[nodiscard]] inline bool handle_vpl011_mmio(const sys::abi::v1::vm_exit_result& exit) noexcept {
+        /*
+         * exit.fault_address is populated from raw FAR_EL2, which for a
+         * stage-2-only abort (guest stage-1 already translated the access)
+         * is not a reliable IPA -- it can be a guest virtual address if the
+         * guest's own MMU maps the device at a different VA than its IPA,
+         * which this Zephyr build does. The properly reconstructed IPA
+         * (HPFAR_EL2 combined with the page offset) is what the kernel
+         * packs into qualification's low 48 bits instead -- see
+         * arch::hypervisor::guest_fault_ipa()/mmio_qualification() in
+         * src/arch/arm64/include/sys/arch/hypervisor.hh. That's the field
+         * to use here, not fault_address.
+         */
+        const sys::word_t ipa = exit.qualification & 0x0000ffffffffffffULL;
+        if (ipa < vpl011::base_ipa || ipa >= vpl011::base_ipa + vpl011::size)
+            return false;
+        const sys::word_t offset = ipa - vpl011::base_ipa;
+        const bool write = ((exit.qualification >> vpl011::qualification_write_bit) & 1U) != 0U;
+        const sys::word_t target =
+            (exit.qualification >> vpl011::qualification_srt_shift) & vpl011::qualification_srt_mask;
+
+        sys::word_t value = 0U;
+        if (write && target != vpl011::xzr_register) {
+            const auto read = sys::vcpu_state_read(domain.vm.vcpu, target);
+            value = read.value;
+        }
+
+        switch (offset) {
+            case vpl011::offset_dr:
+                if (write) {
+                    (void)sys::console::write_byte(console_endpoint_selector,
+                                                   static_cast<sys::u8>(value));
+                } else {
+                    value = vpl011::rx_pending ? static_cast<sys::word_t>(vpl011::rx_byte) : 0U;
+                    vpl011::rx_pending = false;
+                }
+                break;
+            case vpl011::offset_fr:
+                if (!write)
+                    value = vpl011::rx_pending ? 0U : vpl011::fr_rxfe;
+                break;
+            case vpl011::offset_imsc:
+                if (write)
+                    vpl011::imsc = value;
+                else
+                    value = vpl011::imsc;
+                break;
+            case vpl011::offset_cr:
+                if (write)
+                    vpl011::cr = value;
+                else
+                    value = vpl011::cr;
+                break;
+            default:
+                // LCR_H, IBRD, FBRD, IFLS, ICR, DMACR, RIS, MIS, etc.: this
+                // guest's actual driver never reads these back in a way
+                // that affects behavior (confirmed against its fetched
+                // source) -- accept writes silently, read back 0.
+                break;
+        }
+
+        if (!write && target != vpl011::xzr_register)
+            (void)sys::vcpu_state_write(domain.vm.vcpu, target, value);
+        (void)sys::vcpu_state_write(domain.vm.vcpu, vpl011::pc_field, exit.guest_pc + 4U);
+        return true;
+    }
+
+    /*
      * Map every passthrough device the manifest declares and bind a
      * notification to any of their forwarded physical IRQs. Root has
      * already created and minted the underlying frame/interrupt
      * capabilities at device_frame_base/device_irq_base + index (see
      * root_graph.hh::start_embedded_guest()); this just consumes them.
      */
-    [[nodiscard]] inline sys::word_t map_manifest_devices(
+    [[maybe_unused]] [[nodiscard]] inline sys::word_t map_manifest_devices(
         const sys::guest_manifest::manifest& manifest) noexcept {
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
         bool any_irq = false;
@@ -449,9 +591,25 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             if (domain.lifecycle != sys::domain_manager::state::runnable) {
                 result0 = static_cast<sys::word_t>(sys::error_t::busy);
             } else {
-                const auto& exit = domain.run();
-                result0 = exit.status;
-                result1 = static_cast<sys::word_t>(exit.reason);
+                /* Before vPL011, the guest's UART was direct passthrough,
+                 * so it never trapped and one domain.run() call already
+                 * carried the guest through its entire boot sequence to
+                 * its first genuine wait/virtual_timer exit. Now UART
+                 * accesses are real vm-exits that a single run() call
+                 * would otherwise stop at immediately (the first register
+                 * touch, well before the boot banner). Looping over
+                 * handled mmio exits here restores that original
+                 * single-call semantic instead of changing it. */
+                for (;;) {
+                    const auto& exit = domain.run();
+                    if (exit.status == static_cast<sys::word_t>(sys::error_t::success) &&
+                        exit.reason == sys::abi::v1::vm_exit_reason::mmio &&
+                        handle_vpl011_mmio(exit))
+                        continue;
+                    result0 = exit.status;
+                    result1 = static_cast<sys::word_t>(exit.reason);
+                    break;
+                }
             }
         } else if (operation == sys::abi::v1::control_plane_operation::serve) {
             if (domain.lifecycle != sys::domain_manager::state::runnable) {
@@ -459,15 +617,20 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             } else {
                 for (;;) {
                     forward_device_irqs();
+                    forward_console_input();
                     const auto& exit = domain.run();
-                    if (exit.status != static_cast<sys::word_t>(sys::error_t::success) ||
-                        (exit.reason != sys::abi::v1::vm_exit_reason::wait &&
-                         exit.reason != sys::abi::v1::vm_exit_reason::virtual_timer)) {
-                        result0 = exit.status;
-                        result1 = (static_cast<sys::word_t>(exit.reason) << 32U) |
-                                  (exit.qualification & 0xffffffffU);
-                        break;
-                    }
+                    if (exit.status == static_cast<sys::word_t>(sys::error_t::success) &&
+                        (exit.reason == sys::abi::v1::vm_exit_reason::wait ||
+                         exit.reason == sys::abi::v1::vm_exit_reason::virtual_timer))
+                        continue;
+                    if (exit.status == static_cast<sys::word_t>(sys::error_t::success) &&
+                        exit.reason == sys::abi::v1::vm_exit_reason::mmio &&
+                        handle_vpl011_mmio(exit))
+                        continue;
+                    result0 = exit.status;
+                    result1 = (static_cast<sys::word_t>(exit.reason) << 32U) |
+                              (exit.qualification & 0xffffffffU);
+                    break;
                 }
             }
         } else if (operation == sys::abi::v1::control_plane_operation::destroy) {

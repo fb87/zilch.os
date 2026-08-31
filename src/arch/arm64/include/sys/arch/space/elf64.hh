@@ -8,11 +8,24 @@ namespace sys::arch::space::elf64
     inline constexpr u8 elf_class_64 = 2U;
     inline constexpr u8 elf_data_little = 1U;
     inline constexpr u16 elf_machine_aarch64 = 183U;
+    inline constexpr u16 elf_type_exec = 2U;
     inline constexpr u32 program_type_load = 1U;
     inline constexpr u32 program_flag_execute = 1U;
     inline constexpr u32 program_flag_write = 2U;
     inline constexpr usize_t bootstrap_pages = 64U;
     inline constexpr usize_t bootstrap_size = bootstrap_pages * memory::page_size;
+    /*
+     * The user stack occupies exactly one page immediately above this
+     * window (arch::space::user_stack_base == user_code + bootstrap_size),
+     * with no page-table entry reserved between them. Without this, an
+     * image using the full window leaves zero unmapped gap before the
+     * stack, so whether a stack overflow faults cleanly or silently
+     * corrupts the image's own last page depends on incidental layout
+     * rather than a guarantee. Reserving the top page as a permanent
+     * unmapped gap makes that a guarantee instead.
+     */
+    inline constexpr usize_t stack_guard_pages = 1U;
+    inline constexpr usize_t loadable_pages = bootstrap_pages - stack_guard_pages;
 
     struct header {
         u8 ident[16];
@@ -62,8 +75,8 @@ namespace sys::arch::space::elf64
         return value.ident[0] == 0x7fU && value.ident[1] == 'E' && value.ident[2] == 'L' &&
                value.ident[3] == 'F' && value.ident[4] == elf_class_64 &&
                value.ident[5] == elf_data_little && value.ident[6] == 1U &&
-               value.machine == elf_machine_aarch64 && value.version == 1U &&
-               value.header_size == sizeof(header) &&
+               value.type == elf_type_exec && value.machine == elf_machine_aarch64 &&
+               value.version == 1U && value.header_size == sizeof(header) &&
                value.program_entry_size == sizeof(program_header) && value.program_count != 0U;
     }
 
@@ -121,7 +134,7 @@ namespace sys::arch::space::elf64
             const usize_t first_page = static_cast<usize_t>(relative / memory::page_size);
             const usize_t end_page =
                 static_cast<usize_t>((segment_end + memory::page_size - 1U) / memory::page_size);
-            if (end_page > bootstrap_pages)
+            if (end_page > loadable_pages)
                 return {};
             for (usize_t page = first_page; page < end_page; ++page) {
                 if (permissions[page].present)
@@ -232,7 +245,7 @@ namespace sys::arch::space::elf64
             const usize_t first_page = static_cast<usize_t>(relative / memory::page_size);
             const usize_t end_page =
                 static_cast<usize_t>((segment_end + memory::page_size - 1U) / memory::page_size);
-            if (end_page > bootstrap_pages)
+            if (end_page > loadable_pages)
                 return fail();
             for (usize_t page = first_page; page < end_page; ++page) {
                 if (permissions[page].present)

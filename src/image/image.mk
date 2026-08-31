@@ -19,6 +19,7 @@ $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(G
 		--entry bin/memory-server=$(USER_OBJDIR)/memory-server.elf \
 		--entry bin/control-plane=$(USER_OBJDIR)/control-plane.elf \
 		--entry bin/domain-manager=$(USER_OBJDIR)/domain-manager.elf \
+		--entry bin/console-server=$(USER_OBJDIR)/console-server.elf \
 		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
 		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \
 		--entry guests/test-arm64=$(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),-) \

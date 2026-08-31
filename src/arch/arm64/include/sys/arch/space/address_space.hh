@@ -41,6 +41,7 @@ namespace sys::arch::space
     inline constexpr word_t control_plane_image_role_base = 0x200U;
     inline constexpr word_t control_plane_image_role_count = 5U;
     inline constexpr word_t domain_manager_image_role = 0x203U;
+    inline constexpr word_t console_server_image_role = 0x202U;
 
     struct image_view {
         char* start;
@@ -172,7 +173,9 @@ namespace sys::arch::space
 #endif
         else if (role >= control_plane_image_role_base &&
                  role < control_plane_image_role_base + control_plane_image_role_count)
-            name = role == domain_manager_image_role ? "bin/domain-manager" : "bin/control-plane";
+            name = role == domain_manager_image_role   ? "bin/domain-manager"
+                  : role == console_server_image_role ? "bin/console-server"
+                                                        : "bin/control-plane";
 
         const auto* earlyfs_begin = reinterpret_cast<const u8*>(sys_arm64_earlyfs_image_start);
         const auto earlyfs_size = static_cast<usize_t>(sys_arm64_earlyfs_image_end -

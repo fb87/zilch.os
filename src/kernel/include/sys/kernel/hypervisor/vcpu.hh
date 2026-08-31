@@ -79,7 +79,17 @@ namespace sys::kernel::hypervisor
             value = *target;
             return error_t::success;
         }
-        if (field == 31U && !aligned(value))
+        /*
+         * PC only needs 4-byte AArch64 instruction alignment (matching
+         * configure_vcpu()'s own (pc & 3U) check below), not the page
+         * alignment aligned() checks (correct for the TTBR fields below,
+         * which do need it) -- using aligned() here rejected every
+         * legitimate post-emulation PC advance (e.g. guest_pc + 4), since
+         * an instruction address is essentially never page-aligned. Latent
+         * until now: nothing called vcpu_state_write for field 31 before
+         * MMIO-exit resolve-and-resume needed to advance PC.
+         */
+        if (field == 31U && (value & 3U) != 0U)
             return error_t::invalid_argument;
         if (field == 32U)
             value = arch::hypervisor::sanitize_guest_pstate(value);

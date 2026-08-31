@@ -980,6 +980,18 @@ namespace sys::kernel::memory
         if (!owner.root || destination >= capability::cspace_slot_count ||
             (address & (page_size - 1U)) != 0U || !platform::memory::valid_device_page(address))
             return error_t::denied;
+        /*
+         * Without this, two different callers could both be granted a
+         * capability to the same physical MMIO page with no coordination
+         * between them -- device frames otherwise carry no exclusivity of
+         * their own. Only one live device frame per physical page is
+         * permitted; the slot frees up again once its owner destroys it.
+         */
+        for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
+            if (__atomic_load_n(&frames[index].in_use, __ATOMIC_ACQUIRE) &&
+                frames[index].device && frames[index].physical_address == address)
+                return error_t::busy;
+        }
         frame* target = nullptr;
         for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
             bool expected = false;
