@@ -40,6 +40,7 @@ namespace sys::abi::v1
 
     inline constexpr word_t control_plane_role_count = 5U;
     inline constexpr word_t memory_service_ready_badge = 1U << 5U;
+    inline constexpr word_t serial_service_ready_badge = 1U << 6U;
     inline constexpr word_t control_plane_health_magic = 0x4845414cU;
     inline constexpr word_t control_plane_exit_badge(word_t role) noexcept {
         const word_t first = static_cast<word_t>(control_plane_role::process);

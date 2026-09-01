@@ -53,7 +53,17 @@ namespace sys::root_graph
     inline constexpr capability_id_t memory_service_endpoint = endpoint_base +
                                                                abi::v1::control_plane_role_count;
 
-    static_assert(memory_service_endpoint < 64U);
+    /*
+     * serial-driver, same non-control-plane-role wiring as memory-server
+     * above: it doesn't fit the fixed 5-slot control_plane_role enum/loop,
+     * so it gets a direct process_create in supervise() plus its own
+     * selector range and endpoint, past memory's.
+     */
+    inline constexpr word_t serial_role = 0x107U;
+    inline constexpr word_t serial_selector = memory_service_endpoint + 1U;
+    inline constexpr capability_id_t serial_service_endpoint = serial_selector + 3U;
+
+    static_assert(serial_service_endpoint < 64U);
 
     /*
      * Per-role restart bookkeeping (USR-034): thread_id lets drain_fault_
@@ -152,43 +162,104 @@ namespace sys::root_graph
         return true;
     }
 
-    /*
-     * device_frame_create() is root-gated, so the console-server can't
-     * claim the UART itself -- root creates the one live device frame for
-     * it (now exclusivity-checked, see memory::create_device_frame()) and
-     * mints it into the console-server's cspace at the fixed slot its own
-     * code expects (src/user/servers/console/main.cc's
-     * uart_frame_selector), mirroring how start_embedded_guest() mints
-     * device frames into the domain-manager. Capability slots are
-     * per-cspace, so root's own scratch slot here doesn't collide with
-     * anything in the console-server's cspace or vice versa.
-     */
     inline constexpr word_t console_index = static_cast<word_t>(abi::v1::control_plane_role::console) -
                                             static_cast<word_t>(abi::v1::control_plane_role::process);
-    inline constexpr capability_id_t console_uart_root_frame_selector = 95U;
-    inline constexpr capability_id_t console_uart_child_frame_selector = 20U;
-    inline constexpr word_t console_uart_physical_address = 0x09000000U;
 
-    // Creates the one live device frame for the UART. Must run exactly
-    // once: device_frame_create() rejects a second live frame at the same
-    // physical address (memory::create_device_frame()'s exclusivity check),
-    // and this frame object survives a console-server restart untouched
-    // (root's own cspace, not the console-server's) -- restarting the
-    // console role only needs to re-mint it (mint_console_uart_frame()
-    // below), never recreate it.
-    [[nodiscard]] inline bool create_console_uart_frame() noexcept {
-        return control(abi::v1::control_operation::device_frame_create,
-                       console_uart_root_frame_selector, console_uart_physical_address) ==
-               static_cast<word_t>(error_t::success);
+    /*
+     * The UART itself now belongs entirely to serial-driver (src/user/
+     * drivers/serial), not console-server -- device_frame_create() and
+     * interrupt_create() are both root-gated, so root creates the one live
+     * device frame and the one live IRQ capability for it (exclusivity-
+     * checked the same way create_device_frame() already was) and mints
+     * both into serial-driver's cspace at the fixed slots its own code
+     * expects (uart_frame_selector=20, irq_selector=21). console_irq=33 is
+     * the real PL011's GIC SPI 1, confirmed against this platform's actual
+     * device tree (`pl011@9000000`'s `interrupts = <0 1 4>` -- SPI 1 =
+     * INTID 33, flags 4 = level-high), not assumed.
+     */
+    inline constexpr capability_id_t serial_uart_root_frame_selector = 95U;
+    inline constexpr capability_id_t serial_uart_child_frame_selector = 20U;
+    inline constexpr word_t console_uart_physical_address = 0x09000000U;
+    inline constexpr capability_id_t serial_irq_root_selector = 94U;
+    inline constexpr capability_id_t serial_irq_child_selector = 21U;
+    inline constexpr irq_id_t console_irq = 33U;
+
+    // Both must run exactly once: device_frame_create()'s and
+    // interrupt_create()'s exclusivity checks reject a second live
+    // frame/IRQ capability for the same physical address/IRQ number.
+    // serial-driver is not restart-covered (see restart_role()'s comment),
+    // so there is no repeatable re-mint counterpart to design for here.
+    [[nodiscard]] inline bool create_serial_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        if (control(abi::v1::control_operation::device_frame_create,
+                    serial_uart_root_frame_selector, console_uart_physical_address) != success)
+            return false;
+        return control(abi::v1::control_operation::interrupt_create, serial_irq_root_selector,
+                       console_irq, 0U) == success;
     }
 
-    [[nodiscard]] inline bool mint_console_uart_frame() noexcept {
+    [[nodiscard]] inline bool mint_serial_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const word_t write_control = static_cast<word_t>(abi::v1::CapabilityRight::write) |
+                                     static_cast<word_t>(abi::v1::CapabilityRight::control);
+        const capability_id_t serial_task = serial_selector + 1U;
+        if (control(abi::v1::control_operation::capability_mint, serial_task,
+                    serial_uart_child_frame_selector, serial_uart_root_frame_selector,
+                    read_write) != success)
+            return false;
+        return control(abi::v1::control_operation::capability_mint, serial_task,
+                       serial_irq_child_selector, serial_irq_root_selector,
+                       write_control) == success;
+    }
+
+    /*
+     * console-server no longer touches hardware at all -- it forwards
+     * TX/RX to serial-driver over IPC. It holds two capabilities beyond
+     * its own service_endpoint=11 (the existing write/health/describe/stop
+     * endpoint, unchanged): a capability to serial-driver's own service
+     * endpoint (console_serial_endpoint_selector, so it can forward), and
+     * a second, DEDICATED endpoint of its own for read_byte
+     * (console_stdin_endpoint_selector) -- served by a second thread (see
+     * console_stdin_role below), independent from the write-serving main
+     * thread. Both are re-mintable, called at launch and replayed by
+     * restart_role() on a console-server restart, same as every other
+     * role-specific extra mint.
+     */
+    inline constexpr capability_id_t console_serial_endpoint_selector = 20U;
+    inline constexpr capability_id_t console_stdin_endpoint_selector = 12U;
+    inline constexpr capability_id_t console_stdin_endpoint = serial_service_endpoint + 1U;
+
+    static_assert(console_stdin_endpoint < 64U);
+
+    /*
+     * console-server's second thread: bound to its OWN already-built binary
+     * under a reserved role, exactly like root_supervisor_role does for
+     * root's own second thread (see that constant's comment below).
+     * console-server spawns it itself via thread_create once root has
+     * bound this role's image -- thread_create is not root-gated, only
+     * role_image_bind is, so console-server can self-service the create
+     * call. thread_selector/space_selector are console-server's own
+     * cspace slots (shared with its main thread, since thread_create
+     * attaches to the caller's existing task).
+     */
+    inline constexpr word_t console_stdin_role = 0x108U;
+    inline constexpr capability_id_t console_stdin_thread_selector = 30U;
+    inline constexpr capability_id_t console_stdin_space_selector = 31U;
+
+    [[nodiscard]] inline bool mint_console_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
         const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
                                   static_cast<word_t>(abi::v1::CapabilityRight::write);
         const capability_id_t console_task = selector_base + console_index * selector_stride + 1U;
+        if (control(abi::v1::control_operation::capability_mint, console_task,
+                    console_serial_endpoint_selector, serial_service_endpoint,
+                    read_write) != success)
+            return false;
         return control(abi::v1::control_operation::capability_mint, console_task,
-                       console_uart_child_frame_selector, console_uart_root_frame_selector,
-                       read_write) == static_cast<word_t>(error_t::success);
+                       console_stdin_endpoint_selector, console_stdin_endpoint,
+                       read_write) == success;
     }
 
     [[nodiscard]] inline bool healthy(word_t index) noexcept {
@@ -207,6 +278,7 @@ namespace sys::root_graph
     inline constexpr capability_id_t device_frame_base = 100U;
     inline constexpr capability_id_t device_irq_base = 116U;
     inline constexpr capability_id_t domain_console_endpoint_selector = 19U;
+    inline constexpr capability_id_t domain_console_stdin_endpoint_selector = 52U;
 
     /*
      * Root owns physical devices/interrupts and creates capabilities for
@@ -246,15 +318,16 @@ namespace sys::root_graph
      * cspace, same as any other freshly created role).
      *
      * The guest's UART is virtual (vPL011, see domain/main.cc) rather than
-     * passed through -- the console-server (see mint_console_uart_frame()
-     * above) owns the real hardware exclusively. The domain-manager needs
-     * its own capability to call the console-server's service endpoint
-     * directly (to forward TX bytes and poll for RX) rather than going
-     * through root. This mints a second capability to the exact same
-     * endpoint object root already holds from the console-server's own
-     * launch() call -- no new endpoint is created, matching how every other
-     * inter-service capability in this codebase is derived from an
-     * already-created source.
+     * passed through -- serial-driver (see mint_serial_resources() above)
+     * owns the real hardware exclusively. The domain-manager needs its own
+     * capabilities to call console-server's endpoints directly (write to
+     * forward TX, and now a SEPARATE endpoint to poll RX -- console-server
+     * splits write and read across two threads/endpoints, see
+     * mint_console_resources()) rather than going through root. These mint
+     * second capabilities to the exact same endpoint objects root already
+     * holds from console-server's own launch() -- no new endpoints are
+     * created, matching how every other inter-service capability in this
+     * codebase is derived from an already-created source.
      */
     [[nodiscard]] inline bool mint_embedded_guest_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
@@ -281,8 +354,12 @@ namespace sys::root_graph
                 success)
                 return false;
         }
+        if (control(abi::v1::control_operation::capability_mint, domain_task,
+                    domain_console_endpoint_selector, endpoint_base + console_index,
+                    write_only) != success)
+            return false;
         return control(abi::v1::control_operation::capability_mint, domain_task,
-                       domain_console_endpoint_selector, endpoint_base + console_index,
+                       domain_console_stdin_endpoint_selector, console_stdin_endpoint,
                        write_only) == success;
     }
 #endif
@@ -338,9 +415,11 @@ namespace sys::root_graph
 
         const role_image_entry bindings[] = {
             {memory_role, "bin/memory-server"},
+            {serial_role, "bin/serial-driver"},
             {static_cast<word_t>(abi::v1::control_plane_role::process), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::device), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::console), "bin/console-server"},
+            {console_stdin_role, "bin/console-server"},
             {static_cast<word_t>(abi::v1::control_plane_role::domain), "bin/domain-manager"},
             {static_cast<word_t>(abi::v1::control_plane_role::supervisor), "bin/control-plane"},
         };
@@ -550,7 +629,7 @@ namespace sys::root_graph
                     endpoint_base + index, read_write, index + 1U) != success)
             return false;
 
-        if (index == console_index && !mint_console_uart_frame())
+        if (index == console_index && !mint_console_resources())
             return false;
 #if CONFIG_GUEST_EMBEDDED_IMAGE
         if (index == domain_index) {
@@ -650,6 +729,26 @@ namespace sys::root_graph
                         read_write) != static_cast<word_t>(error_t::success))
                 return 1;
         }
+        if (control(abi::v1::control_operation::process_create, 2U, serial_role, serial_selector,
+                    serial_selector + 1U,
+                    serial_selector + 2U) != static_cast<word_t>(error_t::success))
+            return 1;
+        {
+            const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                      static_cast<word_t>(abi::v1::CapabilityRight::write);
+            if (control(abi::v1::control_operation::endpoint_create, serial_service_endpoint) !=
+                static_cast<word_t>(error_t::success))
+                return 1;
+            if (control(abi::v1::control_operation::capability_mint, serial_selector + 1U,
+                        service_endpoint, serial_service_endpoint,
+                        read_write) != static_cast<word_t>(error_t::success))
+                return 1;
+            if (!create_serial_resources() || !mint_serial_resources())
+                return 1;
+            if (control(abi::v1::control_operation::endpoint_create, console_stdin_endpoint) !=
+                static_cast<word_t>(error_t::success))
+                return 1;
+        }
         for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
             if (!launch(index, state))
                 return 1;
@@ -666,13 +765,13 @@ namespace sys::root_graph
              * (root_graph.hh's earlier earlyfs-binding fixes); minting
              * right here keeps it impossible by construction instead.
              */
-            if (index == console_index &&
-                (!create_console_uart_frame() || !mint_console_uart_frame()))
+            if (index == console_index && !mint_console_resources())
                 return 1;
         }
 
-        const word_t expected =
-            ((1U << abi::v1::control_plane_role_count) - 1U) | abi::v1::memory_service_ready_badge;
+        const word_t expected = ((1U << abi::v1::control_plane_role_count) - 1U) |
+                                abi::v1::memory_service_ready_badge |
+                                abi::v1::serial_service_ready_badge;
         word_t ready = 0U;
         bool console_verified = false;
         bool supervisor_spawned = false;

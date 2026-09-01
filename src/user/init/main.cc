@@ -192,23 +192,32 @@ namespace
             return false;
         if (role != static_cast<sys::word_t>(sys::abi::v1::control_plane_role::console))
             return true;
-        constexpr sys::capability_id_t console_uart_root_frame_selector = 70U;
-        constexpr sys::capability_id_t console_uart_child_frame_selector = 20U;
-        constexpr sys::word_t console_uart_physical_address = 0x09000000U;
+        /*
+         * console-server no longer touches raw hardware (it forwards to
+         * serial-driver, which this isolated harness never launches -- see
+         * root_graph.hh for the production wiring), but it unconditionally
+         * spawns a second thread at startup (thread_create, not process_
+         * create -- see console/main.cc's stdin_main()) that blocks on its
+         * own dedicated endpoint. Without a real endpoint minted at the
+         * slot it expects (console-server's local slot 12), that blocking
+         * receive would fail its capability lookup immediately instead of
+         * genuinely blocking, and loop forever doing so -- confirmed
+         * hanging the whole harness the first time this was tested. This
+         * mints a real (if never-signaled) endpoint so it blocks properly
+         * instead; nothing in this harness exercises byte-level read_byte/
+         * write/write_byte, so nothing else needs wiring here.
+         */
+        constexpr sys::capability_id_t console_stdin_root_endpoint_selector = 70U;
+        constexpr sys::capability_id_t console_stdin_child_endpoint_selector = 12U;
         constexpr sys::word_t read_write = static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
                                            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
-        if (sys::control(sys::abi::v1::control_operation::device_frame_create,
-                         console_uart_root_frame_selector, console_uart_physical_address) != success)
+        if (sys::control(sys::abi::v1::control_operation::endpoint_create,
+                         console_stdin_root_endpoint_selector) != success)
             return false;
-        if (sys::control(sys::abi::v1::control_operation::capability_mint, task_selector,
-                         console_uart_child_frame_selector, console_uart_root_frame_selector,
-                         read_write) != success) {
-            (void)sys::control(sys::abi::v1::control_operation::frame_destroy,
-                               console_uart_root_frame_selector);
-            return false;
-        }
-        return true;
+        return sys::control(sys::abi::v1::control_operation::capability_mint, task_selector,
+                            console_stdin_child_endpoint_selector,
+                            console_stdin_root_endpoint_selector, read_write) == success;
     }
 
     [[nodiscard]] bool destroy_service_process(sys::word_t thread_selector,

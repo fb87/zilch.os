@@ -42,6 +42,23 @@ namespace sys::arch::space
     inline constexpr word_t control_plane_image_role_count = 5U;
     inline constexpr word_t domain_manager_image_role = 0x203U;
     inline constexpr word_t console_server_image_role = 0x202U;
+    /*
+     * console-server spawns a second thread of its own (via thread_create,
+     * not process_create -- see src/user/servers/console/main.cc's
+     * stdin_main()) under this role, unconditionally, in every environment
+     * that launches console-server's binary at all -- not just under
+     * root_graph.hh's production boot (which binds it explicitly via
+     * bind_role_image()), but also the legacy CONFIG_SELFTEST harness in
+     * this same file's caller (init/main.cc's create_console_service_
+     * process()), which has no root_graph.hh-style dynamic binding at all.
+     * Without this static fallback, resolution would silently fall through
+     * to the generic "bin/init" default below and the new thread would run
+     * init's own code instead of console-server's -- confirmed causing a
+     * real hang (that thread falls into init's generic worker() infinite
+     * loop, permanently pinned to a CPU) the first time this was tested
+     * under the legacy harness.
+     */
+    inline constexpr word_t console_stdin_image_role = 0x108U;
 
     struct image_view {
         char* start;
@@ -156,6 +173,8 @@ namespace sys::arch::space
         const char* name = "bin/init";
         if (role == memory_server_image_role)
             name = "bin/memory-server";
+        else if (role == console_stdin_image_role)
+            name = "bin/console-server";
 #if CONFIG_TESTS
         else if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
                  role == undefined_instruction_image_role ||

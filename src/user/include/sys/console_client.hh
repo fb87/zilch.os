@@ -46,6 +46,15 @@ namespace sys::console
         u8 value{};
     };
 
+    /*
+     * console-server serves read_byte from a SEPARATE endpoint than
+     * write()/write_byte() -- a second thread, independent from the one
+     * serving those (see console/main.cc's stdin_main()). Callers must
+     * pass console-server's stdin endpoint here, not its write endpoint
+     * (root_graph.hh mints both into every client that needs RX, e.g.
+     * domain-manager's console_stdin_endpoint_selector alongside its
+     * existing console_endpoint_selector).
+     */
     [[nodiscard]] inline read_byte_result read_byte(capability_id_t endpoint) noexcept {
         const auto reply = ipc_call(
             endpoint, static_cast<word_t>(abi::v1::control_plane_operation::read_byte), 0U, 0U,

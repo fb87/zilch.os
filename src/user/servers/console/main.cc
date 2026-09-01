@@ -6,123 +6,136 @@
 
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
-#include <abi/sys/v1/memory.hh>
+#include <abi/sys/v1/control_plane.hh>
+#include <abi/sys/v1/serial.hh>
 
 namespace
 {
     inline constexpr sys::capability_id_t root_notification = 14U;
     inline constexpr sys::capability_id_t service_endpoint = 11U;
+    // Dedicated to read_byte, served by a second thread independent from
+    // the write/health/describe/stop loop below -- see stdin_main().
+    inline constexpr sys::capability_id_t stdin_endpoint = 12U;
     inline constexpr sys::word_t failure_badge = 1U << 15U;
 
     /*
-     * device_frame_create() is root-gated; this server cannot call it
-     * itself. root_graph.hh creates the UART device frame and mints it
-     * into this slot before this process ever runs (mirroring how
-     * start_embedded_guest() mints device frames into the domain-manager)
-     * -- this server only ever maps a capability that is already there.
+     * Must match root_graph.hh's console_serial_endpoint_selector /
+     * console_stdin_role / console_stdin_thread_selector /
+     * console_stdin_space_selector exactly -- root mints/binds these for
+     * this process at those numbers before it ever runs, the same
+     * convention every other cross-service capability in this codebase
+     * already follows (e.g. domain-manager's console_endpoint_selector
+     * mirroring root_graph.hh's domain_console_endpoint_selector).
      */
-    inline constexpr sys::capability_id_t uart_frame_selector = 20U;
-    inline constexpr sys::capability_id_t self_space_selector = 3U;
-    inline constexpr sys::word_t uart_scratch_address = 0x2003f000U;
+    inline constexpr sys::capability_id_t serial_endpoint = 20U;
+    inline constexpr sys::word_t stdin_role = 0x108U;
+    inline constexpr sys::capability_id_t stdin_thread_selector = 30U;
+    inline constexpr sys::capability_id_t stdin_space_selector = 31U;
 
-    // Same PL011 register layout sys::platform::console::putc() uses
-    // (src/platform/qemu_arm64_virt/include/sys/platform/console.hh) --
-    // duplicated here because userspace has no access to platform:: headers.
-    inline constexpr sys::uintptr_t data_offset = 0x00U;
-    inline constexpr sys::uintptr_t control_offset = 0x30U;
-    inline constexpr sys::uintptr_t flag_offset = 0x18U;
-    inline constexpr sys::u32 transmit_fifo_full = 1U << 5U;
-    inline constexpr sys::u32 receive_fifo_empty = 1U << 4U;
-    inline constexpr sys::u32 cr_uarten = 1U << 0U;
-    inline constexpr sys::u32 cr_txe = 1U << 8U;
-    inline constexpr sys::u32 cr_rxe = 1U << 9U;
-
-    /*
-     * Previously the guest's own driver wrote this directly to real
-     * hardware (direct passthrough). Now this server is the exclusive
-     * owner and nothing else ever touches real hardware, so it must do
-     * this itself -- QEMU's PL011 model happens to accept TX writes
-     * regardless, which is why TX appeared to work even before this was
-     * added, but RX is gated behind CR.RXE and silently never captured
-     * anything without it.
-     */
-    inline void configure_uart() noexcept {
-        auto* control = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + control_offset);
-        *control = cr_uarten | cr_txe | cr_rxe;
-    }
-
-    inline void putc(char value) noexcept {
-        auto* data = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + data_offset);
-        auto* flags = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + flag_offset);
-        while ((*flags & transmit_fifo_full) != 0U) {
+    // No hardware access at all anymore -- everything below forwards to
+    // serial-driver (src/user/drivers/serial) over IPC. write_byte/
+    // read_byte mirror serial_operation's wire shape 1:1; write's raw
+    // packed message words are forwarded unchanged (same packing serial-
+    // driver expects), so no re-encoding is needed for it.
+    namespace serial
+    {
+        [[nodiscard]] inline sys::word_t write_byte(sys::u8 value) noexcept {
+            const auto reply = sys::ipc_call(
+                serial_endpoint, static_cast<sys::word_t>(sys::abi::v1::serial_operation::write_byte),
+                static_cast<sys::word_t>(value), 0U, 0U);
+            return reply.status;
         }
-        *data = static_cast<sys::u32>(static_cast<sys::u8>(value));
-    }
 
-    // Non-blocking: returns false immediately if the real hardware RX FIFO
-    // is empty. Used to opportunistically fill the one-byte pending queue
-    // below, never to wait for input.
-    [[nodiscard]] inline bool try_getc(sys::u8& value) noexcept {
-        auto* data = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + data_offset);
-        auto* flags = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + flag_offset);
-        if ((*flags & receive_fifo_empty) != 0U)
-            return false;
-        value = static_cast<sys::u8>(*data);
-        return true;
-    }
+        struct read_byte_result final {
+            bool available{};
+            sys::u8 value{};
+        };
 
-    // One-byte pending RX queue, polled from real hardware once per main
-    // loop iteration (see poll_input() below) and drained by read_byte.
-    // A single byte is sufficient: the domain-manager's own vPL011
-    // emulation polls read_byte once per serve() iteration too, so bytes
-    // are consumed roughly as fast as they arrive; deeper buffering is a
-    // throughput concern, not a correctness one, for an interactive shell.
-    bool rx_pending = false;
-    sys::u8 rx_byte = 0U;
-
-    inline void poll_input() noexcept {
-        if (rx_pending)
-            return;
-        sys::u8 value = 0U;
-        if (try_getc(value)) {
-            rx_pending = true;
-            rx_byte = value;
+        [[nodiscard]] inline read_byte_result read_byte() noexcept {
+            const auto reply = sys::ipc_call(
+                serial_endpoint, static_cast<sys::word_t>(sys::abi::v1::serial_operation::read_byte),
+                0U, 0U, 0U);
+            if (reply.status != static_cast<sys::word_t>(sys::error_t::success) ||
+                reply.message0 == 0U)
+                return {};
+            return {true, static_cast<sys::u8>(reply.message1)};
         }
-    }
+    } // namespace serial
 
-    // root creates and mints the UART device frame into uart_frame_selector
-    // only after this process already exists (capability_mint's
-    // destination-task capability can't be minted into before
-    // process_create returns it) -- so this process can genuinely start
-    // running and reach here before root's mint call lands. Bounded retry,
-    // not a one-shot attempt, closes that ordering window instead of
-    // relying on root's mint happening to win the race in practice.
-    inline constexpr sys::word_t map_uart_attempts = 100000U;
-
-    [[nodiscard]] inline bool map_uart() noexcept {
-        const sys::word_t read_write = static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
-                                       static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
-        const sys::word_t attrs = sys::abi::v1::encode_mapping_attributes(
-            sys::abi::v1::memory_type::device, sys::abi::v1::memory_shareability::non_shareable);
-        for (sys::word_t attempt = 0U; attempt < map_uart_attempts; ++attempt) {
-            if (sys::control(sys::abi::v1::control_operation::map_frame, self_space_selector,
-                             uart_frame_selector, uart_scratch_address, read_write, attrs) ==
-                static_cast<sys::word_t>(sys::error_t::success))
-                return true;
+    // The second thread (thread_create'd by main() below), independent
+    // from the write-serving loop: only ever forwards read_byte to
+    // serial-driver's own RX ring buffer and replies. No state shared with
+    // the write thread -- each only forwards its own op type and replies,
+    // so no coordination beyond the capabilities root already minted for
+    // each endpoint is needed.
+    [[noreturn]] inline void stdin_main() noexcept {
+        for (;;) {
+            const auto request = sys::ipc_receive(stdin_endpoint);
+            if (request.status != static_cast<sys::word_t>(sys::error_t::success))
+                continue;
+            const auto operation =
+                static_cast<sys::abi::v1::control_plane_operation>(request.message0);
+            sys::word_t result0 = static_cast<sys::word_t>(sys::error_t::invalid_argument);
+            sys::word_t result1 = 0U;
+            if (operation == sys::abi::v1::control_plane_operation::read_byte) {
+                const auto polled = serial::read_byte();
+                result0 = polled.available ? 1U : 0U;
+                result1 = polled.available ? polled.value : 0U;
+            }
+            (void)sys::ipc_reply(result0, result1, 0U, 0U);
         }
-        return false;
     }
 } // namespace
 
 extern "C" int main(sys::word_t role, sys::word_t) noexcept {
+    if (role == stdin_role)
+        stdin_main(); // noreturn
+
     const auto policy = sys::control_plane::policy_for(role);
     const sys::word_t ready = sys::abi::v1::control_plane_ready_badge(role);
-    if (!sys::control_plane::valid(policy) || ready == 0U || !map_uart()) {
+    if (!sys::control_plane::valid(policy) || ready == 0U) {
         (void)sys::control(sys::abi::v1::control_operation::notification_signal, root_notification,
                            failure_badge);
         return 1;
     }
-    configure_uart();
+
+    /*
+     * Root mints stdin_endpoint into this cspace only AFTER process_create
+     * returns it a task capability, so this process genuinely can (and
+     * does) start running first -- the same ordering window
+     * root_graph.hh's launch() loop already documents for its own mints.
+     * The stdin thread must not be spawned before that mint lands: its
+     * receive loop would fail capability resolution immediately rather
+     * than blocking, and spin hot on the failure, starving whatever else
+     * shares its CPU. That was observed hanging boot outright (root never
+     * got far enough to launch the remaining roles). Waiting here for the
+     * capability to resolve keeps the spawn correct by construction;
+     * timed_out means the endpoint exists and is simply idle, which is the
+     * success signal.
+     */
+    constexpr sys::word_t stdin_endpoint_attempts = 100000U;
+    bool stdin_ready = false;
+    for (sys::word_t attempt = 0U; !stdin_ready && attempt < stdin_endpoint_attempts; ++attempt) {
+        const auto probe = sys::ipc_receive(stdin_endpoint, sys::abi::v1::encode_timeout(1U));
+        stdin_ready = probe.status != static_cast<sys::word_t>(sys::error_t::not_found) &&
+                      probe.status != static_cast<sys::word_t>(sys::error_t::denied);
+    }
+
+    // thread_create is not root-gated (only role_image_bind, done for us
+    // once by root_graph.hh's bind_role_images(), is) -- this process
+    // self-services spawning its own second thread, same shape as
+    // root_graph.hh's spawn_supervision_thread() but invoked by the role
+    // itself rather than by root. CPU 1 deliberately: not root's CPU 0,
+    // and not this server's own (console is index 2, so `index % 4` pins
+    // its main thread to CPU 2).
+    if (!stdin_ready ||
+        sys::control(sys::abi::v1::control_operation::thread_create, 1U, stdin_role,
+                     stdin_thread_selector, stdin_space_selector) !=
+            static_cast<sys::word_t>(sys::error_t::success)) {
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal, root_notification,
+                           failure_badge);
+        return 1;
+    }
 
     const sys::word_t status = sys::control(sys::abi::v1::control_operation::notification_signal,
                                             root_notification, ready);
@@ -130,16 +143,7 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         return 2;
 
     for (;;) {
-        poll_input();
-        /*
-         * A bounded timeout (not an indefinite blocking receive) so this
-         * loop keeps polling real hardware RX between requests -- matching
-         * the pattern already used for root_graph.hh's
-         * drain_fault_reports(). A short wait is enough to keep input
-         * latency low without busy-spinning.
-         */
-        const auto request =
-            sys::ipc_receive(service_endpoint, sys::abi::v1::encode_timeout(1U));
+        const auto request = sys::ipc_receive(service_endpoint);
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             continue;
         const auto operation = static_cast<sys::abi::v1::control_plane_operation>(request.message0);
@@ -155,28 +159,19 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             const sys::word_t replied = sys::ipc_reply(0U, role, 0U, 0U);
             if (replied != static_cast<sys::word_t>(sys::error_t::success))
                 return 3;
+            // Only exits this (write) thread -- thread_exit is a per-thread
+            // terminal transition. The stdin thread is left running; stop
+            // is unused by the production restart path today (restart_
+            // role() destroys the whole task/bundle directly), so this
+            // asymmetry has no live caller to matter to yet.
             sys::thread_exit(0U, root_notification, sys::abi::v1::control_plane_exit_badge(role));
         } else if (operation == sys::abi::v1::control_plane_operation::write) {
-            const sys::word_t words[3] = {request.message1, request.message2, request.message3};
-            for (sys::usize_t index = 0U; index < sys::abi::v1::console_write_max_bytes - 1U;
-                ++index) {
-                const sys::usize_t word_index = index / 8U;
-                const sys::usize_t byte_index = index % 8U;
-                const char value =
-                    static_cast<char>((words[word_index] >> (byte_index * 8U)) & 0xffU);
-                if (value == '\0')
-                    break;
-                putc(value);
-            }
-            result0 = static_cast<sys::word_t>(sys::error_t::success);
+            const auto reply = sys::ipc_call(
+                serial_endpoint, static_cast<sys::word_t>(sys::abi::v1::serial_operation::write),
+                request.message1, request.message2, request.message3);
+            result0 = reply.status;
         } else if (operation == sys::abi::v1::control_plane_operation::write_byte) {
-            putc(static_cast<char>(request.message1 & 0xffU));
-            result0 = static_cast<sys::word_t>(sys::error_t::success);
-        } else if (operation == sys::abi::v1::control_plane_operation::read_byte) {
-            poll_input();
-            result0 = rx_pending ? 1U : 0U;
-            result1 = rx_pending ? rx_byte : 0U;
-            rx_pending = false;
+            result0 = serial::write_byte(static_cast<sys::u8>(request.message1 & 0xffU));
         }
         if (sys::ipc_reply(result0, result1, 0U, 0U) !=
             static_cast<sys::word_t>(sys::error_t::success))

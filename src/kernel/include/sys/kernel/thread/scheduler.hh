@@ -794,6 +794,59 @@ namespace sys::kernel::thread
             return result;
         release_pending_reply(target);
 
+        /*
+         * Tear down every OTHER thread that shares this task first. Since
+         * thread_create, a task can own more than the one thread named by
+         * thread_selector (create_user_thread() attaches additional threads
+         * to an existing task), and destroying only the named one left the
+         * siblings alive pointing at a task object that was about to be
+         * unregistered and reused -- a dangling owner the certification
+         * harness's own process_lifecycle_valid() correctly rejects, and a
+         * thread that would keep getting scheduled against freed state.
+         * Each sibling owns its own address_space and scheduling_context
+         * (thread-owned, not task-owned) so each needs its own release;
+         * the cspace itself is shared and is torn down once, below, with
+         * the task.
+         */
+        for (u32 sibling = 0U; sibling < active_user_thread_count; ++sibling) {
+            thread& other = user_threads[sibling];
+            if (&other == &target || other.owner != owner ||
+                other.object.type != object::type_t::thread)
+                continue;
+            result = quiesce_user_thread(other);
+            if (result != error_t::success)
+                return result;
+            release_pending_reply(other);
+            const object::reference_t other_scheduling =
+                object::reference(other.scheduling_context.object);
+            const object::reference_t other_space = object::reference(other.address_space.object);
+            const object::reference_t other_thread = object::reference(other.object);
+            {
+                const capability::authority_guard authority_transaction{};
+                store_state(other, state::terminated);
+                memory::unmap_all(other.address_space);
+                capability::revoke_reference_locked(other_thread);
+                capability::revoke_reference_locked(other_space);
+                capability::revoke_reference_locked(other_scheduling);
+            }
+            (void)object::unregister_object(other_scheduling);
+            (void)object::unregister_object(other_space);
+            (void)object::unregister_object(other_thread);
+            other.address_space.release(&memory::release_physical_page);
+            arch::thread::clear(other.context);
+            other.owner = nullptr;
+            other.object = {};
+            other.address_space.object = {};
+            other.scheduling_context.object = {};
+            other.waiting_endpoint = 0U;
+            other.reply = {};
+            clear_transfer(other.transfer);
+            other.ipc_timeout_active = false;
+            other.last_fault = {};
+            other.fault_disposition = fault::disposition::pending;
+            store_state(other, state::inactive);
+        }
+
         if (capability::slot_at(owner->cspace, 15U).object.type ==
             object::type_t::memory_resource) {
             result = memory::destroy_resource(*owner, 15U);

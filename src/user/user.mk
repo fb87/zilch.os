@@ -16,7 +16,7 @@ USER_COMMON_SOURCES := \
     src/user/lib/libsys/syscall.cc \
     src/user/lib/libruntime/runtime.cc \
     src/user/runtime/startup/process_entry.cc
-USER_PROGRAMS := init memory-server control-plane domain-manager console-server
+USER_PROGRAMS := init memory-server control-plane domain-manager console-server serial-driver
 ifeq ($(CONFIG_TESTS),1)
 USER_PROGRAMS += pager-client memory-client
 endif
@@ -27,6 +27,7 @@ USER_memory-client_SOURCE := src/user/tests/memory_client/main.cc
 USER_control-plane_SOURCE := src/user/servers/control_plane/main.cc
 USER_domain-manager_SOURCE := src/user/servers/domain/main.cc
 USER_console-server_SOURCE := src/user/servers/console/main.cc
+USER_serial-driver_SOURCE := src/user/drivers/serial/main.cc
 USER_ELF := $(USER_OBJDIR)/init.elf
 USER_BIN := $(USER_OBJDIR)/init.bin
 MEMORY_SERVER_BIN := $(USER_OBJDIR)/memory-server.bin
@@ -35,6 +36,7 @@ MEMORY_CLIENT_BIN := $(USER_OBJDIR)/memory-client.bin
 CONTROL_PLANE_BIN := $(USER_OBJDIR)/control-plane.bin
 DOMAIN_MANAGER_BIN := $(USER_OBJDIR)/domain-manager.bin
 CONSOLE_SERVER_BIN := $(USER_OBJDIR)/console-server.bin
+SERIAL_DRIVER_BIN := $(USER_OBJDIR)/serial-driver.bin
 USER_PROGRAM_ELFS := $(addprefix $(USER_OBJDIR)/,$(addsuffix .elf,$(USER_PROGRAMS)))
 USER_PROGRAM_BINS := $(USER_PROGRAM_ELFS:.elf=.bin)
 USER_COMMON_OBJECTS := $(addprefix $(USER_OBJDIR)/common/,$(USER_COMMON_SOURCES:.cc=.o))
@@ -89,6 +91,10 @@ $(USER_OBJDIR)/domain-manager/%.o: $(SRCTREE)/%.cc
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 $(USER_OBJDIR)/console-server/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/serial-driver/%.o: $(SRCTREE)/%.cc
 	@mkdir -p $(dir $@)
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

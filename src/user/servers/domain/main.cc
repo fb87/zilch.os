@@ -30,9 +30,14 @@ namespace
     [[maybe_unused]] inline constexpr sys::capability_id_t device_frame_base = 100U;
     [[maybe_unused]] inline constexpr sys::capability_id_t device_irq_base = 116U;
     [[maybe_unused]] inline constexpr sys::capability_id_t device_irq_notification_selector = 18U;
-    // Minted by root_graph.hh::start_embedded_guest() -- the console-
-    // server's own service endpoint, reused directly rather than a new one.
+    // Minted by root_graph.hh::mint_embedded_guest_resources() -- console-
+    // server's write/health/describe/stop endpoint, reused directly rather
+    // than a new one.
     inline constexpr sys::capability_id_t console_endpoint_selector = 19U;
+    // console-server now serves read_byte on a SEPARATE endpoint from a
+    // second thread (see src/user/servers/console/main.cc's stdin_main());
+    // this is that endpoint, minted alongside console_endpoint_selector.
+    inline constexpr sys::capability_id_t console_stdin_endpoint_selector = 52U;
     inline constexpr sys::capability_id_t guest_frame_base = 20U;
     inline constexpr sys::word_t scratch_address = 0x2003f000U;
     inline constexpr sys::word_t guest_page_size = 4096U;
@@ -305,7 +310,7 @@ namespace
     inline void forward_console_input() noexcept {
         if (vpl011::rx_pending)
             return;
-        const auto polled = sys::console::read_byte(console_endpoint_selector);
+        const auto polled = sys::console::read_byte(console_stdin_endpoint_selector);
         if (!polled.available)
             return;
         vpl011::rx_pending = true;
