@@ -11,19 +11,19 @@ endif
 .PHONY: image
 image: $(EARLYFS)
 
-$(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),)
+$(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$(CONFIG_GUEST_TEST_ARM64))),$(GUEST_TEST_ELF),)
 	@mkdir -p $(dir $@)
 	@printf '  EARLYFS %s\n' '$@'
 	@$(SRCTREE)/tools/image/make_earlyfs.py \
 		--entry bin/init=$(USER_OBJDIR)/init.elf \
 		--entry bin/memory-server=$(USER_OBJDIR)/memory-server.elf \
 		--entry bin/control-plane=$(USER_OBJDIR)/control-plane.elf \
-		--entry bin/domain-manager=$(USER_OBJDIR)/domain-manager.elf \
+		$(if $(filter arm64,$(ARCH)),--entry bin/domain-manager=$(USER_OBJDIR)/domain-manager.elf) \
 		--entry bin/console-server=$(USER_OBJDIR)/console-server.elf \
 		--entry bin/serial-driver=$(USER_OBJDIR)/serial-driver.elf \
 		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
 		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \
-		--entry guests/test-arm64=$(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),-) \
+		$(if $(and $(filter arm64,$(ARCH)),$(filter 1,$(CONFIG_GUEST_TEST_ARM64))),--entry guests/test-arm64=$(GUEST_TEST_ELF)) \
 		--output $@
 
 ifeq ($(ARCH),arm64)

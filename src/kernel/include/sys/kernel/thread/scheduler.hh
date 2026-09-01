@@ -8,6 +8,7 @@
 #include <sys/kernel/interrupt/timing.hh>
 #include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/verification/hooks.hh>
+#if defined(__aarch64__)
 #if CONFIG_HYPERVISOR_SELFTEST
 #include <sys/kernel/tests/hypervisor/control_models.hh>
 #endif
@@ -25,6 +26,9 @@
 #include <sys/kernel/tests/scheduling/donation.hh>
 #include <sys/kernel/tests/scheduling/sporadic.hh>
 #include <sys/kernel/tests/space/asid_rollover.hh>
+#include <sys/kernel/tests/fault/lifecycle.hh>
+#include <sys/kernel/tests/fault/reply_wakeup.hh>
+#endif
 #endif
 #include <sys/kernel/boot/bootinfo.hh>
 #include <sys/kernel/bootstrap.hh>
@@ -925,16 +929,18 @@ namespace sys::kernel::thread
  * *struct* (a member of the namespace it got nested under) rather than the
  * sys::kernel::thread namespace itself.
  */
+#if defined(__aarch64__)
 #include <sys/kernel/tests/fault/lifecycle.hh>
 #include <sys/kernel/tests/fault/reply_wakeup.hh>
 #include <sys/kernel/tests/hardening/boot_checks.hh>
+#endif
 
 namespace sys::kernel::thread
 {
     [[nodiscard]] inline error_t validate_bootstrap_objects() noexcept {
+#if defined(__aarch64__)
         if (tests::scheduling::run_sporadic_server() != error_t::success)
             return error_t::invalid_argument;
-
         if (!arch::memory::kernel_stack_guards_valid())
             return error_t::invalid_argument;
         if (!arch::memory::kernel_permissions_valid())
@@ -947,6 +953,7 @@ namespace sys::kernel::thread
             return error_t::invalid_argument;
         if (tests::space::run_rollover_reuse(user_threads[0]) != error_t::success)
             return error_t::invalid_argument;
+
         if (tests::physical_memory::run_layout_check() != error_t::success)
             return error_t::invalid_argument;
 
@@ -1020,6 +1027,10 @@ namespace sys::kernel::thread
         if (result != error_t::success)
             return result;
         return error_t::success;
+#else
+        /* amd64: selftest harness will be added in Phase 12 once architecture features are complete */
+        return error_t::success;
+#endif
     }
 #endif
 

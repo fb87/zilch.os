@@ -16,7 +16,10 @@ USER_COMMON_SOURCES := \
     src/user/lib/libsys/syscall.cc \
     src/user/lib/libruntime/runtime.cc \
     src/user/runtime/startup/process_entry.cc
-USER_PROGRAMS := init memory-server control-plane domain-manager console-server serial-driver
+USER_PROGRAMS := init memory-server control-plane console-server serial-driver
+ifeq ($(ARCH),arm64)
+USER_PROGRAMS += domain-manager
+endif
 ifeq ($(CONFIG_TESTS),1)
 USER_PROGRAMS += pager-client memory-client
 endif
@@ -159,6 +162,7 @@ $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ) $(INIT_GUEST_MANIFEST_OBJ): $(DOMAIN_GUEST_
 endif
 endif
 
+ifeq ($(ARCH),arm64)
 $(GUEST_TEST_OBJ): $(SRCTREE)/src/user/guests/test-arm64/entry.S
 	@mkdir -p $(dir $@)
 	@printf '  GAS     %s\n' '$@'
@@ -169,6 +173,7 @@ $(GUEST_TEST_ELF): $(GUEST_TEST_OBJ) $(GUEST_TEST_LDSCRIPT)
 	@printf '  GLD     %s\n' '$@'
 	@$(LD) -m aarch64elf -T $(GUEST_TEST_LDSCRIPT) --gc-sections --build-id=none \
 		-z max-page-size=0x1000 -Map=$(GUEST_TEST_DIR)/guest-test.map -o $@ $(GUEST_TEST_OBJ)
+endif
 
 $(GUEST_TEST_BIN): $(GUEST_TEST_ELF)
 	@printf '  GOBJCOPY %s\n' '$@'
