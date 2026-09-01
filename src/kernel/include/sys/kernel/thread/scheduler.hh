@@ -26,8 +26,6 @@
 #include <sys/kernel/tests/scheduling/donation.hh>
 #include <sys/kernel/tests/scheduling/sporadic.hh>
 #include <sys/kernel/tests/space/asid_rollover.hh>
-#include <sys/kernel/tests/fault/lifecycle.hh>
-#include <sys/kernel/tests/fault/reply_wakeup.hh>
 #endif
 #endif
 #include <sys/kernel/boot/bootinfo.hh>
