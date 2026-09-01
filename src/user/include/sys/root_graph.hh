@@ -27,15 +27,110 @@ namespace sys::root_graph
      * boot (scheduler.hh's root bootstrap).
      */
     inline constexpr capability_id_t root_fault_endpoint = 10U;
+    inline constexpr capability_id_t self_space_selector = 3U;
+    inline constexpr capability_id_t supervisor_space_selector = 151U;
     inline constexpr word_t memory_role = 0x100U;
     inline constexpr word_t memory_selector =
         selector_base + abi::v1::control_plane_role_count * selector_stride;
     inline constexpr capability_id_t endpoint_base = memory_selector + 3U;
     inline constexpr capability_id_t service_endpoint = 11U;
+    /*
+     * memory-server's own service endpoint, root's copy. Must be a
+     * DIFFERENT object from root_fault_endpoint (10U): memory-server's
+     * production request loop (memory_server_operation -- grant_frame/
+     * query/shutdown) used to receive on slot 10 too, since that's the
+     * fault-endpoint capability create_user_bundle() mints into every
+     * role's slot 10 regardless -- memory_server_role additionally gets
+     * read rights there so it can act as a pager. With nothing yet calling
+     * its production API, that loop sat permanently blocked_receive on
+     * slot 10, meaning it won essentially every fault-delivery race against
+     * root/the supervision thread for ANY role's crash, not just genuine
+     * page faults -- confirmed happening in practice while verifying
+     * restart-on-fault (USR-034). Minted into memory-server's own slot 11
+     * (service_endpoint) below, same convention every other role's own
+     * service endpoint already uses.
+     */
+    inline constexpr capability_id_t memory_service_endpoint = endpoint_base +
+                                                               abi::v1::control_plane_role_count;
 
-    static_assert(endpoint_base + abi::v1::control_plane_role_count <= 64U);
+    static_assert(memory_service_endpoint < 64U);
 
-    [[nodiscard]] inline bool launch(word_t index) noexcept {
+    /*
+     * Per-role restart bookkeeping (USR-034): thread_id lets drain_fault_
+     * reports() correlate a fault's sender badge back to "which role
+     * crashed"; restart_count feeds control_plane::may_restart()'s bound.
+     * This has to live in genuine shared memory, not an ordinary global:
+     * root's two threads (the original one and the supervision thread from
+     * thread_create) share one cspace but NOT memory -- the supervision
+     * thread has its own independent address space, loaded fresh from
+     * bin/init's ELF image, so it has its own separate copy of every plain
+     * global. thread_id/restart_count are declared volatile because they're
+     * polled cross-thread with no lock: the only concurrent-write window is
+     * during a restart, and every writer/reader pair below reasons
+     * explicitly about ordering (see create_supervisor_state(),
+     * map_supervisor_state_self(), restart_role(), run_embedded_guest_loop()).
+     */
+    struct role_entry final {
+        volatile u32 thread_id{};
+        volatile u32 restart_count{};
+    };
+
+    struct supervisor_state final {
+        role_entry roles[abi::v1::control_plane_role_count];
+    };
+
+    inline constexpr capability_id_t supervisor_state_frame_selector = 96U;
+    inline constexpr word_t supervisor_state_address = 0x2003e000U;
+
+    [[nodiscard]] inline supervisor_state* supervisor_state_ptr() noexcept {
+        return reinterpret_cast<supervisor_state*>(
+            static_cast<uintptr_t>(supervisor_state_address));
+    }
+
+    /*
+     * Creates the shared page and maps it into root's OWN address space
+     * only. The supervision thread maps the same frame into its own space
+     * itself, as the very first thing it does (map_supervisor_state_self(),
+     * called from supervision_thread_entry() before its drain loop) --
+     * doing it that way instead of root mapping it into both spaces avoids
+     * a race: the supervision thread could start running (and try to read
+     * this page) the instant thread_create's IPI reschedules it, which
+     * could be before root's own follow-up map_frame call for the second
+     * space ever executes. Since both threads share one cspace, the
+     * supervision thread already has a valid capability to this exact frame
+     * object the moment it starts running -- it just maps it itself.
+     */
+    [[nodiscard]] inline bool create_supervisor_state() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const word_t attrs = abi::v1::encode_mapping_attributes(
+            abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
+        if (control(abi::v1::control_operation::frame_create, 0U,
+                    supervisor_state_frame_selector) != success)
+            return false;
+        if (control(abi::v1::control_operation::map_frame, self_space_selector,
+                    supervisor_state_frame_selector, supervisor_state_address, read_write,
+                    attrs) != success)
+            return false;
+        for (auto& entry : supervisor_state_ptr()->roles) {
+            entry.thread_id = 0U;
+            entry.restart_count = 0U;
+        }
+        return true;
+    }
+
+    [[nodiscard]] inline bool map_supervisor_state_self() noexcept {
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const word_t attrs = abi::v1::encode_mapping_attributes(
+            abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
+        return control(abi::v1::control_operation::map_frame, supervisor_space_selector,
+                       supervisor_state_frame_selector, supervisor_state_address, read_write,
+                       attrs) == static_cast<word_t>(error_t::success);
+    }
+
+    [[nodiscard]] inline bool launch(word_t index, supervisor_state& state) noexcept {
         const word_t selector = selector_base + index * selector_stride;
         const word_t role = static_cast<word_t>(abi::v1::control_plane_role::process) + index;
         const capability_id_t endpoint = endpoint_base + index;
@@ -44,11 +139,17 @@ namespace sys::root_graph
         if (control(abi::v1::control_operation::endpoint_create, endpoint) !=
             static_cast<word_t>(error_t::success))
             return false;
-        if (control(abi::v1::control_operation::process_create, index % 4U, role, selector,
-                    selector + 1U, selector + 2U) != static_cast<word_t>(error_t::success))
+        word_t allocated_id = 0U;
+        if (control_result1(allocated_id, abi::v1::control_operation::process_create, index % 4U,
+                            role, selector, selector + 1U, selector + 2U) !=
+            static_cast<word_t>(error_t::success))
             return false;
-        return control(abi::v1::control_operation::capability_mint, selector + 1U, service_endpoint,
-                       endpoint, read_write, index + 1U) == static_cast<word_t>(error_t::success);
+        if (control(abi::v1::control_operation::capability_mint, selector + 1U, service_endpoint,
+                    endpoint, read_write, index + 1U) != static_cast<word_t>(error_t::success))
+            return false;
+        state.roles[index].thread_id = static_cast<u32>(allocated_id);
+        state.roles[index].restart_count = 0U;
+        return true;
     }
 
     /*
@@ -68,17 +169,26 @@ namespace sys::root_graph
     inline constexpr capability_id_t console_uart_child_frame_selector = 20U;
     inline constexpr word_t console_uart_physical_address = 0x09000000U;
 
+    // Creates the one live device frame for the UART. Must run exactly
+    // once: device_frame_create() rejects a second live frame at the same
+    // physical address (memory::create_device_frame()'s exclusivity check),
+    // and this frame object survives a console-server restart untouched
+    // (root's own cspace, not the console-server's) -- restarting the
+    // console role only needs to re-mint it (mint_console_uart_frame()
+    // below), never recreate it.
+    [[nodiscard]] inline bool create_console_uart_frame() noexcept {
+        return control(abi::v1::control_operation::device_frame_create,
+                       console_uart_root_frame_selector, console_uart_physical_address) ==
+               static_cast<word_t>(error_t::success);
+    }
+
     [[nodiscard]] inline bool mint_console_uart_frame() noexcept {
-        const word_t success = static_cast<word_t>(error_t::success);
         const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
                                   static_cast<word_t>(abi::v1::CapabilityRight::write);
         const capability_id_t console_task = selector_base + console_index * selector_stride + 1U;
-        if (control(abi::v1::control_operation::device_frame_create,
-                    console_uart_root_frame_selector, console_uart_physical_address) != success)
-            return false;
         return control(abi::v1::control_operation::capability_mint, console_task,
                        console_uart_child_frame_selector, console_uart_root_frame_selector,
-                       read_write) == success;
+                       read_write) == static_cast<word_t>(error_t::success);
     }
 
     [[nodiscard]] inline bool healthy(word_t index) noexcept {
@@ -90,84 +200,90 @@ namespace sys::root_graph
                reply.message0 == abi::v1::control_plane_health_magic && reply.message1 == role;
     }
 
-#if CONFIG_GUEST_EMBEDDED_IMAGE
-    /*
-     * Root owns physical devices/interrupts and mints capabilities for them
-     * into the domain-manager's cspace -- mirroring how it already creates
-     * and mints the guest's stage-2 memory. Which devices and IRQs a guest
-     * needs is read from its manifest, not hardcoded here: root has no idea
-     * which guest it's booting.
-     */
-    [[nodiscard]] inline bool start_embedded_guest() noexcept {
-        constexpr word_t domain_index = static_cast<word_t>(abi::v1::control_plane_role::domain) -
-                                        static_cast<word_t>(abi::v1::control_plane_role::process);
-        constexpr capability_id_t device_frame_base = 100U;
-        constexpr capability_id_t device_irq_base = 116U;
-        constexpr capability_id_t domain_device_frame_base = 100U;
-        constexpr capability_id_t domain_device_irq_base = 116U;
-        constexpr word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
-                                      static_cast<word_t>(abi::v1::CapabilityRight::write);
-        constexpr word_t write_control = static_cast<word_t>(abi::v1::CapabilityRight::write) |
-                                         static_cast<word_t>(abi::v1::CapabilityRight::control);
-        const capability_id_t domain_task = selector_base + domain_index * selector_stride + 1U;
-        const capability_id_t domain_endpoint = endpoint_base + domain_index;
-        const word_t success = static_cast<word_t>(error_t::success);
+    inline constexpr word_t domain_index = static_cast<word_t>(abi::v1::control_plane_role::domain) -
+                                           static_cast<word_t>(abi::v1::control_plane_role::process);
 
+#if CONFIG_GUEST_EMBEDDED_IMAGE
+    inline constexpr capability_id_t device_frame_base = 100U;
+    inline constexpr capability_id_t device_irq_base = 116U;
+    inline constexpr capability_id_t domain_console_endpoint_selector = 19U;
+
+    /*
+     * Root owns physical devices/interrupts and creates capabilities for
+     * them -- mirroring how it already creates the guest's stage-2 memory.
+     * Which devices and IRQs a guest needs is read from its manifest, not
+     * hardcoded here: root has no idea which guest it's booting. Must run
+     * exactly once: device_frame_create()'s exclusivity check (like the
+     * console UART's) rejects a second live frame at the same physical
+     * address, and these objects live in root's own cspace, surviving a
+     * domain-manager restart untouched -- restarting only needs to re-mint
+     * them (mint_embedded_guest_resources() below), never recreate them.
+     */
+    [[nodiscard]] inline bool create_embedded_guest_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
         const auto& manifest = ::sys_arm64_domain_guest_manifest;
         if (!guest_manifest::valid(manifest) ||
             manifest.device_count > guest_manifest::maximum_devices)
             return false;
-
         for (word_t index = 0U; index < manifest.device_count; ++index) {
             const auto& dev = manifest.devices[index];
-            const capability_id_t frame = device_frame_base + index;
-            const capability_id_t domain_frame = domain_device_frame_base + index;
-            if (control(abi::v1::control_operation::device_frame_create, frame, dev.ipa) != success)
-                return false;
-            if (control(abi::v1::control_operation::capability_mint, domain_task, domain_frame,
-                        frame, read_write) != success)
+            if (control(abi::v1::control_operation::device_frame_create,
+                        device_frame_base + index, dev.ipa) != success)
                 return false;
             if (dev.forward_irq == guest_manifest::no_irq)
                 continue;
-            const capability_id_t irq = device_irq_base + index;
-            const capability_id_t domain_irq = domain_device_irq_base + index;
-            if (control(abi::v1::control_operation::interrupt_create, irq, dev.forward_irq,
-                        dev.forward_trigger) != success)
-                return false;
-            if (control(abi::v1::control_operation::capability_mint, domain_task, domain_irq, irq,
-                        write_control) != success)
+            if (control(abi::v1::control_operation::interrupt_create, device_irq_base + index,
+                        dev.forward_irq, dev.forward_trigger) != success)
                 return false;
         }
-        /*
-         * The guest's UART is virtual (vPL011, see domain/main.cc) rather
-         * than passed through -- the console-server (see mint_console_
-         * uart_frame() above) owns the real hardware exclusively. The
-         * domain-manager needs its own capability to call the
-         * console-server's service endpoint directly (to forward TX bytes
-         * and poll for RX) rather than going through root. This mints a
-         * second capability to the exact same endpoint object root already
-         * holds from the console-server's own launch() call -- no new
-         * endpoint is created, matching how every other inter-service
-         * capability in this codebase is derived from an
-         * already-created source.
-         */
-        constexpr capability_id_t domain_console_endpoint_selector = 19U;
-        constexpr word_t write_only = static_cast<word_t>(abi::v1::CapabilityRight::write);
-        if (control(abi::v1::control_operation::capability_mint, domain_task,
-                    domain_console_endpoint_selector, endpoint_base + console_index,
-                    write_only) != success)
+        return true;
+    }
+
+    /*
+     * Mints the device/IRQ/console-endpoint capabilities into the CURRENT
+     * domain-manager task. Callable repeatedly: once at boot, and once per
+     * restart (a freshly recreated domain-manager task has an empty
+     * cspace, same as any other freshly created role).
+     *
+     * The guest's UART is virtual (vPL011, see domain/main.cc) rather than
+     * passed through -- the console-server (see mint_console_uart_frame()
+     * above) owns the real hardware exclusively. The domain-manager needs
+     * its own capability to call the console-server's service endpoint
+     * directly (to forward TX bytes and poll for RX) rather than going
+     * through root. This mints a second capability to the exact same
+     * endpoint object root already holds from the console-server's own
+     * launch() call -- no new endpoint is created, matching how every other
+     * inter-service capability in this codebase is derived from an
+     * already-created source.
+     */
+    [[nodiscard]] inline bool mint_embedded_guest_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const word_t write_control = static_cast<word_t>(abi::v1::CapabilityRight::write) |
+                                     static_cast<word_t>(abi::v1::CapabilityRight::control);
+        const word_t write_only = static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const capability_id_t domain_task = selector_base + domain_index * selector_stride + 1U;
+        const auto& manifest = ::sys_arm64_domain_guest_manifest;
+        if (!guest_manifest::valid(manifest) ||
+            manifest.device_count > guest_manifest::maximum_devices)
             return false;
-        if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
-                     0U)
-                .status != success)
-            return false;
-        if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::load),
-                     0U)
-                .status != success)
-            return false;
-        return ipc_call(domain_endpoint,
-                        static_cast<word_t>(abi::v1::control_plane_operation::serve), 0U)
-                   .status == success;
+        for (word_t index = 0U; index < manifest.device_count; ++index) {
+            const auto& dev = manifest.devices[index];
+            if (control(abi::v1::control_operation::capability_mint, domain_task,
+                        device_frame_base + index, device_frame_base + index, read_write) !=
+                success)
+                return false;
+            if (dev.forward_irq == guest_manifest::no_irq)
+                continue;
+            if (control(abi::v1::control_operation::capability_mint, domain_task,
+                        device_irq_base + index, device_irq_base + index, write_control) !=
+                success)
+                return false;
+        }
+        return control(abi::v1::control_operation::capability_mint, domain_task,
+                       domain_console_endpoint_selector, endpoint_base + console_index,
+                       write_only) == success;
     }
 #endif
 
@@ -192,7 +308,6 @@ namespace sys::root_graph
      * is free for a one-off scratch mapping.
      */
     inline constexpr word_t earlyfs_scratch_address = 0x2003f000U;
-    inline constexpr capability_id_t self_space_selector = 3U;
 
     struct role_image_entry final {
         word_t role;
@@ -288,20 +403,32 @@ namespace sys::root_graph
      * faults for the rest of the system's uptime. It shares root's cspace
      * (and thus its capabilities and root authority) automatically --
      * thread_create needs no minting step for that, unlike process_create.
-     * It does not restart anything (USR-034, a separate, later item that
-     * needs a way to map a fault's sender badge back to "which role
-     * crashed" -- process_create doesn't return the id it allocated today).
+     * USR-034 (restart-on-fault) builds on this: drain_fault_reports() below
+     * now correlates a fault's sender badge back to a role via the shared
+     * supervisor_state page and restarts it, bounded by
+     * control_plane::may_restart().
      */
     inline constexpr word_t root_supervisor_role = 0x301U;
     inline constexpr capability_id_t supervisor_thread_selector = 150U;
-    inline constexpr capability_id_t supervisor_space_selector = 151U;
 
-    // Defined below, next to the fault-endpoint constants it depends on.
-    inline void drain_fault_reports() noexcept;
+    // Defined below, next to the fault-endpoint constants they depend on.
+    inline void drain_fault_reports(supervisor_state* state) noexcept;
+    [[nodiscard]] inline bool restart_role(supervisor_state& state, word_t index) noexcept;
 
+    /*
+     * map_supervisor_state_self() must run before this thread ever touches
+     * shared state -- see create_supervisor_state()'s comment for why root
+     * doesn't map the second half itself. A failure here is treated as
+     * "no shared state available" rather than aborting: drain_fault_reports()
+     * degrades to reply-only (today's pre-USR-034 behavior) when passed
+     * nullptr, so a crashed mapping still leaves fault reaping intact, just
+     * without restart.
+     */
     [[noreturn]] inline void supervision_thread_entry() noexcept {
+        supervisor_state* const state =
+            map_supervisor_state_self() ? supervisor_state_ptr() : nullptr;
         for (;;)
-            drain_fault_reports();
+            drain_fault_reports(state);
     }
 
     [[nodiscard]] inline bool spawn_supervision_thread() noexcept {
@@ -347,8 +474,7 @@ namespace sys::root_graph
      * (deferred: production userspace has no logging syscall today, and
      * OBS-010 forbids raw fault address/PC/syndrome in release logs even
      * if one existed, so a redaction-compliant visibility mechanism needs
-     * its own separate design pass) and does not restart anything
-     * (USR-034, a separate, later item).
+     * its own separate design pass).
      *
      * ipc_receive() is a genuinely blocking primitive (unlike
      * notification_poll's instant memory read); a 1-tick bounded wait is
@@ -357,23 +483,175 @@ namespace sys::root_graph
      */
     inline constexpr word_t fault_poll_ticks = 1U;
 
-    inline void drain_fault_reports() noexcept {
+    /*
+     * The reply must always happen first, regardless of what follows: it's
+     * what releases the crashed thread from blocked_fault. Restart is a
+     * separate, subsequent decision. reply.sender is endpoint_badge()'s
+     * value ((generation << 32) | (id + 1)) -- the inverse decode below
+     * recovers the crashed thread's slot id, which is then correlated
+     * against the shared role table to find which role (if any) just
+     * crashed. state may be nullptr (see supervision_thread_entry()'s
+     * comment) or the crashed id may not belong to any tracked role (e.g.
+     * memory-server, which USR-034 doesn't cover -- see the restart-on-
+     * fault plan's "Explicitly out of scope"); either way this just falls
+     * back to today's terminate-only behavior.
+     */
+    inline void drain_fault_reports(supervisor_state* state) noexcept {
         const auto reply =
             ipc_receive(root_fault_endpoint, abi::v1::encode_timeout(fault_poll_ticks));
         if (reply.status != static_cast<word_t>(error_t::success))
             return;
         (void)ipc_reply(static_cast<word_t>(abi::v1::fault_disposition::terminate), 0U, 0U, 0U);
+        if (state == nullptr)
+            return;
+        const u32 faulted_id = static_cast<u32>(reply.sender & 0xffffffffU) - 1U;
+        for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
+            if (state->roles[index].thread_id == faulted_id) {
+                (void)restart_role(*state, index);
+                return;
+            }
+        }
     }
+
+    /*
+     * Generic restart for process/device/console: destroy the crashed
+     * bundle (waking anyone blocked_reply on it -- see
+     * thread::release_pending_reply() in scheduler.hh), recreate it at the
+     * same selectors, re-mint its own service endpoint (root's copy of the
+     * endpoint object survives the old task's destruction untouched, so
+     * every OTHER role's capability into it stays valid automatically --
+     * only the fresh child needs a new mint into its own empty cspace), then
+     * replay whatever role-specific extra minting that role's launch()
+     * needed. domain additionally needs launch+load (not serve -- see
+     * run_embedded_guest_loop(), which owns re-entering serve() from the
+     * thread that isn't the one destroying/recreating the role).
+     */
+    [[nodiscard]] inline bool restart_role(supervisor_state& state, word_t index) noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t role = static_cast<word_t>(abi::v1::control_plane_role::process) + index;
+        const auto policy = control_plane::policy_for(role);
+        const word_t attempts = state.roles[index].restart_count;
+        if (!control_plane::may_restart(policy, attempts))
+            return false;
+
+        const word_t selector = selector_base + index * selector_stride;
+        if (control(abi::v1::control_operation::process_destroy, selector, selector + 1U,
+                    selector + 2U) != success)
+            return false;
+
+        word_t new_id = 0U;
+        if (control_result1(new_id, abi::v1::control_operation::process_create, index % 4U, role,
+                            selector, selector + 1U, selector + 2U) != success)
+            return false;
+
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        if (control(abi::v1::control_operation::capability_mint, selector + 1U, service_endpoint,
+                    endpoint_base + index, read_write, index + 1U) != success)
+            return false;
+
+        if (index == console_index && !mint_console_uart_frame())
+            return false;
+#if CONFIG_GUEST_EMBEDDED_IMAGE
+        if (index == domain_index) {
+            if (!mint_embedded_guest_resources())
+                return false;
+            if (ipc_call(endpoint_base + domain_index,
+                        static_cast<word_t>(abi::v1::control_plane_operation::launch), 0U)
+                    .status != success)
+                return false;
+            if (ipc_call(endpoint_base + domain_index,
+                        static_cast<word_t>(abi::v1::control_plane_operation::load), 0U)
+                    .status != success)
+                return false;
+        }
+#endif
+
+        state.roles[index].thread_id = static_cast<u32>(new_id);
+        state.roles[index].restart_count = static_cast<u32>(attempts + 1U);
+        return true;
+    }
+
+#if CONFIG_GUEST_EMBEDDED_IMAGE
+    /*
+     * serve isn't a status query -- it IS the guest's execution loop
+     * (domain/main.cc's serve handler is a for(;;) around domain.run()):
+     * whichever thread calls it blocks for as long as the guest runs. After
+     * a fault-triggered restart, restart_role() (run from the supervision
+     * thread) already re-minted+launched+loaded a fresh domain-manager
+     * instance; this thread -- the ORIGINAL one, which owns this whole
+     * function and must stay the one that (re-)calls serve(), so the
+     * supervision thread remains free to keep draining faults -- just needs
+     * to notice and re-enter serve() on it.
+     *
+     * The restart-count comparison is what disambiguates "a fault-triggered
+     * restart is in flight, wait then re-serve" from "the guest reached a
+     * genuine non-fault terminal exit" (serve() returning with no restart
+     * ever having been recorded): release_pending_reply() (scheduler.hh) is
+     * what wakes this thread's blocked ipc_call in the crash case, by
+     * construction always after restart_role() has destroyed the old task;
+     * if restart_count never moves, nothing destroyed the role out from
+     * under this call, so it was a real, non-fault exit and this stops.
+     */
+    [[nodiscard]] inline bool run_embedded_guest_loop(supervisor_state& state) noexcept {
+        if (!create_embedded_guest_resources())
+            return false;
+        if (!mint_embedded_guest_resources())
+            return false;
+        const capability_id_t domain_endpoint = endpoint_base + domain_index;
+        const word_t success = static_cast<word_t>(error_t::success);
+        if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
+                    0U)
+                .status != success)
+            return false;
+        if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::load),
+                    0U)
+                .status != success)
+            return false;
+
+        u32 seen = state.roles[domain_index].restart_count;
+        for (;;) {
+            (void)ipc_call(domain_endpoint,
+                           static_cast<word_t>(abi::v1::control_plane_operation::serve), 0U);
+            constexpr u32 maximum_wait_rounds = 100000000U;
+            bool restarted = false;
+            for (u32 round = 0U; round < maximum_wait_rounds; ++round) {
+                const u32 current = state.roles[domain_index].restart_count;
+                if (current != seen) {
+                    seen = current;
+                    restarted = true;
+                    break;
+                }
+            }
+            if (!restarted)
+                return false;
+        }
+    }
+#endif
 
     [[nodiscard]] inline int supervise() noexcept {
         if (!bind_role_images())
             return 1;
+        if (!create_supervisor_state())
+            return 1;
+        supervisor_state& state = *supervisor_state_ptr();
         if (control(abi::v1::control_operation::process_create, 1U, memory_role, memory_selector,
                     memory_selector + 1U,
                     memory_selector + 2U) != static_cast<word_t>(error_t::success))
             return 1;
+        {
+            const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                      static_cast<word_t>(abi::v1::CapabilityRight::write);
+            if (control(abi::v1::control_operation::endpoint_create, memory_service_endpoint) !=
+                static_cast<word_t>(error_t::success))
+                return 1;
+            if (control(abi::v1::control_operation::capability_mint, memory_selector + 1U,
+                        service_endpoint, memory_service_endpoint,
+                        read_write) != static_cast<word_t>(error_t::success))
+                return 1;
+        }
         for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
-            if (!launch(index))
+            if (!launch(index, state))
                 return 1;
             /*
              * Minted immediately after this specific launch(), not after
@@ -388,7 +666,8 @@ namespace sys::root_graph
              * (root_graph.hh's earlier earlyfs-binding fixes); minting
              * right here keeps it impossible by construction instead.
              */
-            if (index == console_index && !mint_console_uart_frame())
+            if (index == console_index &&
+                (!create_console_uart_frame() || !mint_console_uart_frame()))
                 return 1;
         }
 
@@ -398,7 +677,13 @@ namespace sys::root_graph
         bool console_verified = false;
         bool supervisor_spawned = false;
         for (;;) {
-            drain_fault_reports();
+            // Once the supervision thread exists, it owns fault draining
+            // (and thus restart) exclusively -- see the comment above
+            // root_supervisor_role. Two threads racing to receive the same
+            // fault and independently restart the same role is a hazard
+            // this loop no longer needs to risk once that thread is up.
+            if (!supervisor_spawned)
+                drain_fault_reports(&state);
             word_t badges = 0U;
             const word_t status = control_result1(
                 badges, abi::v1::control_operation::notification_poll, root_notification);
@@ -430,7 +715,7 @@ namespace sys::root_graph
                     supervisor_spawned = true;
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE
-                return start_embedded_guest() ? 0 : 5;
+                return run_embedded_guest_loop(state) ? 0 : 5;
 #endif
             }
         }

@@ -442,7 +442,8 @@ namespace sys::kernel::thread
     [[nodiscard]] inline error_t create_user_bundle(task::task& root, cpu_id_t cpu, word_t role,
                                                     capability_id_t thread_selector,
                                                     capability_id_t task_selector,
-                                                    capability_id_t space_selector) noexcept {
+                                                    capability_id_t space_selector,
+                                                    u32* allocated_id = nullptr) noexcept {
         if (!root.root || cpu >= maximum_cpu_count ||
             thread_selector >= capability::cspace_slot_count ||
             task_selector >= capability::cspace_slot_count ||
@@ -566,6 +567,8 @@ namespace sys::kernel::thread
         certification_failures[cpu] = 0U;
 
         store_state(target, state::ready);
+        if (allocated_id != nullptr)
+            *allocated_id = id;
         return error_t::success;
     }
 
@@ -732,6 +735,47 @@ namespace sys::kernel::thread
         return error_t::busy;
     }
 
+    // Defined below, alongside the rest of the scheduling/blocking helpers.
+    [[nodiscard]] inline bool wake(thread& value) noexcept;
+
+    /*
+     * If target owes someone a reply (target.reply.valid: it is a server
+     * that a caller is blocked_reply/blocked_fault waiting on), wake that
+     * caller instead of leaving it stuck forever. This logic already existed
+     * inline in the thread_exit syscall handler for a *graceful* exit, but a
+     * *forced* destroy (process_destroy -> destroy_user_bundle) skipped it
+     * entirely -- nothing else clears or wakes a caller waiting on a thread
+     * that gets torn down out from under it. Never exercised before because
+     * nothing previously called process_destroy on a task that owed anyone a
+     * reply; restart-on-fault (USR-034) does exactly that when it destroys a
+     * crashed role that root's blocked ipc_call is waiting on.
+     */
+    inline void release_pending_reply(thread& target) noexcept {
+        lock_ipc_lifecycle();
+        if (target.reply.valid && target.reply.caller < user_thread_count) {
+            thread& caller = user_threads[target.reply.caller];
+            const state caller_state = load_state(caller);
+            if (caller.object.generation == target.reply.generation) {
+                if (caller_state == state::blocked_reply) {
+                    caller.ipc_timeout_active = false;
+                    clear_transfer(caller.transfer);
+                    caller.pending_result = error_t::timed_out;
+                    (void)wake(caller);
+                    ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
+                } else if (caller_state == state::blocked_fault) {
+                    caller.ipc_timeout_active = false;
+                    caller.waiting_endpoint = 0U;
+                    caller.fault_disposition = fault::disposition::terminate;
+                    store_state(caller, state::terminated);
+                }
+            }
+            if (target.reply.donation_active)
+                scheduling::revoke_donation(target.scheduling_context, caller.scheduling_context);
+            target.reply = {};
+        }
+        unlock_ipc_lifecycle();
+    }
+
     [[nodiscard]] inline error_t destroy_user_bundle(task::task& root,
                                                      capability_id_t thread_selector,
                                                      capability_id_t task_selector,
@@ -748,6 +792,7 @@ namespace sys::kernel::thread
         result = quiesce_user_thread(target);
         if (result != error_t::success)
             return result;
+        release_pending_reply(target);
 
         if (capability::slot_at(owner->cspace, 15U).object.type ==
             object::type_t::memory_resource) {
@@ -787,6 +832,15 @@ namespace sys::kernel::thread
             capability::revoke_reference_locked(space_reference);
             capability::revoke_reference_locked(scheduling_reference);
         }
+        /*
+         * After the authority transaction (this reclaims via the unlocked
+         * capability/object entry points) and after unmap_all() above, so
+         * the task's own mappings are already gone and its frames are
+         * releasable. Without this every frame and page table the task
+         * allocated and did not explicitly destroy leaks its pool slot --
+         * see reclaim_task_memory().
+         */
+        memory::reclaim_task_memory(task_reference);
         result = object::unregister_object(scheduling_reference);
         if (result == error_t::success)
             result = object::unregister_object(space_reference);
@@ -819,6 +873,7 @@ namespace sys::kernel::thread
  * sys::kernel::thread namespace itself.
  */
 #include <sys/kernel/tests/fault/lifecycle.hh>
+#include <sys/kernel/tests/fault/reply_wakeup.hh>
 #include <sys/kernel/tests/hardening/boot_checks.hh>
 
 namespace sys::kernel::thread
@@ -886,6 +941,10 @@ namespace sys::kernel::thread
             return result;
 
         result = tests::fault_lifecycle::run(root);
+        if (result != error_t::success)
+            return result;
+
+        result = tests::fault_lifecycle::run_reply_wakeup(root);
         if (result != error_t::success)
             return result;
 

@@ -11,7 +11,25 @@
 
 namespace
 {
+#if CONFIG_SELFTEST
+    /*
+     * Root's shared fault-delivery endpoint, minted with read+write into
+     * memory-server specifically so it can act as a pager for genuine page
+     * faults -- exercised only by the CONFIG_SELFTEST pager sequence below
+     * (real demand paging, USR-010, isn't implemented yet). The production
+     * request loop's memory_server_operation API (grant_frame/query/
+     * shutdown) is an unrelated concern and must not share that endpoint:
+     * every crashing role's fault also lands on slot 10, and since this
+     * loop is permanently blocked_receive there (nothing currently calls
+     * the production API), it would win the race for almost every fault
+     * delivered anywhere in the system, silently swallowing crashes root's
+     * supervision thread needs to see for restart-on-fault (USR-034) --
+     * confirmed happening in practice, not theoretical.
+     */
     inline constexpr sys::word_t endpoint = 10U;
+#else
+    inline constexpr sys::word_t service_endpoint = 11U;
+#endif
     inline constexpr sys::word_t notification = 14U;
     inline constexpr sys::word_t resource = 15U;
     inline constexpr sys::word_t service_frame_base = 16U;
@@ -106,7 +124,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         return 1;
 
     for (;;) {
-        const auto request = sys::ipc_receive(endpoint);
+        const auto request = sys::ipc_receive(service_endpoint);
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             continue;
         sys::word_t value = 0U;

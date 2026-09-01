@@ -1280,6 +1280,72 @@ namespace sys::kernel::memory
         return error_t::success;
     }
 
+    /*
+     * Reclaim every frame and page table still owned by a task being torn
+     * down. Both pools hand out fixed slots (frames[]/page_tables[], with
+     * an in_use flag) that are only ever returned by an explicit
+     * destroy_frame()/destroy_page_table() call from the owning task, so
+     * anything a task allocated and did not free itself used to leak its
+     * pool slot permanently once the task was destroyed -- process_destroy
+     * revokes the task's capabilities but never touched the underlying
+     * objects. Latent until restart-on-fault (USR-034): every previously
+     * destroyed task allocated at most a handful of pages, whereas
+     * restarting the domain-manager (which stages the entire guest image
+     * a page at a time) exhausted frames[] on the very first restart, and
+     * the fresh instance's guest load then failed with no_memory.
+     *
+     * Mirrors destroy_frame()/destroy_page_table()'s teardown order, minus
+     * their cspace lookup (the caller is destroying that cspace anyway) and
+     * minus uncharge_page() (the task's own counters die with it). Frames
+     * still mapped somewhere are skipped rather than force-unmapped:
+     * destroy_user_bundle() calls unmap_all() on the task's address space
+     * first, so a frame still mapped afterwards is mapped into some OTHER
+     * task's space, which must keep working.
+     */
+    inline void reclaim_task_memory(const object::reference_t& owner_task) noexcept {
+        for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
+            frame& target = frames[index];
+            if (!__atomic_load_n(&target.in_use, __ATOMIC_ACQUIRE) ||
+                !same_reference(target.owner_task, owner_task))
+                continue;
+            resource* charged_resource = nullptr;
+            if (valid_reference(target.resource_authority))
+                charged_resource =
+                    reinterpret_cast<resource*>(object::resolve(target.resource_authority));
+            if (release_frame(target) != error_t::success)
+                continue;
+            const object::reference_t reference = object::reference(target.object);
+            capability::revoke_reference(reference);
+            if (object::unregister_object(reference) != error_t::success)
+                continue;
+            target.object = {};
+            target.owner = 0U;
+            target.resource_authority = {};
+            __atomic_store_n(&target.in_use, false, __ATOMIC_RELEASE);
+            if (charged_resource != nullptr)
+                uncharge_resource(*charged_resource);
+        }
+        for (u32 index = bootstrap_page_table_count; index < page_table_count; ++index) {
+            page_table& target = page_tables[index];
+            if (!__atomic_load_n(&target.in_use, __ATOMIC_ACQUIRE) || !target.allocated ||
+                !same_reference(target.owner_task, owner_task))
+                continue;
+            resource* charged_resource = nullptr;
+            if (valid_reference(target.resource_authority))
+                charged_resource =
+                    reinterpret_cast<resource*>(object::resolve(target.resource_authority));
+            if (release_physical_page(target.physical_address) != error_t::success)
+                continue;
+            const object::reference_t reference = object::reference(target.object);
+            capability::revoke_reference(reference);
+            if (object::unregister_object(reference) != error_t::success)
+                continue;
+            target = {};
+            if (charged_resource != nullptr)
+                uncharge_resource(*charged_resource);
+        }
+    }
+
     [[nodiscard]] inline error_t map(space::address_space& target, frame& source, vaddr_t address,
                                      permission permissions,
                                      capability::derivation_id_t frame_authority,

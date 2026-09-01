@@ -263,29 +263,9 @@ namespace sys::kernel::syscall
                         reinterpret_cast<notification::notification*>(notification_header);
                 }
 
+                thread::release_pending_reply(current);
+
                 thread::lock_ipc_lifecycle();
-                if (current.reply.valid && current.reply.caller < thread::user_thread_count) {
-                    thread::thread& caller = thread::user_threads[current.reply.caller];
-                    const thread::state caller_state = thread::load_state(caller);
-                    if (caller.object.generation == current.reply.generation) {
-                        if (caller_state == thread::state::blocked_reply) {
-                            caller.ipc_timeout_active = false;
-                            thread::clear_transfer(caller.transfer);
-                            caller.pending_result = error_t::timed_out;
-                            (void)thread::wake(caller);
-                            ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
-                        } else if (caller_state == thread::state::blocked_fault) {
-                            caller.ipc_timeout_active = false;
-                            caller.waiting_endpoint = 0U;
-                            caller.fault_disposition = fault::disposition::terminate;
-                            thread::store_state(caller, thread::state::terminated);
-                        }
-                    }
-                    if (current.reply.donation_active)
-                        scheduling::revoke_donation(current.scheduling_context,
-                                                    caller.scheduling_context);
-                    current.reply = {};
-                }
                 thread::prepare_block(frame, thread::state::terminated);
                 if (exit_notification != nullptr)
                     notification::signal(*exit_notification, a3);
@@ -707,18 +687,22 @@ namespace sys::kernel::syscall
                 break;
             }
             case abi::v1::control_operation::child_create:
-            case abi::v1::control_operation::process_create:
+            case abi::v1::control_operation::process_create: {
                 if (current.owner == nullptr || !current.owner->root) {
                     result = error_t::denied;
                     break;
                 }
+                u32 allocated_id = 0U;
                 result = thread::create_user_bundle(
                     *current.owner, static_cast<cpu_id_t>(a1), a2, static_cast<capability_id_t>(a3),
-                    static_cast<capability_id_t>(a4), static_cast<capability_id_t>(a5));
+                    static_cast<capability_id_t>(a4), static_cast<capability_id_t>(a5),
+                    &allocated_id);
                 if (result == error_t::success) {
+                    frame.x[1] = allocated_id;
                     platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
                 }
                 break;
+            }
             case abi::v1::control_operation::thread_create:
                 if (current.owner == nullptr) {
                     result = error_t::denied;
