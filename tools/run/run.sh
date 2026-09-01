@@ -16,8 +16,32 @@ readelf_tool=$(command -v llvm-readelf 2>/dev/null || command -v readelf)
 machine=$($readelf_tool -h "$kernel" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
 cpus=${CPUS:-4}
 memory_mb=${MEMORY_MB:-256}
+
+# The certification suite measures guest-observed tick deltas against fixed
+# limits (scheduler_latency_bounds, ipc_latency_bound). Under TCG, a vCPU
+# that loses its host CPU to unrelated load still has the guest's virtual
+# timer advancing, so host contention shows up as enormous apparent
+# in-guest latency and fails those bounds -- a measurement artifact of the
+# environment, not kernel behavior. Observed directly: identical builds
+# reported ipc_latency max_ticks anywhere from 135569 (dedicated cores) to
+# 1406527 (contended) against a 620000 limit, and a stashed-baseline
+# comparison confirmed the same failures with the tree's own changes
+# reverted.
+#
+# So pin QEMU to the top half of the host's CPUs by default, reserving the
+# rest for everything else, instead of leaving it to whoever remembers to
+# set QEMU_CPUSET (samples/guests/zephyr already hardcoded 4-7 for exactly
+# this reason). Explicit QEMU_CPUSET still wins; QEMU_CPUSET=- opts out
+# entirely. Skipped when the host has too few cores to spare any, or when
+# taskset is unavailable.
+if [ -z "${QEMU_CPUSET:-}" ] && command -v taskset >/dev/null 2>&1; then
+    host_cpus=$(command -v nproc >/dev/null 2>&1 && nproc || echo 0)
+    if [ "$host_cpus" -ge $((cpus * 2)) ]; then
+        QEMU_CPUSET="$((host_cpus - cpus))-$((host_cpus - 1))"
+    fi
+fi
 run_arm64_qemu() {
-    if [ -n "${QEMU_CPUSET:-}" ]; then
+    if [ -n "${QEMU_CPUSET:-}" ] && [ "${QEMU_CPUSET}" != "-" ]; then
         exec taskset -c "$QEMU_CPUSET" qemu-system-aarch64 "$@"
     fi
     exec qemu-system-aarch64 "$@"
