@@ -7,6 +7,7 @@
 
 namespace sys::kernel::user_access
 {
+#if defined(__aarch64__)
     [[nodiscard]] inline bool valid_range(const arch::space::address_space& space, vaddr_t address,
                                           usize_t size, bool write) noexcept {
         if (size == 0U)
@@ -63,4 +64,5 @@ namespace sys::kernel::user_access
         }
         return error_t::success;
     }
+#endif /* __aarch64__ */
 } // namespace sys::kernel::user_access
