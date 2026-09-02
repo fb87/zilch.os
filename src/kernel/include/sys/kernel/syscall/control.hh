@@ -7,7 +7,7 @@
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/hypervisor.hh>
 #include <abi/sys/v1/syscall_numbers.hh>
-#if CONFIG_HYPERVISOR_SELFTEST
+#if CONFIG_HYPERVISOR_SELFTEST && defined(__aarch64__)
 #include <sys/kernel/tests/hypervisor/control_models.hh>
 #endif
 #include <sys/kernel/memory/manager.hh>
@@ -21,7 +21,7 @@
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/platform.hh>
 #include <sys/types.hh>
-#if CONFIG_SELFTEST
+#if CONFIG_SELFTEST && defined(__aarch64__)
 #include <sys/kernel/tests/certification/dispatch.hh>
 #endif
 
@@ -206,7 +206,7 @@ namespace sys::kernel::syscall
             return false;
 
         const word_t raw_operation = arch::syscall::argument(frame, 0U);
-#if CONFIG_SELFTEST
+#if CONFIG_SELFTEST && defined(__aarch64__)
         if (tests::certification::dispatch(current, frame, raw_operation))
             return true;
 #endif
@@ -238,6 +238,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+#if defined(__aarch64__)
             case abi::v1::control_operation::thread_exit: {
                 /*
                  * Returning from a userspace program is a one-way transition.
@@ -280,6 +281,7 @@ namespace sys::kernel::syscall
                     result = thread::quiesce_user_thread(*target);
                 break;
             }
+#endif
             case abi::v1::control_operation::map_frame: {
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -379,6 +381,7 @@ namespace sys::kernel::syscall
                     result =
                         memory::destroy_resource(*current.owner, static_cast<capability_id_t>(a1));
                 break;
+#if defined(__aarch64__)
             case abi::v1::control_operation::memory_resource_query: {
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -394,6 +397,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+#endif
             case abi::v1::control_operation::frame_destroy:
                 if (current.owner == nullptr)
                     result = error_t::denied;
@@ -438,6 +442,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+#if defined(__aarch64__)
             case abi::v1::control_operation::memory_query:
                 if (current.owner == nullptr)
                     result = error_t::denied;
@@ -449,6 +454,7 @@ namespace sys::kernel::syscall
                     result = error_t::success;
                 }
                 break;
+#endif
             case abi::v1::control_operation::fault_reply_map: {
                 thread::thread* target = nullptr;
                 memory::frame* source = nullptr;
@@ -594,6 +600,7 @@ namespace sys::kernel::syscall
                     result = arch::space::bind_role_image(a1, static_cast<u64>(a2),
                                                           static_cast<u64>(a3));
                 break;
+#if defined(__aarch64__)
             case abi::v1::control_operation::notification_signal:
             case abi::v1::control_operation::notification_poll: {
                 if (current.owner == nullptr) {
@@ -617,6 +624,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+#endif
             case abi::v1::control_operation::interrupt_bind: {
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -686,6 +694,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+#if defined(__aarch64__)
             case abi::v1::control_operation::child_create:
             case abi::v1::control_operation::process_create: {
                 if (current.owner == nullptr || !current.owner->root) {
@@ -703,6 +712,7 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+#endif
             case abi::v1::control_operation::thread_create:
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -759,6 +769,7 @@ namespace sys::kernel::syscall
                         if (result == error_t::success)
                             result = hypervisor::stage2_unmap(*vm, a3);
                         break;
+#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::stage2_tracking_query:
                     case abi::v1::hypervisor_operation::stage2_tracking_clear: {
                         result = resolve_vm(current, a2, capability::right_t::read, vm);
@@ -772,11 +783,13 @@ namespace sys::kernel::syscall
                         frame.x[1] = flags;
                         break;
                     }
+#endif
                     case abi::v1::hypervisor_operation::vcpu_configure:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
                         if (result == error_t::success)
                             result = hypervisor::configure_vcpu(*vcpu, a3, a4, a5);
                         break;
+#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::vcpu_state_read:
                     case abi::v1::hypervisor_operation::vcpu_state_write: {
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
@@ -789,6 +802,7 @@ namespace sys::kernel::syscall
                         frame.x[1] = value;
                         break;
                     }
+#endif
                     case abi::v1::hypervisor_operation::virtual_irq_inject:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
                         if (result == error_t::success)
@@ -861,6 +875,7 @@ namespace sys::kernel::syscall
                         if (result == error_t::success)
                             result = hypervisor::destroy_vm(*vm);
                         break;
+#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::vcpu_run: {
                         result = resolve_vcpu(current, a2, capability::right_t::execute, vcpu);
                         if (result == error_t::success) {
@@ -874,6 +889,8 @@ namespace sys::kernel::syscall
                         }
                         break;
                     }
+#endif
+#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::diagnostics:
                         result = resolve_vm(current, a2, capability::right_t::read, vm);
                         if (result == error_t::success) {
@@ -884,9 +901,16 @@ namespace sys::kernel::syscall
                             frame.x[4] = vm->last_diagnostic.value;
                         }
                         break;
+#endif
+                    default:
+                        result = error_t::unsupported;
+                        break;
                 }
                 break;
             }
+            default:
+                result = error_t::unsupported;
+                break;
         }
         set_control_result(frame, result);
         return true;

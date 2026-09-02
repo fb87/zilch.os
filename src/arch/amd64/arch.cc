@@ -5,7 +5,9 @@
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
 #include <sys/kernel/syscall/control.hh>
+#if defined(__aarch64__)
 #include <sys/kernel/syscall/ipc.hh>
+#endif
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/timer.hh>
@@ -17,12 +19,16 @@ extern "C" void sys_amd64_exception_handler(sys::arch::exception::frame_t* frame
         /* Timer interrupt (vector 32 = IRQ0 mapped by IOAPIC) */
         const sys::kernel::interrupt::timing::latency_scope preemption_latency{
             sys::kernel::interrupt::timing::latency_kind::preemption_service};
-        const sys::u64 ticks = sys::platform::timer::handle_interrupt();
+        (void)sys::platform::timer::handle_interrupt();
+#if defined(__aarch64__)
         if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
             sys::kernel::thread::schedule_user(*frame);
         } else {
             sys::kernel::scheduler::on_timer_tick();
         }
+#else
+        sys::kernel::scheduler::on_timer_tick();
+#endif
         sys::platform::interrupt::complete(32U);
         return;
     }
