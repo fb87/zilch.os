@@ -67,6 +67,7 @@ Root creates and mints these before the process runs
 | 22   | notification bound to that interrupt          |
 | 23   | serial-driver service endpoint (diagnostics)  |
 | 24   | own DMA frame (created by this driver)        |
+| 25   | shared payload frame (created by root)        |
 
 Bring-up diagnostics are written as text through slot 23 — the same endpoint
 console-server forwards to — so a probe scan is observable on the console
@@ -136,10 +137,32 @@ The request path still spins, because this codebase has no blocking wait for
 a notification — the same constraint `serial-driver`'s loop and
 `root_graph.hh`'s `drain_fault_reports()` work around.
 
+## Payload buffer
+
+Transfer payload lives in a **separate frame** from the ring page. That
+separation is the point: the ring page holds the descriptor table and the
+available/used rings, so a client granted access to it could corrupt the
+queue the driver is running. The payload frame carries only sector bytes.
+
+Root creates it and mints it to the driver with `control` as well as
+read/write, because the driver must call `frame_physical_address` on it to
+aim a descriptor at it. A client would get read/write only — enough to fill
+or drain a sector, not enough to ask where it physically lives.
+
+The boot self-check writes a distinct offset-derived value into every 8-byte
+slot of a sector, clears the buffer, reads it back, and reports how many
+bytes verified (`bytes=0x200` for a full sector). Deriving each value from
+its offset means a short or misaligned transfer cannot coincidentally match,
+which a single-word check would not have caught.
+
 ## Remaining
 
-Transfers are one sector at a time through a bounce buffer, with only the
-leading 24 bytes carried back in the IPC message — a client cannot yet read a
-full sector. Bulk transfer wants a capability-granted shared data frame, which
-is the natural next step, and has no consumer until something other than the
-boot self-check calls this service.
+The `read` reply still echoes the leading 24 bytes inline, for a client that
+has the endpoint but not the payload frame. A client holding the frame reads
+all 512 bytes directly.
+
+Nothing yet mints the payload frame to a client, because nothing other than
+the boot self-check calls this service — that wiring belongs with the first
+real consumer rather than being built speculatively. Transfers are also still
+one sector per request; multi-sector would chain more descriptors, which the
+queue of 8 has room for.

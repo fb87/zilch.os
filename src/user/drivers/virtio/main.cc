@@ -33,6 +33,13 @@ namespace
     inline constexpr sys::capability_id_t irq_notification_selector = 22U;
     inline constexpr sys::capability_id_t serial_endpoint_selector = 23U;
     inline constexpr sys::capability_id_t dma_frame_selector = 24U;
+    /*
+     * Payload buffer, a different frame from the ring page above so a client
+     * holding it cannot reach the virtqueue. Root mints it with control as
+     * well as read/write so this driver can resolve its physical address.
+     */
+    inline constexpr sys::capability_id_t shared_frame_selector = 25U;
+    inline constexpr sys::word_t shared_scratch_address = 0x2003c000U;
 
     /*
      * The IRQ capability root minted covers INTID 79 = transport 31, the
@@ -78,12 +85,16 @@ namespace
     inline constexpr sys::uintptr_t used_offset = 0x100U;
     inline constexpr sys::uintptr_t header_offset = 0x200U;
     inline constexpr sys::uintptr_t status_offset = 0x210U;
-    inline constexpr sys::uintptr_t data_offset = 0x400U;
 
-    static_assert(data_offset + abi::block_sector_size <= 0x1000U);
+    static_assert(status_offset < 0x1000U);
+
+    // Payload lives at the base of the separate shared frame, so the whole
+    // sector is reachable by a client without exposing the rings above.
+    inline constexpr sys::uintptr_t data_offset = 0x000U;
 
     sys::u32 block_transport = transports_per_page; // == none found
     sys::word_t dma_physical = 0U;
+    sys::word_t shared_physical = 0U;
     sys::u64 device_capacity = 0U;
     bool interrupt_bound = false;
     // Counted so a boot can distinguish "the interrupt path works" from
@@ -111,6 +122,11 @@ namespace
     template <typename T>
     [[nodiscard]] inline volatile T* dma(sys::uintptr_t offset) noexcept {
         return reinterpret_cast<volatile T*>(dma_scratch_address + offset);
+    }
+
+    template <typename T>
+    [[nodiscard]] inline volatile T* payload(sys::uintptr_t offset) noexcept {
+        return reinterpret_cast<volatile T*>(shared_scratch_address + offset);
     }
 
     /*
@@ -233,6 +249,18 @@ namespace
         emit_text("virtio: dma page at ");
         emit_hex(dma_physical);
         emit_text("\r\n");
+
+        // Payload frame: root created and minted it (with control, so this
+        // call is permitted). Separate from the ring page above so a client
+        // holding it cannot reach the virtqueue.
+        const sys::error_t shared =
+            sys::frame_physical_address(shared_frame_selector, shared_physical);
+        if (shared != sys::error_t::success) {
+            emit_text("virtio: shared frame_physical_address failed ");
+            emit_hex(static_cast<sys::u64>(static_cast<sys::word_t>(shared)));
+            emit_text("\r\n");
+            return false;
+        }
         const sys::word_t read_write = static_cast<sys::word_t>(abi::CapabilityRight::read) |
                                        static_cast<sys::word_t>(abi::CapabilityRight::write);
         const sys::word_t attrs = abi::encode_mapping_attributes(
@@ -245,8 +273,18 @@ namespace
             emit_text("\r\n");
             return false;
         }
-        for (sys::uintptr_t offset = 0U; offset < 0x1000U; offset += 8U)
+        status = sys::control(abi::control_operation::map_frame, self_space_selector,
+                              shared_frame_selector, shared_scratch_address, read_write, attrs);
+        if (status != success) {
+            emit_text("virtio: shared map_frame failed ");
+            emit_hex(status);
+            emit_text("\r\n");
+            return false;
+        }
+        for (sys::uintptr_t offset = 0U; offset < 0x1000U; offset += 8U) {
             *dma<sys::u64>(offset) = 0U;
+            *payload<sys::u64>(offset) = 0U;
+        }
         return true;
     }
 
@@ -382,7 +420,8 @@ namespace
             abi::virtq_desc_next |
             (type == abi::block_request_in ? abi::virtq_desc_write : 0U));
         write_desc(0U, base + header_offset, 16U, abi::virtq_desc_next, 1U);
-        write_desc(1U, base + data_offset, abi::block_sector_size, data_flags, 2U);
+        write_desc(1U, static_cast<sys::u64>(shared_physical) + data_offset,
+                   abi::block_sector_size, data_flags, 2U);
         write_desc(2U, base + status_offset, 1U, abi::virtq_desc_write, 0U);
 
         // Publish the head into the available ring, then its index. The
@@ -475,23 +514,36 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
             emit_text("virtio: queue ready, capacity ");
             emit_hex(device_capacity);
             emit_text(" sectors\r\n");
-            // Self-check: write a recognisable pattern to the last sector
-            // and read it back, so a boot proves the DMA path end to end
-            // rather than only proving the device was discovered.
+            /*
+             * Self-check across the WHOLE sector, not just its first word: a
+             * single-word check would pass even if the descriptor length were
+             * wrong, or if only the leading bytes were actually transferred.
+             * Each 8-byte slot gets a distinct value derived from its offset,
+             * so a misaligned or short transfer cannot coincidentally match.
+             */
             const sys::u64 probe_sector = device_capacity != 0U ? device_capacity - 1U : 0U;
-            *dma<sys::u64>(data_offset) = 0x7a696c6368626c6bULL; // "zilchblk"
-            for (sys::uintptr_t offset = 8U; offset < abi::block_sector_size; offset += 8U)
-                *dma<sys::u64>(data_offset + offset) = 0U;
+            for (sys::uintptr_t offset = 0U; offset < abi::block_sector_size; offset += 8U)
+                *payload<sys::u64>(data_offset + offset) = 0x7a696c6368626c6bULL ^ offset;
             const bool wrote =
                 submit(abi::block_request_out, probe_sector) == request_result::completed;
-            *dma<sys::u64>(data_offset) = 0U;
+            for (sys::uintptr_t offset = 0U; offset < abi::block_sector_size; offset += 8U)
+                *payload<sys::u64>(data_offset + offset) = 0U;
             const bool read_back =
                 wrote && submit(abi::block_request_in, probe_sector) == request_result::completed;
-            const sys::u64 value = *dma<sys::u64>(data_offset);
+            sys::uintptr_t verified = 0U;
+            while (verified < abi::block_sector_size &&
+                   *payload<sys::u64>(data_offset + verified) == (0x7a696c6368626c6bULL ^ verified))
+                verified += 8U;
+            const sys::u64 value = *payload<sys::u64>(data_offset);
+            const bool intact = read_back && verified == abi::block_sector_size;
             emit_text("virtio: sector round trip ");
-            emit_text(read_back && value == 0x7a696c6368626c6bULL ? "PASS" : "FAIL");
-            emit_text(" value=");
-            emit_hex(value);
+            emit_text(intact ? "PASS" : "FAIL");
+            emit_text(" bytes=");
+            emit_hex(verified);
+            if (!intact) {
+                emit_text(" first_bad=");
+                emit_hex(value);
+            }
             if (interrupt_bound) {
                 /*
                  * Whether a given request's interrupt is *observed* by the
@@ -563,9 +615,9 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
                 const request_result outcome = submit(abi::block_request_in, request.message1);
                 result0 = status_for(outcome);
                 if (outcome == request_result::completed) {
-                    result1 = *dma<sys::u64>(data_offset);
-                    result2 = *dma<sys::u64>(data_offset + 8U);
-                    result3 = *dma<sys::u64>(data_offset + 16U);
+                    result1 = *payload<sys::u64>(data_offset);
+                    result2 = *payload<sys::u64>(data_offset + 8U);
+                    result3 = *payload<sys::u64>(data_offset + 16U);
                 }
             }
         } else if (operation == abi::block_operation::write) {
@@ -574,10 +626,10 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
             } else if (request.message1 >= device_capacity) {
                 result0 = static_cast<sys::word_t>(sys::error_t::invalid_argument);
             } else {
-                *dma<sys::u64>(data_offset) = request.message2;
-                *dma<sys::u64>(data_offset + 8U) = request.message3;
+                *payload<sys::u64>(data_offset) = request.message2;
+                *payload<sys::u64>(data_offset + 8U) = request.message3;
                 for (sys::uintptr_t offset = 16U; offset < abi::block_sector_size; offset += 8U)
-                    *dma<sys::u64>(data_offset + offset) = 0U;
+                    *payload<sys::u64>(data_offset + offset) = 0U;
                 result0 = status_for(submit(abi::block_request_out, request.message1));
             }
         }

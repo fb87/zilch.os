@@ -82,6 +82,21 @@ namespace sys::root_graph
     inline constexpr capability_id_t block_irq_child_selector = 21U;
     inline constexpr capability_id_t block_serial_endpoint_selector = 23U;
     /*
+     * Shared data buffer for block transfers. Deliberately a DIFFERENT frame
+     * from the driver's own DMA page: that page holds the virtqueue
+     * descriptor table and the available/used rings, so handing it to a
+     * client would let the client corrupt the queue the driver is running.
+     * This frame carries only payload bytes.
+     *
+     * Root creates it and mints it to the driver with control as well as
+     * read/write, because the driver must call frame_physical_address on it
+     * to point a descriptor at it, and that operation requires control. A
+     * client gets read/write only -- enough to fill or drain a sector,
+     * not enough to ask where it physically lives.
+     */
+    inline constexpr capability_id_t block_shared_root_frame_selector = 91U;
+    inline constexpr capability_id_t block_shared_child_frame_selector = 25U;
+    /*
      * INTID 79 = GIC SPI 47 = virtio-mmio transport 31, the transport QEMU
      * plugs the first attached device into (it allocates downward from the
      * top). Edge-rising, per the device tree's <0 47 1> -- unlike pl011's
@@ -309,8 +324,14 @@ namespace sys::root_graph
             return false;
         // Third argument non-zero selects edge triggering, matching the
         // device tree's <0 47 1>.
-        return control(abi::v1::control_operation::interrupt_create, block_irq_root_selector,
-                       block_irq, 1U) == success;
+        if (control(abi::v1::control_operation::interrupt_create, block_irq_root_selector,
+                    block_irq, 1U) != success)
+            return false;
+        // create_frame already assigns a physical page (it calls
+        // assign_frame internally), so there is no separate allocate step --
+        // calling frame_allocate on top of this would fail with busy.
+        return control(abi::v1::control_operation::frame_create, 0U,
+                       block_shared_root_frame_selector) == success;
     }
 
     [[nodiscard]] inline bool mint_block_resources() noexcept {
@@ -327,6 +348,15 @@ namespace sys::root_graph
         if (control(abi::v1::control_operation::capability_mint, block_task,
                     block_irq_child_selector, block_irq_root_selector,
                     write_control) != success)
+            return false;
+        // Control as well as read/write: the driver must call
+        // frame_physical_address on this to aim a virtqueue descriptor at
+        // it, and that operation is gated on the control right.
+        const word_t read_write_control = read_write |
+                                          static_cast<word_t>(abi::v1::CapabilityRight::control);
+        if (control(abi::v1::control_operation::capability_mint, block_task,
+                    block_shared_child_frame_selector, block_shared_root_frame_selector,
+                    read_write_control) != success)
             return false;
         // Diagnostics path: the driver reports its probe results as text
         // through serial-driver, the same endpoint console-server forwards
