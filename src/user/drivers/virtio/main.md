@@ -64,15 +64,56 @@ Root creates and mints these before the process runs
 | 14   | root notification (ready / failure badge)     |
 | 20   | virtio-mmio device frame                      |
 | 23   | serial-driver service endpoint (diagnostics)  |
+| 24   | own DMA frame (created by this driver)        |
 
 Bring-up diagnostics are written as text through slot 23 — the same endpoint
 console-server forwards to — so a probe scan is observable on the console
 rather than silent.
 
+## DMA
+
+Virtqueues are DMA structures: the device is programmed with the *physical*
+addresses of the descriptor table, available ring, and used ring. Userspace
+had no way to learn a frame's physical address, so this driver motivated
+`abi::v1::control_operation::frame_physical_address` (seL4's
+`seL4_ARM_Page_GetAddress` is the direct precedent). It is gated on the
+frame's **control** right, which a task creating its own frame holds
+(`create_frame` installs `read|write|grant|control`) but a merely-delegated
+read/write capability does not — so a frame handed to a client discloses
+nothing new.
+
+The driver creates its own DMA page. Note that `frame_create` already calls
+`assign_frame` internally, so the frame comes back allocated and physically
+backed; calling `frame_allocate` on top of it fails with `busy`.
+
+`memory::valid_attributes()` requires a normal RAM frame to be mapped
+`normal` + `inner_shareable`, so the rings are ordinary cacheable memory.
+That is safe here because the device tree marks these transports
+`dma-coherent` (verified), making the device coherent with CPU caches — so
+ordering, not cache maintenance, is the only requirement. A `dsb sy` sits
+between publishing a ring entry and publishing the index that exposes it,
+and after observing an index the device wrote.
+
+Layout inside the single 4 KiB page (queue size 8):
+
+| Offset  | Structure                    |
+|---------|------------------------------|
+| `0x000` | descriptor table (8 × 16 B)  |
+| `0x080` | available ring               |
+| `0x100` | used ring                    |
+| `0x200` | request header (16 B)        |
+| `0x210` | status byte                  |
+| `0x400` | data buffer (one sector)     |
+
 ## Status
 
-Discovery and transport-register access only. Virtqueue setup and block
-read/write require the driver to learn the *physical* address of its DMA
-rings, which no current syscall exposes; see the report accompanying this
-change for the proposed `frame_physical_address` control operation
-(seL4's `Page_GetAddress` is the direct precedent).
+Discovery, modern-transport initialisation, and single-sector read/write
+over a split virtqueue. A boot self-check writes a pattern to the last
+sector, clears the buffer, reads it back, and reports PASS/FAIL, so the DMA
+path is proven end to end at every boot rather than merely assumed.
+
+Completion is **polled**, not interrupt-driven, because the driver holds no
+interrupt capability yet (see above). Transfers are one sector at a time
+through a bounce buffer, with only the leading bytes carried in the IPC
+message; bulk transfer wants a capability-granted shared data frame, which
+is the natural next step.

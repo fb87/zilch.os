@@ -51,5 +51,19 @@ namespace sys::abi::v1
         earlyfs_frame_create = 44U,
         role_image_bind = 45U,
         thread_create = 46U,
+        /*
+         * Reports the physical address backing a frame, in result1.
+         * Requires the frame's control right, which a task creating its own
+         * frame already holds (create_frame installs read|write|grant|
+         * control) but which a merely-delegated read/write capability does
+         * not -- so this does not widen what a frame handed to a client
+         * discloses.
+         *
+         * Needed because DMA-capable devices are programmed with physical
+         * addresses: a userspace driver building virtqueue rings (see
+         * src/user/drivers/virtio) has no other way to tell a device where
+         * its rings live. seL4_ARM_Page_GetAddress is the direct precedent.
+         */
+        frame_physical_address = 47U,
     };
 } // namespace sys::abi::v1

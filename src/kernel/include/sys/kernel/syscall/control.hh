@@ -443,6 +443,25 @@ namespace sys::kernel::syscall
                 break;
             }
 #if defined(__aarch64__)
+            case abi::v1::control_operation::frame_physical_address: {
+                /*
+                 * Gated on the frame's control right, not read: a task that
+                 * created the frame holds control (create_frame installs
+                 * read|write|grant|control), while a capability delegated to
+                 * a client with only read/write cannot ask. Needed by
+                 * userspace DMA drivers, which must program devices with
+                 * physical addresses.
+                 */
+                memory::frame* target_frame = nullptr;
+                result = resolve_frame(current, a1, capability::right_t::control, target_frame);
+                if (result == error_t::success) {
+                    if (!target_frame->allocated)
+                        result = error_t::not_found;
+                    else
+                        frame.x[1] = static_cast<word_t>(target_frame->physical_address);
+                }
+                break;
+            }
             case abi::v1::control_operation::memory_query:
                 if (current.owner == nullptr)
                     result = error_t::denied;
