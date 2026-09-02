@@ -219,6 +219,7 @@ namespace sys::kernel::thread
         __atomic_store_n(&value.pending_ipc_kind, static_cast<u8>(kind), __ATOMIC_RELEASE);
     }
 
+#if defined(__aarch64__)
     inline void consume_pending(thread& value) noexcept {
         const auto kind = static_cast<pending_ipc>(__atomic_exchange_n(
             &value.pending_ipc_kind, static_cast<u8>(pending_ipc::none), __ATOMIC_ACQUIRE));
@@ -256,4 +257,5 @@ namespace sys::kernel::thread
         value.pending_sender_generation = 0U;
         value.pending_badge = 0U;
     }
+#endif /* __aarch64__ */
 } // namespace sys::kernel::thread
