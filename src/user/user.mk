@@ -6,6 +6,7 @@ USER_TEST_INCLUDES := $(if $(filter 1,$(CONFIG_SELFTEST)),-I$(SRCTREE)/tests/abi
 USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(USER_TEST_INCLUDES) \
     -I$(OBJTREE)/include/generated -I$(SRCTREE)/src/user/include \
     -I$(SRCTREE)/src/user/personalities/native/include \
+    -I$(SRCTREE)/src/user/domains/vmm/include \
     -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
     -include $(KCONFIG_AUTOCONF_H) \
     -DCONFIG_SELFTEST=$(CONFIG_SELFTEST) \

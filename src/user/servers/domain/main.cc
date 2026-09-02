@@ -13,6 +13,8 @@
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/capability.hh>
 #include <sys/native.hh>
+#include <sys/vmm/elf.hh>
+#include <sys/vmm/vpl011.hh>
 
 #include <abi/sys/v1/memory.hh>
 
@@ -53,46 +55,11 @@ namespace
         sys::word_t ipa{};
     };
 
-    struct elf64_header final {
-        sys::u8 ident[16U];
-        sys::u16 type{};
-        sys::u16 machine{};
-        sys::u32 version{};
-        sys::u64 entry{};
-        sys::u64 phoff{};
-        sys::u64 shoff{};
-        sys::u32 flags{};
-        sys::u16 ehsize{};
-        sys::u16 phentsize{};
-        sys::u16 phnum{};
-        sys::u16 shentsize{};
-        sys::u16 shnum{};
-        sys::u16 shstrndx{};
-    } __attribute__((packed));
-
-    struct elf64_program_header final {
-        sys::u32 type{};
-        sys::u32 flags{};
-        sys::u64 offset{};
-        sys::u64 vaddr{};
-        sys::u64 paddr{};
-        sys::u64 filesz{};
-        sys::u64 memsz{};
-        sys::u64 align{};
-    } __attribute__((packed));
-
-    struct elf64_section_header final {
-        sys::u32 name{};
-        sys::u32 type{};
-        sys::u64 flags{};
-        sys::u64 address{};
-        sys::u64 offset{};
-        sys::u64 size{};
-        sys::u32 link{};
-        sys::u32 info{};
-        sys::u64 addralign{};
-        sys::u64 entsize{};
-    } __attribute__((packed));
+    // Moved to src/user/domains/vmm (sys/vmm/elf.hh): the on-disk guest
+    // image format is VMM vocabulary, not this server's.
+    using elf64_header = sys::vmm::elf::header;
+    using elf64_program_header = sys::vmm::elf::program_header;
+    using elf64_section_header = sys::vmm::elf::section_header;
 
     inline guest_page loaded_guest_pages[guest_page_limit]{};
     inline sys::word_t loaded_guest_page_count{};
@@ -111,49 +78,11 @@ namespace
      * CR are real; everything else in the 4 KiB IPA window is a safe
      * write-and-discard / read-returns-0.
      */
-    namespace vpl011
-    {
-        inline constexpr sys::word_t base_ipa = 0x09000000U;
-        inline constexpr sys::word_t size = 0x1000U;
-        inline constexpr sys::u16 irq = 33U;
-
-        inline constexpr sys::word_t offset_dr = 0x00U;
-        inline constexpr sys::word_t offset_fr = 0x18U;
-        inline constexpr sys::word_t offset_cr = 0x30U;
-        inline constexpr sys::word_t offset_imsc = 0x38U;
-
-        inline constexpr sys::word_t fr_rxfe = 1U << 4U;
-        // TXFF (bit 5) is never set in emulated FR reads below: TX is a
-        // synchronous forward to the console-server, so the guest never
-        // needs to wait for space.
-        inline constexpr sys::word_t imsc_rxim = 1U << 4U;
-
-        // qualification bit layout, matches
-        // src/arch/arm64/include/sys/arch/hypervisor.hh's mmio_qualification()
-        inline constexpr sys::word_t qualification_write_bit = 63U;
-        inline constexpr sys::word_t qualification_srt_shift = 55U;
-        inline constexpr sys::word_t qualification_srt_mask = 0x1fU;
-        inline constexpr sys::word_t pc_field = 31U;
-        inline constexpr sys::word_t xzr_register = 31U;
-
-        inline sys::word_t imsc{};
-        inline sys::word_t cr{};
-        inline bool rx_pending{};
-        inline sys::u8 rx_byte{};
-
-        // TX FIFO: DR writes land here instead of forwarding to the
-        // console-server synchronously (one blocking IPC round-trip per
-        // guest register write, which dominated observed serial output
-        // latency -- vPL011 still traps per access, real hardware register
-        // granularity, but the *IPC* cost after each trap doesn't need to
-        // be paid per byte too). tx_buffer holds up to
-        // console_write_max_bytes - 1 data bytes plus room for the NUL
-        // terminator console::write() expects; see flush_console_output().
-        inline constexpr sys::word_t tx_buffer_capacity =
-            sys::abi::v1::console_write_max_bytes - 1U;
-        inline sys::u8 tx_buffer[sys::abi::v1::console_write_max_bytes]{};
-        inline sys::word_t tx_length{};
-    } // namespace vpl011
+    // Moved to src/user/domains/vmm (sys/vmm/vpl011.hh): the device model
+    // is VMM vocabulary. The capability-wielding glue below -- console
+    // forwarding, IRQ injection, guest PC advance -- stays here, because it
+    // needs capabilities this server holds and the model does not.
+    namespace vpl011 = sys::vmm::vpl011;
 
     /*
      * Flushes any buffered vPL011 TX bytes through the console-server's
