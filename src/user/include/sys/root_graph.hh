@@ -222,6 +222,16 @@ namespace sys::root_graph
                                             static_cast<word_t>(abi::v1::control_plane_role::process);
 
     /*
+     * Bring-up progress reporting through console-server. supervise() had
+     * no diagnostics past the console check, so any later failure was a
+     * silent exit with a apparently-healthy boot log -- which is exactly how
+     * the supervision-thread spawn failure below went unnoticed.
+     */
+    inline void report(const char* text) noexcept {
+        (void)console::write(endpoint_base + console_index, text);
+    }
+
+    /*
      * The UART itself now belongs entirely to serial-driver (src/user/
      * drivers/serial), not console-server -- device_frame_create() and
      * interrupt_create() are both root-gated, so root creates the one live
@@ -720,13 +730,27 @@ namespace sys::root_graph
             reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
         constexpr usize_t directory_bound = 4096U;
         const auto found = platform::v1::earlyfs::find_span(page, directory_bound, "bin/init");
-        if (!found.found)
+        if (!found.found) {
+            report("supervisor: bin/init not found in earlyfs\n");
             return false;
+        }
         if (control(abi::v1::control_operation::role_image_bind, root_supervisor_role,
-                    static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success)
+                    static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success) {
+            report("supervisor: role_image_bind FAILED\n");
             return false;
-        return control(abi::v1::control_operation::thread_create, 0U, root_supervisor_role,
-                       supervisor_thread_selector, supervisor_space_selector) == success;
+        }
+        /*
+         * Exhausting the thread pool here used to be silent: supervise()
+         * returned 7 and init exited, leaving a boot that looked healthy
+         * but had no supervision thread and therefore no restart-on-fault.
+         * See user_thread_count in kernel/thread/scheduler.hh.
+         */
+        if (control(abi::v1::control_operation::thread_create, 0U, root_supervisor_role,
+                    supervisor_thread_selector, supervisor_space_selector) != success) {
+            report("sup: thread_create failed\n");
+            return false;
+        }
+        return true;
     }
 
     [[nodiscard]] inline bool launch_path(const char* name, word_t cpu,
@@ -877,20 +901,29 @@ namespace sys::root_graph
      * under this call, so it was a real, non-fault exit and this stops.
      */
     [[nodiscard]] inline bool run_embedded_guest_loop(supervisor_state& state) noexcept {
-        if (!create_embedded_guest_resources())
+        if (!create_embedded_guest_resources()) {
+            report("guest: resource creation FAILED\n");
             return false;
-        if (!mint_embedded_guest_resources())
+        }
+        if (!mint_embedded_guest_resources()) {
+            report("guest: resource mint FAILED\n");
             return false;
+        }
         const capability_id_t domain_endpoint = endpoint_base + domain_index;
         const word_t success = static_cast<word_t>(error_t::success);
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
                     0U)
-                .status != success)
+                .status != success) {
+            report("guest: launch FAILED\n");
             return false;
+        }
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::load),
                     0U)
-                .status != success)
+                .status != success) {
+            report("guest: load FAILED\n");
             return false;
+        }
+        report("guest: loaded, serving\n");
 
         u32 seen = state.roles[domain_index].restart_count;
         for (;;) {
@@ -1053,11 +1086,15 @@ namespace sys::root_graph
                     console_verified = true;
                 }
                 if (!supervisor_spawned) {
-                    if (!spawn_supervision_thread())
+                    if (!spawn_supervision_thread()) {
+                        (void)console::write(endpoint_base + console_index,
+                                             "supervisor: spawn FAILED\n");
                         return 7;
+                    }
                     supervisor_spawned = true;
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE
+                report("guest: starting\n");
                 return run_embedded_guest_loop(state) ? 0 : 5;
 #endif
             }

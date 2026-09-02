@@ -1,0 +1,18 @@
+# Runs the real service graph (root_graph.hh's supervise()) WITH a guest.
+#
+# This combination did not previously exist. The debug profile embeds a guest
+# but sets CONFIG_SELFTEST=y, so init runs the certification suite and never
+# reaches supervise(); the release profile reaches supervise() but has no
+# guest, because CONFIG_GUEST_EMBEDDED_IMAGE defaults on only via
+# GUEST_TEST_ARM64, which depends on SELFTEST. So the guest execution path
+# was unreachable in both.
+#
+# GUEST_VPL011_ARM64 breaks that deadlock: it needs no certification harness,
+# so it carries no SELFTEST dependency, and it drives the domain manager's
+# virtual PL011 by ordinary MMIO -- the production hosting path.
+CONFIG_BUILD_RELEASE=y
+CONFIG_PRINTK_TIME=y
+CONFIG_GUEST_SUPPORT=y
+CONFIG_GUEST_VPL011_ARM64=y
+CONFIG_GUEST_EXTERNAL=y
+CONFIG_GUEST_EMBEDDED_IMAGE=y

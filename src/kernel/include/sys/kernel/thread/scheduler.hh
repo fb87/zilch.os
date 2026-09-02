@@ -43,7 +43,7 @@
 
 namespace sys::kernel::thread
 {
-    inline constexpr u32 user_thread_count = 10U;
+    inline constexpr u32 user_thread_count = 12U;
     inline constexpr u32 maximum_cpu_count = 4U;
     inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
     inline constexpr u64 fault_timeout_ticks = 500U;

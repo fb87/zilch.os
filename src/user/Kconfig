@@ -9,6 +9,17 @@ config GUEST_TEST_ARM64
 	default y if SELFTEST
 	depends on SELFTEST && GUEST_SUPPORT
 
+config GUEST_VPL011_ARM64
+	bool "Built-in ARM64 vPL011 guest"
+	default n
+	depends on GUEST_SUPPORT
+	help
+	  A minimal guest that drives the domain manager's virtual PL011 by
+	  ordinary MMIO, with no hypercalls. Unlike GUEST_TEST_ARM64 it needs
+	  no certification harness, so it does NOT depend on SELFTEST -- which
+	  is what makes it runnable in a profile where init reaches
+	  root_graph.hh's supervise() and actually hosts a guest.
+
 config GUEST_EXTERNAL
 	bool "External guest image support"
 	default y if GUEST_SUPPORT

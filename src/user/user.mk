@@ -128,11 +128,16 @@ GUEST_TEST_ELF := $(GUEST_TEST_DIR)/guest-test.elf
 GUEST_TEST_BIN := $(GUEST_TEST_DIR)/guest-test.bin
 GUEST_TEST_OBJ := $(GUEST_TEST_DIR)/entry.o
 GUEST_TEST_LDSCRIPT := $(SRCTREE)/src/user/guests/test-arm64/linker.ld
+GUEST_VPL011_DIR := $(USER_OBJDIR)/guests/vpl011-arm64
+GUEST_VPL011_ELF := $(GUEST_VPL011_DIR)/guest-vpl011.elf
+GUEST_VPL011_BIN := $(GUEST_VPL011_DIR)/guest-vpl011.bin
+GUEST_VPL011_OBJ := $(GUEST_VPL011_DIR)/entry.o
+GUEST_VPL011_LDSCRIPT := $(SRCTREE)/src/user/guests/vpl011-arm64/linker.ld
 DOMAIN_MANAGER_GUEST_BLOB_OBJ := $(USER_OBJDIR)/domain-manager/guest_blob.o
 DOMAIN_GUEST_EARLYFS := $(USER_OBJDIR)/domain-manager/guest.img
 DOMAIN_MANAGER_GUEST_MANIFEST_OBJ := $(USER_OBJDIR)/domain-manager/guest_manifest.o
 INIT_GUEST_MANIFEST_OBJ := $(USER_OBJDIR)/init/guest_manifest.o
-DOMAIN_GUEST_ELF ?= $(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),)
+DOMAIN_GUEST_ELF ?= $(if $(filter 1,$(CONFIG_GUEST_VPL011_ARM64)),$(GUEST_VPL011_ELF),$(if $(filter 1,$(CONFIG_GUEST_TEST_ARM64)),$(GUEST_TEST_ELF),))
 # A guest package may supply its own manifest describing the devices/IRQs/RAM
 # it needs (see src/user/include/sys/guest_manifest.hh); this is otherwise a
 # plain compiled translation unit, not an incbin blob, so any guest package
@@ -142,6 +147,9 @@ DOMAIN_GUEST_MANIFEST ?= $(SRCTREE)/src/user/servers/domain/default_manifest.cc
 ifeq ($(ARCH),arm64)
 ifeq ($(CONFIG_GUEST_TEST_ARM64),1)
 userspace: $(GUEST_TEST_ELF) $(GUEST_TEST_BIN)
+endif
+ifeq ($(CONFIG_GUEST_VPL011_ARM64),1)
+userspace: $(GUEST_VPL011_ELF) $(GUEST_VPL011_BIN)
 endif
 ifeq ($(CONFIG_GUEST_EMBEDDED_IMAGE),1)
 ifneq ($(strip $(DOMAIN_GUEST_ELF)),)
@@ -194,6 +202,23 @@ $(GUEST_TEST_ELF): $(GUEST_TEST_OBJ) $(GUEST_TEST_LDSCRIPT)
 	@$(LD) -m aarch64elf -T $(GUEST_TEST_LDSCRIPT) --gc-sections --build-id=none \
 		-z max-page-size=0x1000 -Map=$(GUEST_TEST_DIR)/guest-test.map -o $@ $(GUEST_TEST_OBJ)
 endif
+
+$(GUEST_VPL011_OBJ): $(SRCTREE)/src/user/guests/vpl011-arm64/entry.S
+	@mkdir -p $(dir $@)
+	@printf '  GAS     %s\n' '$@'
+	@$(CC) $(TARGET_FLAGS) -march=armv8-a -ffreestanding -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+
+$(GUEST_VPL011_ELF): $(GUEST_VPL011_OBJ) $(GUEST_VPL011_LDSCRIPT)
+	@mkdir -p $(dir $@)
+	@printf '  GLD     %s\n' '$@'
+	@$(LD) -m aarch64elf -T $(GUEST_VPL011_LDSCRIPT) --gc-sections --build-id=none \
+		-z max-page-size=0x1000 -Map=$(GUEST_VPL011_DIR)/guest-vpl011.map -o $@ $(GUEST_VPL011_OBJ)
+
+$(GUEST_VPL011_BIN): $(GUEST_VPL011_ELF)
+	@printf '  GOBJCOPY %s\n' '$@'
+	@$(OBJCOPY) -O binary $< $@
+
+-include $(GUEST_VPL011_OBJ:.o=.d)
 
 $(GUEST_TEST_BIN): $(GUEST_TEST_ELF)
 	@printf '  GOBJCOPY %s\n' '$@'
