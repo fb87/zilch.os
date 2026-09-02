@@ -1,6 +1,7 @@
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
 #include <sys/thread.hh>
 #include <sys/types.hh>
 
@@ -26,12 +27,12 @@ namespace
      * supervision thread needs to see for restart-on-fault (USR-034) --
      * confirmed happening in practice, not theoretical.
      */
-    inline constexpr sys::word_t endpoint = 10U;
+    inline constexpr sys::word_t endpoint = sys::native::fault_endpoint;
 #else
-    inline constexpr sys::word_t service_endpoint = 11U;
+    inline constexpr sys::word_t service_endpoint = sys::native::service_endpoint;
 #endif
-    inline constexpr sys::word_t notification = 14U;
-    inline constexpr sys::word_t resource = 15U;
+    inline constexpr sys::word_t notification = sys::native::root_notification;
+    inline constexpr sys::word_t resource = sys::native::memory_resource;
     inline constexpr sys::word_t service_frame_base = 16U;
 #if CONFIG_SELFTEST
     inline constexpr sys::word_t pager_frame = 12U;

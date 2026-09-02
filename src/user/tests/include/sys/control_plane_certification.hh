@@ -3,6 +3,7 @@
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
@@ -15,7 +16,7 @@ namespace sys::control_plane_certification
         constexpr word_t selector_base = 40U;
         constexpr word_t selector_stride = 3U;
         constexpr word_t endpoint_base = 16U;
-        constexpr word_t service_endpoint = 11U;
+        constexpr word_t service_endpoint = native::service_endpoint;
         constexpr word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
                                       static_cast<word_t>(abi::v1::CapabilityRight::write);
         const word_t first_role = static_cast<word_t>(abi::v1::control_plane_role::process);

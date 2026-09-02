@@ -1,6 +1,7 @@
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
 #include <sys/thread.hh>
 #include <sys/types.hh>
 
@@ -8,24 +9,21 @@
 
 namespace
 {
-    inline constexpr sys::capability_id_t root_notification = 14U;
-    inline constexpr sys::capability_id_t service_endpoint = 11U;
-    inline constexpr sys::word_t failure_badge = 1U << 15U;
+    // Single source of truth in the native personality; see
+    // src/user/personalities/native/README.md.
+    inline constexpr sys::capability_id_t root_notification = sys::native::root_notification;
+    inline constexpr sys::capability_id_t service_endpoint = sys::native::service_endpoint;
 } // namespace
 
 extern "C" int main(sys::word_t role, sys::word_t) noexcept {
     const auto policy = sys::control_plane::policy_for(role);
     const sys::word_t ready = sys::abi::v1::control_plane_ready_badge(role);
     if (!sys::control_plane::valid(policy) || ready == 0U) {
-        (void)sys::control(sys::abi::v1::control_operation::notification_signal, root_notification,
-                           failure_badge);
+        sys::native::signal_failure();
         return 1;
     }
 
-    const sys::word_t status = sys::control(sys::abi::v1::control_operation::notification_signal,
-                                            root_notification, ready);
-    if (status != static_cast<sys::word_t>(sys::error_t::success))
-        return 2;
+    sys::native::signal_ready(ready);
 
     for (;;) {
         const auto request = sys::ipc_receive(service_endpoint);

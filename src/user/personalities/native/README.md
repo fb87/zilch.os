@@ -53,8 +53,23 @@ six copy-pasted constants did.
 
 ## Adoption
 
-`drivers/serial` and `drivers/virtio` use it. The remaining servers
-(`servers/console`, `servers/memory`, `servers/control_plane`,
-`servers/domain`) still carry their own copies and can migrate
-incrementally — the constants are identical, so a partial migration is
-consistent, not mixed.
+Every userspace server and driver uses it: `drivers/serial`,
+`drivers/virtio`, `servers/console`, `servers/memory`,
+`servers/control_plane`, `servers/domain`, and the control-plane
+certification harness. No raw copy of these constants remains outside this
+header.
+
+Servers keep their own local names where they had them (`notification`,
+`endpoint`, `resource`) and point those at the personality's constants,
+rather than renaming call sites. That keeps the diff to the declarations and
+leaves each server's own vocabulary intact.
+
+`init`/`root_graph.hh` deliberately does **not** use these: root wires the
+graph *from the outside*, minting into other tasks' cspaces, so its
+selectors are about where a capability is being placed, not what root itself
+holds. Those are genuinely root's own concern.
+
+The migration was verified by comparing built artifacts rather than by
+re-running the timing-sensitive certification suite: all seven user binaries
+are bit-identical before and after, which proves the change is
+behaviour-preserving in a way a load-dependent latency test cannot.

@@ -1,6 +1,7 @@
 #include <sys/control.hh>
 #include <sys/control_plane.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
 #include <sys/thread.hh>
 #include <sys/types.hh>
 
@@ -11,12 +12,14 @@
 
 namespace
 {
-    inline constexpr sys::capability_id_t root_notification = 14U;
-    inline constexpr sys::capability_id_t service_endpoint = 11U;
+    // Single source of truth in the native personality; see
+    // src/user/personalities/native/README.md.
+    inline constexpr sys::capability_id_t root_notification = sys::native::root_notification;
+    inline constexpr sys::capability_id_t service_endpoint = sys::native::service_endpoint;
     // Dedicated to read_byte, served by a second thread independent from
     // the write/health/describe/stop loop below -- see stdin_main().
     inline constexpr sys::capability_id_t stdin_endpoint = 12U;
-    inline constexpr sys::word_t failure_badge = 1U << 15U;
+    inline constexpr sys::word_t failure_badge = sys::native::failure_badge;
 
     /*
      * Must match root_graph.hh's console_serial_endpoint_selector /

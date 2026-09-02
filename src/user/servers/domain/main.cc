@@ -12,16 +12,20 @@
 
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/capability.hh>
+#include <sys/native.hh>
+
 #include <abi/sys/v1/memory.hh>
 
 namespace
 {
-    inline constexpr sys::capability_id_t root_notification = 14U;
-    inline constexpr sys::capability_id_t service_endpoint = 11U;
+    // Single source of truth in the native personality; see
+    // src/user/personalities/native/README.md.
+    inline constexpr sys::capability_id_t root_notification = sys::native::root_notification;
+    inline constexpr sys::capability_id_t service_endpoint = sys::native::service_endpoint;
     inline constexpr sys::capability_id_t vm_selector = 61U;
     inline constexpr sys::capability_id_t vcpu_selector = 62U;
     inline constexpr sys::capability_id_t self_task_selector = 0U;
-    inline constexpr sys::capability_id_t self_space_selector = 3U;
+    inline constexpr sys::capability_id_t self_space_selector = sys::native::own_space;
     /*
      * Slots for device frames/IRQs minted by root (see
      * root_graph.hh::start_embedded_guest(), which uses the same base
@@ -42,7 +46,7 @@ namespace
     inline constexpr sys::word_t scratch_address = 0x2003f000U;
     inline constexpr sys::word_t guest_page_size = 4096U;
     inline constexpr sys::word_t guest_page_limit = 32U;
-    inline constexpr sys::word_t failure_badge = 1U << 15U;
+    inline constexpr sys::word_t failure_badge = sys::native::failure_badge;
 
     struct guest_page final {
         sys::capability_id_t slot{};
