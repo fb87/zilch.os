@@ -9,7 +9,7 @@
 
 namespace sys::arch::space
 {
-    inline constexpr bool user_available = false;
+    inline constexpr bool user_available = true;
 #if CONFIG_ROOT_ONLY_BOOT
     inline constexpr vaddr_t user_code = 0x20000000ULL;
     inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
