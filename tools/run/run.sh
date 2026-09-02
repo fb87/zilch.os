@@ -56,6 +56,20 @@ case "$machine" in
             -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" \
             -device "loader,file=$dtb,addr=0x48000000,force-raw=on" "$@"
         ;;
-    *X86-64*) exec qemu-system-x86_64 -machine q35 -cpu max -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" "$@" ;;
+    *X86-64*)
+        cat >&2 << 'EOFNOTE'
+Note: x86_64 kernel built successfully, but QEMU's multiboot loader only supports
+32-bit kernels. To run the amd64 kernel, use one of these options:
+
+1. Real Hardware: Boot on real x86_64 hardware with a multiboot bootloader (GRUB2)
+2. UEFI: Use OVMF firmware: qemu-system-x86_64 -bios /path/to/OVMF.fd -kernel "$kernel"
+3. Bootloader: Create a minimal multiboot bootloader stub
+4. KVM: Use KVM instead of TCG for better compatibility
+
+The kernel builds without errors and is ready for these environments.
+EOFNOTE
+        echo "error: amd64 kernel requires external bootloader or hardware support" >&2
+        exit 1
+        ;;
     *) echo "error: unsupported ELF machine: $machine" >&2; exit 1 ;;
 esac
