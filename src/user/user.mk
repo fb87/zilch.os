@@ -4,7 +4,9 @@ DOMAIN_GUEST_INTERACTIVE ?= $(CONFIG_GUEST_INTERACTIVE)
 USER_LDSCRIPT := $(SRCTREE)/src/user/runtime/linker/user-$(ARCH).ld
 USER_TEST_INCLUDES := $(if $(filter 1,$(CONFIG_SELFTEST)),-I$(SRCTREE)/tests/abi/include -I$(SRCTREE)/src/user/tests/include,)
 USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(USER_TEST_INCLUDES) \
-    -I$(OBJTREE)/include/generated -I$(SRCTREE)/src/user/include -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
+    -I$(OBJTREE)/include/generated -I$(SRCTREE)/src/user/include \
+    -I$(SRCTREE)/src/user/personalities/native/include \
+    -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
     -include $(KCONFIG_AUTOCONF_H) \
     -DCONFIG_SELFTEST=$(CONFIG_SELFTEST) \
     -DCONFIG_HYPERVISOR_SELFTEST=$(CONFIG_HYPERVISOR_SELFTEST) \

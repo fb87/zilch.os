@@ -1,5 +1,6 @@
 #include <sys/control.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
@@ -10,9 +11,11 @@
 
 namespace
 {
-    inline constexpr sys::capability_id_t root_notification = 14U;
-    inline constexpr sys::capability_id_t service_endpoint = 11U;
-    inline constexpr sys::word_t failure_badge = 1U << 15U;
+    namespace native = sys::native;
+
+    // Well-known slots and the ready/failure protocol come from the native
+    // personality rather than being restated here.
+    inline constexpr sys::capability_id_t service_endpoint = native::service_endpoint;
 
     /*
      * root creates the one live UART device frame and IRQ capability
@@ -24,7 +27,7 @@ namespace
     inline constexpr sys::capability_id_t uart_frame_selector = 20U;
     inline constexpr sys::capability_id_t irq_selector = 21U;
     inline constexpr sys::capability_id_t irq_notification_selector = 22U;
-    inline constexpr sys::capability_id_t self_space_selector = 3U;
+    inline constexpr sys::capability_id_t self_space_selector = native::own_space;
     inline constexpr sys::word_t uart_scratch_address = 0x2003f000U;
 
     // Same PL011 register layout console-server used to poke directly
@@ -123,56 +126,41 @@ namespace
         (void)sys::control(sys::abi::v1::control_operation::interrupt_ack, irq_selector);
     }
 
-    inline constexpr sys::word_t map_uart_attempts = 100000U;
-
     [[nodiscard]] inline bool map_uart() noexcept {
         const sys::word_t read_write = static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
                                        static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
         const sys::word_t attrs = sys::abi::v1::encode_mapping_attributes(
             sys::abi::v1::memory_type::device, sys::abi::v1::memory_shareability::non_shareable);
-        for (sys::word_t attempt = 0U; attempt < map_uart_attempts; ++attempt) {
-            if (sys::control(sys::abi::v1::control_operation::map_frame, self_space_selector,
-                             uart_frame_selector, uart_scratch_address, read_write, attrs) ==
-                static_cast<sys::word_t>(sys::error_t::success))
-                return true;
-        }
-        return false;
+        return native::retry([&] {
+            return native::ok(sys::control(sys::abi::v1::control_operation::map_frame,
+                                           self_space_selector, uart_frame_selector,
+                                           uart_scratch_address, read_write, attrs));
+        });
     }
 
     // Same ordering hazard console-server's map_uart() already documented:
     // root can only mint the IRQ capability into this process's cspace
     // after process_create returns, so this process can genuinely start
     // and reach here first. Bounded retry, not a one-shot attempt.
-    inline constexpr sys::word_t bind_irq_attempts = 100000U;
-
     [[nodiscard]] inline bool bind_irq() noexcept {
-        if (sys::control(sys::abi::v1::control_operation::notification_create,
-                         irq_notification_selector) !=
-            static_cast<sys::word_t>(sys::error_t::success))
+        if (!native::ok(sys::control(sys::abi::v1::control_operation::notification_create,
+                                     irq_notification_selector)))
             return false;
-        for (sys::word_t attempt = 0U; attempt < bind_irq_attempts; ++attempt) {
-            if (sys::control(sys::abi::v1::control_operation::interrupt_bind, irq_selector,
-                             irq_notification_selector) ==
-                static_cast<sys::word_t>(sys::error_t::success))
-                return true;
-        }
-        return false;
+        return native::retry([&] {
+            return native::ok(sys::control(sys::abi::v1::control_operation::interrupt_bind,
+                                           irq_selector, irq_notification_selector));
+        });
     }
 } // namespace
 
 extern "C" int main(sys::word_t, sys::word_t) noexcept {
     if (!map_uart() || !bind_irq()) {
-        (void)sys::control(sys::abi::v1::control_operation::notification_signal, root_notification,
-                           failure_badge);
+        native::signal_failure();
         return 1;
     }
     configure_uart();
 
-    const sys::word_t status = sys::control(sys::abi::v1::control_operation::notification_signal,
-                                            root_notification,
-                                            sys::abi::v1::serial_service_ready_badge);
-    if (status != static_cast<sys::word_t>(sys::error_t::success))
-        return 2;
+    native::signal_ready(sys::abi::v1::serial_service_ready_badge);
 
     for (;;) {
         sys::word_t signaled = 0U;

@@ -1,6 +1,7 @@
 #include <sys/control.hh>
 #include <sys/ipc.hh>
 #include <sys/memory.hh>
+#include <sys/native.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
@@ -15,9 +16,11 @@ namespace
     namespace mmio = sys::abi::v1::virtio_mmio;
     namespace abi = sys::abi::v1;
 
-    inline constexpr sys::capability_id_t root_notification = 14U;
-    inline constexpr sys::capability_id_t service_endpoint = 11U;
-    inline constexpr sys::word_t failure_badge = 1U << 15U;
+    namespace native = sys::native;
+
+    // Well-known slots and the ready/failure protocol now come from the
+    // native personality rather than being restated here.
+    inline constexpr sys::capability_id_t service_endpoint = native::service_endpoint;
 
     /*
      * root creates the one live virtio-mmio device frame (root-gated, and
@@ -49,7 +52,7 @@ namespace
      * to polling, saying so, instead of waiting on a line that never fires.
      */
     inline constexpr sys::u32 expected_irq = 79U;
-    inline constexpr sys::capability_id_t self_space_selector = 3U;
+    inline constexpr sys::capability_id_t self_space_selector = native::own_space;
     inline constexpr sys::word_t mmio_scratch_address = 0x2003e000U;
     inline constexpr sys::word_t dma_scratch_address = 0x2003d000U;
 
@@ -153,28 +156,12 @@ namespace
 
     /* ---- diagnostics over serial-driver, so bring-up is actually visible ---- */
 
-    inline void emit(char value) noexcept {
-        (void)sys::ipc_call(serial_endpoint_selector,
-                            static_cast<sys::word_t>(abi::serial_operation::write_byte),
-                            static_cast<sys::word_t>(static_cast<sys::u8>(value)));
-    }
-
-    inline void emit_text(const char* text) noexcept {
-        for (const char* cursor = text; *cursor != '\0'; ++cursor)
-            emit(*cursor);
+    inline void emit_text(const char* value) noexcept {
+        native::text::write(serial_endpoint_selector, value);
     }
 
     inline void emit_hex(sys::u64 value) noexcept {
-        emit('0');
-        emit('x');
-        bool leading = true;
-        for (int shift = 60; shift >= 0; shift -= 4) {
-            const sys::u64 digit = (value >> static_cast<sys::u64>(shift)) & 0xfULL;
-            if (digit == 0U && leading && shift != 0)
-                continue;
-            leading = false;
-            emit(static_cast<char>(digit < 10U ? '0' + digit : 'a' + (digit - 10U)));
-        }
+        native::text::hex(serial_endpoint_selector, value);
     }
 
     /* ---- capability setup ---- */
@@ -182,20 +169,16 @@ namespace
     // Same ordering hazard the serial driver's map_uart() documents: root
     // can only mint into this cspace after process_create returns, so this
     // process can genuinely start and reach here first. Bounded retry.
-    inline constexpr sys::word_t map_attempts = 100000U;
-
     [[nodiscard]] inline bool map_mmio() noexcept {
         const sys::word_t read_write = static_cast<sys::word_t>(abi::CapabilityRight::read) |
                                        static_cast<sys::word_t>(abi::CapabilityRight::write);
         const sys::word_t attrs = abi::encode_mapping_attributes(
             abi::memory_type::device, abi::memory_shareability::non_shareable);
-        for (sys::word_t attempt = 0U; attempt < map_attempts; ++attempt) {
-            if (sys::control(abi::control_operation::map_frame, self_space_selector,
-                             mmio_frame_selector, mmio_scratch_address, read_write, attrs) ==
-                static_cast<sys::word_t>(sys::error_t::success))
-                return true;
-        }
-        return false;
+        return native::retry([&] {
+            return native::ok(sys::control(abi::control_operation::map_frame, self_space_selector,
+                                           mmio_frame_selector, mmio_scratch_address, read_write,
+                                           attrs));
+        });
     }
 
     /*
@@ -203,19 +186,14 @@ namespace
      * capability only after process_create returns, so this process can
      * reach here first. Bounded retry, matching serial-driver's bind_irq().
      */
-    inline constexpr sys::word_t bind_irq_attempts = 100000U;
-
     [[nodiscard]] inline bool bind_irq() noexcept {
-        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
-        if (sys::control(abi::control_operation::notification_create,
-                         irq_notification_selector) != success)
+        if (!native::ok(sys::control(abi::control_operation::notification_create,
+                                     irq_notification_selector)))
             return false;
-        for (sys::word_t attempt = 0U; attempt < bind_irq_attempts; ++attempt) {
-            if (sys::control(abi::control_operation::interrupt_bind, irq_selector,
-                             irq_notification_selector) == success)
-                return true;
-        }
-        return false;
+        return native::retry([&] {
+            return native::ok(sys::control(abi::control_operation::interrupt_bind, irq_selector,
+                                           irq_notification_selector));
+        });
     }
 
     /*
@@ -483,8 +461,7 @@ namespace
 
 extern "C" int main(sys::word_t, sys::word_t) noexcept {
     if (!map_mmio()) {
-        (void)sys::control(abi::control_operation::notification_signal, root_notification,
-                           failure_badge);
+        native::signal_failure();
         return 1;
     }
     probe_transports();
@@ -572,11 +549,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         emit_text("virtio: no block device present\r\n");
     }
 
-    const sys::word_t status =
-        sys::control(abi::control_operation::notification_signal, root_notification,
-                     abi::block_service_ready_badge);
-    if (status != static_cast<sys::word_t>(sys::error_t::success))
-        return 2;
+    native::signal_ready(abi::block_service_ready_badge);
 
     for (;;) {
         // Bounded timeout rather than an indefinite blocking receive, same
