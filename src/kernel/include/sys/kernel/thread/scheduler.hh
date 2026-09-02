@@ -1079,14 +1079,25 @@ namespace sys::kernel::thread
 
     inline void launch_user_scheduler() noexcept {
         __atomic_store_n(&user_scheduler_ready, true, __ATOMIC_RELEASE);
+#if defined(__aarch64__)
         __asm__ volatile("sev" ::: "memory");
+#endif
     }
 
+#if defined(__aarch64__)
     inline void wait_until_ready() noexcept {
         while (!__atomic_load_n(&user_scheduler_ready, __ATOMIC_ACQUIRE)) {
             __asm__ volatile("wfe" ::: "memory");
         }
     }
+#else
+    inline void wait_until_ready() noexcept {
+        /* amd64: poll without event notification (no sev/wfe equivalent) */
+        while (!__atomic_load_n(&user_scheduler_ready, __ATOMIC_ACQUIRE)) {
+            arch::cpu::relax();
+        }
+    }
+#endif
 
     [[nodiscard]] inline u32 current_index() noexcept {
         return current_user_thread[arch::cpu::current_id()];

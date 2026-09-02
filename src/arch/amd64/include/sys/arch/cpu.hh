@@ -4,10 +4,21 @@
 
 namespace sys::arch::cpu
 {
+    inline void cpuid(u32 leaf, u32 subleaf, u32& eax, u32& ebx, u32& ecx, u32& edx) noexcept {
+        __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                                  : "a"(leaf), "c"(subleaf));
+    }
+
+    [[nodiscard]] inline u32 read_apic_id() noexcept {
+        u32 eax, ebx, ecx, edx;
+        cpuid(1U, 0U, eax, ebx, ecx, edx);
+        return (ebx >> 24U) & 0xffU;
+    }
+
     inline void initialize_boot_cpu() noexcept {}
 
     [[nodiscard]] inline cpu_id_t current_id() noexcept {
-        return 0U;
+        return static_cast<cpu_id_t>(read_apic_id());
     }
 
     inline void relax() noexcept {

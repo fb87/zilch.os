@@ -17,4 +17,13 @@ namespace sys::platform
     };
 
     static_assert(v1::compatible(version));
+
+    [[nodiscard]] inline bool certification_valid() noexcept {
+        return interrupt::userspace_assignable(interrupt::com1_irq + 32U) &&
+               !interrupt::userspace_assignable(interrupt::virtual_timer_irq) &&
+               memory::ram_base != 0U && (memory::ram_base & 0xfffU) == 0U &&
+               (interrupt::lapic_base & 0xfffffU) == 0U &&
+               (interrupt::ioapic_base & 0xfffffU) == 0U &&
+               timer::certification_valid();
+    }
 } // namespace sys::platform
