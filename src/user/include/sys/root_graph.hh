@@ -66,6 +66,28 @@ namespace sys::root_graph
     static_assert(serial_service_endpoint < 64U);
 
     /*
+     * virtio block driver, wired exactly like serial-driver above: not a
+     * control_plane_role, so a direct process_create in supervise() plus its
+     * own selectors and service endpoint. Placed past the leaf-0 band the
+     * asserts above guard (cspace_leaf_slot_count is 64, and root's cspace
+     * has 4 leaves -- supervisor_space_selector=151 already lives outside
+     * leaf 0), because leaf 0 is nearly full and crowding it buys nothing.
+     */
+    inline constexpr word_t block_role = 0x109U;
+    inline constexpr word_t block_selector = 100U;
+    inline constexpr capability_id_t block_service_endpoint = 103U;
+    inline constexpr capability_id_t block_mmio_root_frame_selector = 93U;
+    inline constexpr capability_id_t block_mmio_child_frame_selector = 20U;
+    inline constexpr capability_id_t block_serial_endpoint_selector = 23U;
+    /*
+     * The LAST page of the virtio-mmio window (transports 24..31), not the
+     * first: QEMU populates these transports downward from the top, so a
+     * single attached device lands on transport 31 at 0x0a003e00. See
+     * platform/qemu_arm64_virt/memory.hh's virtio_mmio_grant_base.
+     */
+    inline constexpr word_t block_mmio_physical_address = 0x0a003000U;
+
+    /*
      * Per-role restart bookkeeping (USR-034): thread_id lets drain_fault_
      * reports() correlate a fault's sender badge back to "which role
      * crashed"; restart_count feeds control_plane::may_restart()'s bound.
@@ -248,6 +270,43 @@ namespace sys::root_graph
     inline constexpr capability_id_t console_stdin_thread_selector = 30U;
     inline constexpr capability_id_t console_stdin_space_selector = 31U;
 
+    /*
+     * Block driver resources. Only the MMIO device frame is created here --
+     * deliberately no interrupt_create yet: which virtio-mmio transport slot
+     * QEMU plugs a device into is not answerable from the device tree (every
+     * slot is present and reads valid magic regardless), so the IRQ to
+     * request (INTID 48 + slot) isn't known until the driver has probed.
+     * dynamic_interrupt_count is 16, so speculatively burning 8 of them on a
+     * guess would cost half the pool. The driver reports the slot it found;
+     * the IRQ capability follows once that answer is in.
+     *
+     * One-shot like create_serial_resources(), for the same reason:
+     * device_frame_create()'s exclusivity check rejects a second live frame
+     * for the same physical page.
+     */
+    [[nodiscard]] inline bool create_block_resources() noexcept {
+        return control(abi::v1::control_operation::device_frame_create,
+                       block_mmio_root_frame_selector, block_mmio_physical_address) ==
+               static_cast<word_t>(error_t::success);
+    }
+
+    [[nodiscard]] inline bool mint_block_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const capability_id_t block_task = block_selector + 1U;
+        if (control(abi::v1::control_operation::capability_mint, block_task,
+                    block_mmio_child_frame_selector, block_mmio_root_frame_selector,
+                    read_write) != success)
+            return false;
+        // Diagnostics path: the driver reports its probe results as text
+        // through serial-driver, the same endpoint console-server forwards
+        // to, so a bring-up scan is actually observable on the console.
+        return control(abi::v1::control_operation::capability_mint, block_task,
+                       block_serial_endpoint_selector, serial_service_endpoint,
+                       read_write) == success;
+    }
+
     [[nodiscard]] inline bool mint_console_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
         const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
@@ -416,6 +475,7 @@ namespace sys::root_graph
         const role_image_entry bindings[] = {
             {memory_role, "bin/memory-server"},
             {serial_role, "bin/serial-driver"},
+            {block_role, "bin/virtio-driver"},
             {static_cast<word_t>(abi::v1::control_plane_role::process), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::device), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::console), "bin/console-server"},
@@ -749,6 +809,29 @@ namespace sys::root_graph
                 static_cast<word_t>(error_t::success))
                 return 1;
         }
+        /*
+         * Block driver, launched after serial-driver because its bring-up
+         * diagnostics go out through serial-driver's service endpoint (see
+         * mint_block_resources()) -- the endpoint object must exist and be
+         * minted before this process can call into it.
+         */
+        if (control(abi::v1::control_operation::process_create, 3U, block_role, block_selector,
+                    block_selector + 1U,
+                    block_selector + 2U) != static_cast<word_t>(error_t::success))
+            return 1;
+        {
+            const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                      static_cast<word_t>(abi::v1::CapabilityRight::write);
+            if (control(abi::v1::control_operation::endpoint_create, block_service_endpoint) !=
+                static_cast<word_t>(error_t::success))
+                return 1;
+            if (control(abi::v1::control_operation::capability_mint, block_selector + 1U,
+                        service_endpoint, block_service_endpoint,
+                        read_write) != static_cast<word_t>(error_t::success))
+                return 1;
+            if (!create_block_resources() || !mint_block_resources())
+                return 1;
+        }
         for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
             if (!launch(index, state))
                 return 1;
@@ -771,7 +854,8 @@ namespace sys::root_graph
 
         const word_t expected = ((1U << abi::v1::control_plane_role_count) - 1U) |
                                 abi::v1::memory_service_ready_badge |
-                                abi::v1::serial_service_ready_badge;
+                                abi::v1::serial_service_ready_badge |
+                                abi::v1::block_service_ready_badge;
         word_t ready = 0U;
         bool console_verified = false;
         bool supervisor_spawned = false;

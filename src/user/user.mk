@@ -18,6 +18,9 @@ USER_COMMON_SOURCES := \
     src/user/runtime/startup/process_entry.cc
 USER_PROGRAMS := init memory-server control-plane console-server serial-driver
 ifeq ($(ARCH),arm64)
+USER_PROGRAMS += virtio-driver
+endif
+ifeq ($(ARCH),arm64)
 USER_PROGRAMS += domain-manager
 endif
 ifeq ($(CONFIG_TESTS),1)
@@ -31,6 +34,7 @@ USER_control-plane_SOURCE := src/user/servers/control_plane/main.cc
 USER_domain-manager_SOURCE := src/user/servers/domain/main.cc
 USER_console-server_SOURCE := src/user/servers/console/main.cc
 USER_serial-driver_SOURCE := src/user/drivers/serial/main.cc
+USER_virtio-driver_SOURCE := src/user/drivers/virtio/main.cc
 USER_ELF := $(USER_OBJDIR)/init.elf
 USER_BIN := $(USER_OBJDIR)/init.bin
 MEMORY_SERVER_BIN := $(USER_OBJDIR)/memory-server.bin
@@ -40,6 +44,7 @@ CONTROL_PLANE_BIN := $(USER_OBJDIR)/control-plane.bin
 DOMAIN_MANAGER_BIN := $(USER_OBJDIR)/domain-manager.bin
 CONSOLE_SERVER_BIN := $(USER_OBJDIR)/console-server.bin
 SERIAL_DRIVER_BIN := $(USER_OBJDIR)/serial-driver.bin
+VIRTIO_DRIVER_BIN := $(USER_OBJDIR)/virtio-driver.bin
 USER_PROGRAM_ELFS := $(addprefix $(USER_OBJDIR)/,$(addsuffix .elf,$(USER_PROGRAMS)))
 USER_PROGRAM_BINS := $(USER_PROGRAM_ELFS:.elf=.bin)
 USER_COMMON_OBJECTS := $(addprefix $(USER_OBJDIR)/common/,$(USER_COMMON_SOURCES:.cc=.o))
@@ -101,6 +106,10 @@ $(USER_OBJDIR)/serial-driver/%.o: $(SRCTREE)/%.cc
 	@mkdir -p $(dir $@)
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/virtio-driver/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(USER_OBJDIR)/common/src/user/runtime/crt/$(ARCH)/%.o: $(SRCTREE)/src/user/runtime/crt/$(ARCH)/%.S
 	@mkdir -p $(dir $@)
@@ -136,11 +145,19 @@ ifneq ($(strip $(DOMAIN_GUEST_ELF)),)
 USER_domain-manager_EXTRA_OBJECTS += $(DOMAIN_MANAGER_GUEST_BLOB_OBJ)
 $(USER_OBJDIR)/domain-manager.elf: $(DOMAIN_MANAGER_GUEST_BLOB_OBJ)
 endif
+endif
+# The manifest is a plain compiled translation unit describing the devices/
+# IRQs/RAM a guest needs -- independent of whether a guest *image* is
+# embedded (that's DOMAIN_MANAGER_GUEST_BLOB_OBJ above, already separately
+# conditioned on DOMAIN_GUEST_ELF). domain/main.cc and root_graph.hh
+# reference sys_arm64_domain_guest_manifest unconditionally, so nesting this
+# under CONFIG_GUEST_EMBEDDED_IMAGE left every guest-image-less arm64 build
+# -- including the whole release profile, the only one that reaches
+# root_graph.hh's supervise() -- failing to link on an undefined symbol.
 USER_domain-manager_EXTRA_OBJECTS += $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ)
 USER_init_EXTRA_OBJECTS += $(INIT_GUEST_MANIFEST_OBJ)
 $(USER_OBJDIR)/domain-manager.elf: $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ)
 $(USER_OBJDIR)/init.elf: $(INIT_GUEST_MANIFEST_OBJ)
-endif
 endif
 
 ifeq ($(ARCH),arm64)
@@ -155,11 +172,11 @@ $(DOMAIN_MANAGER_GUEST_BLOB_OBJ): $(SRCTREE)/src/user/servers/domain/guest_blob.
 	@printf '  GAS     %s\n' '$@'
 	@$(CC) $(TARGET_FLAGS) -march=armv8-a -ffreestanding -DGUEST_EARLYFS_PATH=\"$(DOMAIN_GUEST_EARLYFS)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 endif
+endif
 $(DOMAIN_MANAGER_GUEST_MANIFEST_OBJ) $(INIT_GUEST_MANIFEST_OBJ): $(DOMAIN_GUEST_MANIFEST)
 	@mkdir -p $(dir $@)
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
-endif
 endif
 
 ifeq ($(ARCH),arm64)

@@ -49,11 +49,34 @@ run_arm64_qemu() {
 case "$machine" in
     AArch64)
         dtb=$(mktemp)
-        trap 'rm -f "$dtb"' EXIT HUP INT TERM
+        # Backing store for the virtio block device the userspace virtio
+        # driver probes for. QEMU populates a virtio-mmio transport only when
+        # a device is actually attached, so without this the driver's scan
+        # correctly reports an empty window. BLOCK_IMAGE overrides it;
+        # BLOCK_IMAGE=- omits the device entirely.
+        disk=""
+        blockdev=""
+        if [ "${BLOCK_IMAGE:-}" != "-" ]; then
+            disk=${BLOCK_IMAGE:-$(mktemp)}
+            [ -s "$disk" ] || dd if=/dev/zero of="$disk" bs=1M count=16 status=none
+            blockdev="1"
+        fi
+        trap 'rm -f "$dtb"; [ -n "${BLOCK_IMAGE:-}" ] || rm -f "$disk"' EXIT HUP INT TERM
         qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on,dumpdtb=$dtb" \
             -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -display none
+        # force-legacy=false selects the modern (VIRTIO 1.x, MMIO version 2)
+        # transport. QEMU's virt board otherwise presents these as legacy
+        # version 1, confirmed by the driver's own probe reading version=0x1
+        # without this -- and legacy uses an entirely different queue setup
+        # (QueuePFN/GuestPageSize) than the split desc/driver/device address
+        # registers the modern layout uses.
+        if [ -n "$blockdev" ]; then
+            set -- -drive "if=none,file=$disk,format=raw,id=blk0" \
+                -device virtio-blk-device,drive=blk0 "$@"
+        fi
         run_arm64_qemu -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 \
             -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" \
+            -global virtio-mmio.force-legacy=false \
             -device "loader,file=$dtb,addr=0x48000000,force-raw=on" "$@"
         ;;
     *X86-64*)

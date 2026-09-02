@@ -21,6 +21,7 @@ $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$
 		$(if $(filter arm64,$(ARCH)),--entry bin/domain-manager=$(USER_OBJDIR)/domain-manager.elf) \
 		--entry bin/console-server=$(USER_OBJDIR)/console-server.elf \
 		--entry bin/serial-driver=$(USER_OBJDIR)/serial-driver.elf \
+		$(if $(filter arm64,$(ARCH)),--entry bin/virtio-driver=$(USER_OBJDIR)/virtio-driver.elf) \
 		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
 		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \
 		$(if $(and $(filter arm64,$(ARCH)),$(filter 1,$(CONFIG_GUEST_TEST_ARM64))),--entry guests/test-arm64=$(GUEST_TEST_ELF)) \
