@@ -599,10 +599,12 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
             } else if (request.message1 >= device_capacity) {
                 result0 = static_cast<sys::word_t>(sys::error_t::invalid_argument);
             } else {
-                *payload<sys::u64>(data_offset) = request.message2;
-                *payload<sys::u64>(data_offset + 8U) = request.message3;
-                for (sys::uintptr_t offset = 16U; offset < abi::block_sector_size; offset += 8U)
-                    *payload<sys::u64>(data_offset + offset) = 0U;
+                /*
+                 * The payload frame carries the data. This deliberately does
+                 * NOT seed the buffer from the message words: a client that
+                 * holds the frame has already filled it, and overwriting it
+                 * here would clobber exactly the bytes it wants written.
+                 */
                 result0 = status_for(submit(abi::block_request_out, request.message1));
             }
         }

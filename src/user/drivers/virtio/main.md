@@ -155,14 +155,31 @@ bytes verified (`bytes=0x200` for a full sector). Deriving each value from
 its offset means a short or misaligned transfer cannot coincidentally match,
 which a single-word check would not have caught.
 
+## Verification from a client
+
+The boot self-check above runs entirely inside the driver, so it proves the
+virtqueue but says nothing about whether the IPC service or the shared-frame
+wiring work for anyone else. Root therefore also exercises the service as a
+genuine client (`root_graph.hh`'s `verify_block_service()`): it fills the
+payload frame, calls `write`, **clears the frame**, calls `read`, and
+verifies all 512 bytes. Clearing in between is what makes it a round trip
+rather than a check that the buffer still holds what was just put there.
+
+Root is a real client rather than a synthetic one — it created the payload
+frame and the service endpoint, so it already holds both and no capability
+is minted specially for the check. It does hold the frame with full rights
+(having created it), so this exercises the cross-task path but not
+specifically the reduced read/write-only rights a delegated client would get.
+
+A machine with no disk reports `block-service absent` and boots normally;
+only a device that is present but does not work fails the boot. Verified
+both ways (`BLOCK_IMAGE=-` for the absent case).
+
 ## Remaining
 
 The `read` reply still echoes the leading 24 bytes inline, for a client that
-has the endpoint but not the payload frame. A client holding the frame reads
-all 512 bytes directly.
+has the endpoint but not the payload frame.
 
-Nothing yet mints the payload frame to a client, because nothing other than
-the boot self-check calls this service — that wiring belongs with the first
-real consumer rather than being built speculatively. Transfers are also still
-one sector per request; multi-sector would chain more descriptors, which the
-queue of 8 has room for.
+Transfers are one sector per request; multi-sector would chain more
+descriptors, which the queue of 8 has room for. A second concurrent client
+would need its own payload frame, since there is currently exactly one.

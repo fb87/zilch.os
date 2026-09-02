@@ -74,17 +74,17 @@ namespace sys::abi::v1
         // transport's device_id, message2 = its version.
         probe = 1U,
         /*
-         * Read one sector. message1 = sector index. On success the sector
-         * lands in the driver's bounce buffer; the first 4 words are echoed
-         * back in message1..message3 (24 bytes) so a caller can verify a
-         * round trip without a shared mapping. A capability-granted shared
-         * data frame is the next step for bulk transfer.
+         * Read one sector into the shared payload frame. message1 = sector
+         * index. A client holding that frame reads all 512 bytes directly;
+         * the leading 24 bytes are also echoed back in message1..message3
+         * for a client that has the endpoint but not the frame.
          */
         read = 2U,
         /*
-         * Write one sector. message1 = sector index, message2/message3 =
-         * the first 16 bytes of payload, zero-filled to the sector size.
-         * Deliberately narrow for the same reason as read.
+         * Write one sector from the shared payload frame. message1 = sector
+         * index; the caller must have already filled the frame. Nothing is
+         * taken from the message words -- doing so would clobber the bytes
+         * the caller wants written.
          */
         write = 3U,
     };

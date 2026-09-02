@@ -12,6 +12,7 @@
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/fault.hh>
 #include <abi/sys/v1/memory.hh>
+#include <abi/sys/v1/virtio.hh>
 
 namespace sys::root_graph
 {
@@ -364,6 +365,90 @@ namespace sys::root_graph
         return control(abi::v1::control_operation::capability_mint, block_task,
                        block_serial_endpoint_selector, serial_service_endpoint,
                        read_write) == success;
+    }
+
+    /*
+     * Proves the block service works from a DIFFERENT task than the driver.
+     * The driver's own boot self-check exercises its virtqueue, but entirely
+     * inside the driver -- it says nothing about whether the IPC service or
+     * the shared-frame capability wiring actually work for a client.
+     *
+     * Root is a genuine client here, not a synthetic one: it created the
+     * payload frame, so it already holds it (no new capability is minted for
+     * this), and it holds the driver's service endpoint because it created
+     * that too. Same shape as the console-server check below, which likewise
+     * proves a service end to end from root rather than trusting a badge.
+     *
+     * Sector 0 deliberately, not the last sector: the driver's self-check
+     * uses the last one, so a distinct sector proves this transfer rather
+     * than re-reading bytes the driver already left in the buffer.
+     */
+    inline constexpr word_t block_scratch_address = 0x2003d000U;
+    inline constexpr word_t block_probe_sector = 0U;
+    inline constexpr u64 block_probe_seed = 0x726f6f74626c6b00ULL; // "rootblk\0"
+
+    [[nodiscard]] inline bool map_block_buffer() noexcept {
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        // A normal RAM frame must be normal + inner-shareable
+        // (memory::valid_attributes()), unlike the device frames above.
+        const word_t attrs = abi::v1::encode_mapping_attributes(
+            abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
+        return control(abi::v1::control_operation::map_frame, self_space_selector,
+                       block_shared_root_frame_selector, block_scratch_address, read_write,
+                       attrs) == static_cast<word_t>(error_t::success);
+    }
+
+    [[nodiscard]] inline volatile u64* block_buffer(word_t offset) noexcept {
+        return reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(block_scratch_address) +
+                                               offset);
+    }
+
+    /*
+     * Absent is NOT a failure. A machine booted with no disk attached
+     * (tools/run/run.sh's BLOCK_IMAGE=-) has a driver that came up fine and
+     * correctly found nothing, and refusing to boot over that would make an
+     * optional device mandatory. Only a device that is present but does not
+     * work is a failure.
+     */
+    enum class block_check { absent, verified, failed };
+
+    [[nodiscard]] inline block_check verify_block_service() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const auto capacity = ipc_call(block_service_endpoint,
+                                       static_cast<word_t>(abi::v1::block_operation::info), 0U);
+        if (capacity.status != success)
+            return block_check::failed;
+        // The driver reports not_found when it discovered no block device.
+        if (capacity.message0 == static_cast<word_t>(error_t::not_found))
+            return block_check::absent;
+        if (capacity.message0 != success || capacity.message1 == 0U ||
+            capacity.message2 != abi::v1::block_sector_size)
+            return block_check::failed;
+
+        // Fill, write, clear, read back. Clearing in between is what makes
+        // this a real round trip rather than a check that the buffer still
+        // holds what was just put there.
+        for (word_t offset = 0U; offset < abi::v1::block_sector_size; offset += 8U)
+            *block_buffer(offset) = block_probe_seed ^ offset;
+        const auto wrote = ipc_call(block_service_endpoint,
+                                    static_cast<word_t>(abi::v1::block_operation::write),
+                                    block_probe_sector);
+        if (wrote.status != success || wrote.message0 != success)
+            return block_check::failed;
+
+        for (word_t offset = 0U; offset < abi::v1::block_sector_size; offset += 8U)
+            *block_buffer(offset) = 0U;
+        const auto read = ipc_call(block_service_endpoint,
+                                   static_cast<word_t>(abi::v1::block_operation::read),
+                                   block_probe_sector);
+        if (read.status != success || read.message0 != success)
+            return block_check::failed;
+
+        for (word_t offset = 0U; offset < abi::v1::block_sector_size; offset += 8U)
+            if (*block_buffer(offset) != (block_probe_seed ^ offset))
+                return block_check::failed;
+        return block_check::verified;
     }
 
     [[nodiscard]] inline bool mint_console_resources() noexcept {
@@ -949,6 +1034,22 @@ namespace sys::root_graph
                     if (console::write(endpoint_base + console_index, "console-server alive\n") !=
                         static_cast<word_t>(error_t::success))
                         return 6;
+                    /*
+                     * Same idea one layer down: prove the block service from
+                     * a task other than the driver, exercising the IPC path
+                     * and the shared payload frame rather than trusting the
+                     * driver's internal self-check. Reported through the
+                     * console that was just proven working.
+                     */
+                    const block_check block_state =
+                        map_block_buffer() ? verify_block_service() : block_check::failed;
+                    (void)console::write(
+                        endpoint_base + console_index,
+                        block_state == block_check::verified ? "block-service verified\n"
+                        : block_state == block_check::absent ? "block-service absent\n"
+                                                             : "block-service FAILED\n");
+                    if (block_state == block_check::failed)
+                        return 8;
                     console_verified = true;
                 }
                 if (!supervisor_spawned) {
