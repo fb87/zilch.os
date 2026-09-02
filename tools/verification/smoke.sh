@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Boot smoke test for the profiles the certification suite cannot cover.
+#
+# CONFIG_SELFTEST=y replaces init's main() with the certification suite, so
+# the suite structurally cannot exercise root_graph.hh's supervise() -- the
+# service graph that actually ships. That gap is not theoretical: the release
+# profile booted for some time with its supervision thread failing to spawn
+# (and therefore no restart-on-fault) while the console log looked healthy,
+# because the failure happens after every service has reported ready and
+# nothing asserted on the end state.
+#
+# This asserts on that end state. It is deliberately output-based rather than
+# exit-code-based: these profiles run forever by design, so "booted correctly"
+# means "printed these markers and none of the failure markers".
+set -uo pipefail
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo_root"
+
+arch=${ARCH:-arm64}
+platform=${PLATFORM:-qemu-arm64-virt}
+timeout_seconds=${SMOKE_TIMEOUT:-45}
+failures=0
+
+# Any of these appearing means a service reported its own failure. Listed
+# explicitly rather than grepping for "FAIL" so that unrelated text
+# containing that substring cannot silently make this vacuous.
+# NOTE: console-server's write op is NUL-terminated and capped at
+# console_write_max_bytes (24), so anything longer is silently truncated --
+# which is why these are short and must match the emitted strings exactly.
+# An earlier version of this list did not, and every entry was dead.
+failure_markers=(
+    "block-service FAILED"
+    "sup: spawn failed"
+    "sup: no thread"
+    "sup: bind failed"
+    "sup: no bin/init"
+    "guest: res failed"
+    "guest: mint failed"
+    "guest: launch failed"
+    "guest: load failed"
+    "virtio: sector round trip FAIL"
+)
+
+run_profile() {
+    local name=$1 defconfig=$2 variant=$3
+    shift 3
+    local expected=("$@")
+
+    printf '\n== %s ==\n' "$name"
+    local log
+    log=$(mktemp)
+    trap 'rm -f "$log"' RETURN
+
+    local make_args=(ARCH="$arch" PLATFORM="$platform" BUILD_VARIANT="$variant")
+    [ -n "$defconfig" ] && make_args+=(KCONFIG_DEFCONFIG="$repo_root/$defconfig")
+
+    if ! make "${make_args[@]}" all >"$log" 2>&1; then
+        echo "  BUILD FAILED"
+        sed -n '/error/,+3p' "$log" | head -20
+        failures=$((failures + 1))
+        return
+    fi
+
+    # The kernel never exits, so the timeout is the normal path; its exit
+    # status is not a verdict and is deliberately ignored.
+    timeout "$timeout_seconds" make "${make_args[@]}" run >"$log" 2>&1 || true
+
+    local marker
+    for marker in "${expected[@]}"; do
+        if grep -qF -- "$marker" "$log"; then
+            echo "  ok      : $marker"
+        else
+            echo "  MISSING : $marker"
+            failures=$((failures + 1))
+        fi
+    done
+    for marker in "${failure_markers[@]}"; do
+        if grep -qF -- "$marker" "$log"; then
+            echo "  FAILURE : $marker"
+            failures=$((failures + 1))
+        fi
+    done
+}
+
+# Production graph: every service up, and critically the supervision thread
+# started -- "graph ready" is printed only after that succeeds.
+run_profile "release (service graph)" "" release \
+    "console-server alive" \
+    "block-service verified" \
+    "graph ready"
+
+# Guest hosting: proves stage-2 trap-and-emulate through the domain manager's
+# vPL011 reaches the real UART.
+run_profile "guest (vPL011 hosting)" "configs/guest_defconfig" development \
+    "graph ready" \
+    "guest: loaded, serving" \
+    "guest alive via vpl011"
+
+printf '\n'
+if [ "$failures" -eq 0 ]; then
+    echo "smoke: PASS"
+    exit 0
+fi
+echo "smoke: FAIL ($failures problem(s))"
+exit 1

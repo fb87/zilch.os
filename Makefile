@@ -14,7 +14,7 @@ endif
 include src/kernel/kernel.mk
 include mk/checks.mk
 
-.PHONY: all run clean arm64 amd64 debug certification release FORCE
+.PHONY: all run smoke clean arm64 amd64 debug certification release FORCE
 all: userspace kernel image
 
 arm64:
@@ -31,6 +31,11 @@ debug:
 
 run: $(KERNEL_ELF)
 	@CPUS=$(CPUS) MEMORY_MB=$(MEMORY_MB) $(SRCTREE)/tools/run/run.sh $(KERNEL_ELF)
+
+# Boots the profiles CONFIG_SELFTEST cannot cover -- the certification suite
+# replaces init's main(), so it structurally cannot exercise supervise().
+smoke:
+	@ARCH=$(ARCH) PLATFORM=$(PLATFORM) $(SRCTREE)/tools/verification/smoke.sh
 
 clean:
 	@rm -rf $(OBJTREE)

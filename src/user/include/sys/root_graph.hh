@@ -731,12 +731,12 @@ namespace sys::root_graph
         constexpr usize_t directory_bound = 4096U;
         const auto found = platform::v1::earlyfs::find_span(page, directory_bound, "bin/init");
         if (!found.found) {
-            report("supervisor: bin/init not found in earlyfs\n");
+            report("sup: no bin/init\n");
             return false;
         }
         if (control(abi::v1::control_operation::role_image_bind, root_supervisor_role,
                     static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success) {
-            report("supervisor: role_image_bind FAILED\n");
+            report("sup: bind failed\n");
             return false;
         }
         /*
@@ -747,7 +747,7 @@ namespace sys::root_graph
          */
         if (control(abi::v1::control_operation::thread_create, 0U, root_supervisor_role,
                     supervisor_thread_selector, supervisor_space_selector) != success) {
-            report("sup: thread_create failed\n");
+            report("sup: no thread\n");
             return false;
         }
         return true;
@@ -902,11 +902,11 @@ namespace sys::root_graph
      */
     [[nodiscard]] inline bool run_embedded_guest_loop(supervisor_state& state) noexcept {
         if (!create_embedded_guest_resources()) {
-            report("guest: resource creation FAILED\n");
+            report("guest: res failed\n");
             return false;
         }
         if (!mint_embedded_guest_resources()) {
-            report("guest: resource mint FAILED\n");
+            report("guest: mint failed\n");
             return false;
         }
         const capability_id_t domain_endpoint = endpoint_base + domain_index;
@@ -914,13 +914,13 @@ namespace sys::root_graph
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
                     0U)
                 .status != success) {
-            report("guest: launch FAILED\n");
+            report("guest: launch failed\n");
             return false;
         }
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::load),
                     0U)
                 .status != success) {
-            report("guest: load FAILED\n");
+            report("guest: load failed\n");
             return false;
         }
         report("guest: loaded, serving\n");
@@ -1088,10 +1088,19 @@ namespace sys::root_graph
                 if (!supervisor_spawned) {
                     if (!spawn_supervision_thread()) {
                         (void)console::write(endpoint_base + console_index,
-                                             "supervisor: spawn FAILED\n");
+                                             "sup: spawn failed\n");
                         return 7;
                     }
                     supervisor_spawned = true;
+                    /*
+                     * Definitive "the whole graph is up" marker, printed
+                     * once. Until this existed the last console output was
+                     * the console check itself, so a boot that lost its
+                     * supervision thread afterwards looked identical to a
+                     * healthy one -- which is how that failure survived.
+                     * tools/verification/smoke.sh asserts on this line.
+                     */
+                    report("graph ready\n");
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE
                 report("guest: starting\n");
