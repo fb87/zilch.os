@@ -63,6 +63,8 @@ Root creates and mints these before the process runs
 | 11   | own service endpoint                          |
 | 14   | root notification (ready / failure badge)     |
 | 20   | virtio-mmio device frame                      |
+| 21   | interrupt (INTID 79, transport 31)            |
+| 22   | notification bound to that interrupt          |
 | 23   | serial-driver service endpoint (diagnostics)  |
 | 24   | own DMA frame (created by this driver)        |
 
@@ -112,8 +114,32 @@ over a split virtqueue. A boot self-check writes a pattern to the last
 sector, clears the buffer, reads it back, and reports PASS/FAIL, so the DMA
 path is proven end to end at every boot rather than merely assumed.
 
-Completion is **polled**, not interrupt-driven, because the driver holds no
-interrupt capability yet (see above). Transfers are one sector at a time
-through a bounce buffer, with only the leading bytes carried in the IPC
-message; bulk transfer wants a capability-granted shared data frame, which
-is the natural next step.
+## Interrupts
+
+Root creates one interrupt capability, for INTID 79 (transport 31), and the
+driver binds it to a notification before setting `DRIVER_OK` — so no
+completion can be raised on an unbound line. The driver checks that the
+transport it discovered actually corresponds to that INTID and falls back to
+polling, saying so, rather than waiting on a line that would never fire.
+
+Whether a *particular* request's interrupt is observed is inherently racy:
+QEMU services the doorbell write inline, so the used ring has usually already
+moved by the time the first poll runs. The used ring, not the interrupt, is
+therefore the authoritative completion signal; the interrupt's roles are
+keeping the edge-triggered line acknowledged (the kernel masks on delivery
+and `interrupt_ack` re-arms it) and providing the hook an asynchronous
+completion path would use. The boot self-check reports `irq=live` by checking
+both the running signal count and a final drain, which is stable regardless
+of which request wins the race.
+
+The request path still spins, because this codebase has no blocking wait for
+a notification — the same constraint `serial-driver`'s loop and
+`root_graph.hh`'s `drain_fault_reports()` work around.
+
+## Remaining
+
+Transfers are one sector at a time through a bounce buffer, with only the
+leading 24 bytes carried back in the IPC message — a client cannot yet read a
+full sector. Bulk transfer wants a capability-granted shared data frame, which
+is the natural next step, and has no consumer until something other than the
+boot self-check calls this service.

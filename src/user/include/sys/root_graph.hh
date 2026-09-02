@@ -78,7 +78,25 @@ namespace sys::root_graph
     inline constexpr capability_id_t block_service_endpoint = 103U;
     inline constexpr capability_id_t block_mmio_root_frame_selector = 93U;
     inline constexpr capability_id_t block_mmio_child_frame_selector = 20U;
+    inline constexpr capability_id_t block_irq_root_selector = 92U;
+    inline constexpr capability_id_t block_irq_child_selector = 21U;
     inline constexpr capability_id_t block_serial_endpoint_selector = 23U;
+    /*
+     * INTID 79 = GIC SPI 47 = virtio-mmio transport 31, the transport QEMU
+     * plugs the first attached device into (it allocates downward from the
+     * top). Edge-rising, per the device tree's <0 47 1> -- unlike pl011's
+     * level-high, so the driver must re-check the device's InterruptStatus
+     * after acknowledging rather than expect another edge for work already
+     * queued.
+     *
+     * Only this one IRQ is created, not one per transport in the granted
+     * page: dynamic_interrupt_count is 16, so covering all 8 would spend
+     * half the pool to serve a configuration nothing boots. The driver
+     * verifies the transport it discovered matches this IRQ and falls back
+     * to polling (reporting that it did) if a differently-populated machine
+     * ever puts the device elsewhere.
+     */
+    inline constexpr irq_id_t block_irq = 79U;
     /*
      * The LAST page of the virtio-mmio window (transports 24..31), not the
      * first: QEMU populates these transports downward from the top, so a
@@ -285,9 +303,14 @@ namespace sys::root_graph
      * for the same physical page.
      */
     [[nodiscard]] inline bool create_block_resources() noexcept {
-        return control(abi::v1::control_operation::device_frame_create,
-                       block_mmio_root_frame_selector, block_mmio_physical_address) ==
-               static_cast<word_t>(error_t::success);
+        const word_t success = static_cast<word_t>(error_t::success);
+        if (control(abi::v1::control_operation::device_frame_create,
+                    block_mmio_root_frame_selector, block_mmio_physical_address) != success)
+            return false;
+        // Third argument non-zero selects edge triggering, matching the
+        // device tree's <0 47 1>.
+        return control(abi::v1::control_operation::interrupt_create, block_irq_root_selector,
+                       block_irq, 1U) == success;
     }
 
     [[nodiscard]] inline bool mint_block_resources() noexcept {
@@ -298,6 +321,12 @@ namespace sys::root_graph
         if (control(abi::v1::control_operation::capability_mint, block_task,
                     block_mmio_child_frame_selector, block_mmio_root_frame_selector,
                     read_write) != success)
+            return false;
+        const word_t write_control = static_cast<word_t>(abi::v1::CapabilityRight::write) |
+                                     static_cast<word_t>(abi::v1::CapabilityRight::control);
+        if (control(abi::v1::control_operation::capability_mint, block_task,
+                    block_irq_child_selector, block_irq_root_selector,
+                    write_control) != success)
             return false;
         // Diagnostics path: the driver reports its probe results as text
         // through serial-driver, the same endpoint console-server forwards

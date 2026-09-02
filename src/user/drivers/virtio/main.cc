@@ -29,8 +29,19 @@ namespace
      * holds the control right frame_physical_address requires.
      */
     inline constexpr sys::capability_id_t mmio_frame_selector = 20U;
+    inline constexpr sys::capability_id_t irq_selector = 21U;
+    inline constexpr sys::capability_id_t irq_notification_selector = 22U;
     inline constexpr sys::capability_id_t serial_endpoint_selector = 23U;
     inline constexpr sys::capability_id_t dma_frame_selector = 24U;
+
+    /*
+     * The IRQ capability root minted covers INTID 79 = transport 31, the
+     * transport QEMU populates first. If a differently-populated machine
+     * ever puts the block device elsewhere, the capability would be for the
+     * wrong line, so the driver checks rather than assumes -- and falls back
+     * to polling, saying so, instead of waiting on a line that never fires.
+     */
+    inline constexpr sys::u32 expected_irq = 79U;
     inline constexpr sys::capability_id_t self_space_selector = 3U;
     inline constexpr sys::word_t mmio_scratch_address = 0x2003e000U;
     inline constexpr sys::word_t dma_scratch_address = 0x2003d000U;
@@ -74,6 +85,10 @@ namespace
     sys::u32 block_transport = transports_per_page; // == none found
     sys::word_t dma_physical = 0U;
     sys::u64 device_capacity = 0U;
+    bool interrupt_bound = false;
+    // Counted so a boot can distinguish "the interrupt path works" from
+    // "we silently fell back to spinning and nobody noticed".
+    sys::u64 interrupt_signals = 0U;
 
     /* ---- MMIO accessors ---- */
 
@@ -162,6 +177,26 @@ namespace
             if (sys::control(abi::control_operation::map_frame, self_space_selector,
                              mmio_frame_selector, mmio_scratch_address, read_write, attrs) ==
                 static_cast<sys::word_t>(sys::error_t::success))
+                return true;
+        }
+        return false;
+    }
+
+    /*
+     * Same ordering hazard as the mapping above -- root mints the IRQ
+     * capability only after process_create returns, so this process can
+     * reach here first. Bounded retry, matching serial-driver's bind_irq().
+     */
+    inline constexpr sys::word_t bind_irq_attempts = 100000U;
+
+    [[nodiscard]] inline bool bind_irq() noexcept {
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        if (sys::control(abi::control_operation::notification_create,
+                         irq_notification_selector) != success)
+            return false;
+        for (sys::word_t attempt = 0U; attempt < bind_irq_attempts; ++attempt) {
+            if (sys::control(abi::control_operation::interrupt_bind, irq_selector,
+                             irq_notification_selector) == success)
                 return true;
         }
         return false;
@@ -362,12 +397,39 @@ namespace
         write_reg(block_transport, mmio::queue_notify, 0U);
 
         for (sys::word_t attempt = 0U; attempt < completion_attempts; ++attempt) {
+            /*
+             * Drain the bound notification first. The kernel masks the line
+             * on delivery and interrupt_ack re-arms it, so this must run even
+             * when the used ring is what actually tells us the request
+             * finished -- otherwise the line stays masked and no later
+             * request would ever see an interrupt.
+             *
+             * This codebase has no blocking wait for a notification (see
+             * serial-driver's loop and root_graph.hh's drain_fault_reports()),
+             * so the loop still spins; the interrupt's value here is keeping
+             * the device's edge-triggered line correctly acknowledged, and
+             * being the hook an asynchronous completion path would use.
+             */
+            if (interrupt_bound) {
+                sys::word_t signaled = 0U;
+                const sys::word_t polled =
+                    sys::control_result1(signaled, abi::control_operation::notification_poll,
+                                         irq_notification_selector);
+                if (polled == static_cast<sys::word_t>(sys::error_t::success) && signaled != 0U) {
+                    ++interrupt_signals;
+                    const sys::u32 pending = read_reg(block_transport, mmio::interrupt_status);
+                    if (pending != 0U)
+                        write_reg(block_transport, mmio::interrupt_ack, pending);
+                    (void)sys::control(abi::control_operation::interrupt_ack, irq_selector);
+                }
+            }
+
             const sys::u16 used = *dma<sys::u16>(used_offset + 2U);
             if (used != used_seen) {
                 barrier();
                 used_seen = used;
-                // Edge-triggered line (see main.md): acknowledge whatever the
-                // device raised so a later interrupt-driven path starts clean.
+                // Edge-triggered line (see main.md): clear whatever the device
+                // still has raised, so the next request starts clean.
                 const sys::u32 pending = read_reg(block_transport, mmio::interrupt_status);
                 if (pending != 0U)
                     write_reg(block_transport, mmio::interrupt_ack, pending);
@@ -398,6 +460,16 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         // DMA setup only matters once a device is actually present, and
         // running it after the probe means a failure here is reported with
         // the discovery context already on the console.
+        // Bind before DRIVER_OK so no completion can be raised on an
+        // unbound line. Only when the discovered transport is the one the
+        // minted capability actually covers.
+        if (transport_irq(block_transport) == expected_irq) {
+            interrupt_bound = bind_irq();
+            emit_text(interrupt_bound ? "virtio: irq bound\r\n"
+                                      : "virtio: irq bind failed, polling\r\n");
+        } else {
+            emit_text("virtio: transport irq differs from granted capability, polling\r\n");
+        }
         ready = setup_dma() && initialize_device();
         if (ready) {
             emit_text("virtio: queue ready, capacity ");
@@ -420,6 +492,28 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
             emit_text(read_back && value == 0x7a696c6368626c6bULL ? "PASS" : "FAIL");
             emit_text(" value=");
             emit_hex(value);
+            if (interrupt_bound) {
+                /*
+                 * Whether a given request's interrupt is *observed* by the
+                 * loop is racy: QEMU services the doorbell write inline, so
+                 * the used ring has often already moved by the time the
+                 * first poll runs, and the request returns before the
+                 * notification is seen. The count therefore varies run to
+                 * run (0 or 1 across the two requests below) and is not a
+                 * sound boot assertion on its own.
+                 *
+                 * What IS sound: by this point two requests have completed,
+                 * so if the line were dead neither the running count nor a
+                 * final drain would show anything. Checking both reports
+                 * "live" without depending on which request won the race.
+                 */
+                sys::word_t signaled = 0U;
+                (void)sys::control_result1(signaled, abi::control_operation::notification_poll,
+                                           irq_notification_selector);
+                emit_text(interrupt_signals != 0U || signaled != 0U ? " irq=live" : " irq=silent");
+            } else {
+                emit_text(" irq=polling");
+            }
             emit_text("\r\n");
         }
     } else {
