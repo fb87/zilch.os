@@ -1,5 +1,15 @@
 menu "Userspace features"
 
+config FAULT_INJECTION
+	bool "Deliberate fault injection for restart verification"
+	default n
+	help
+	  Adds a control-plane operation that makes a role crash on demand, so
+	  restart-on-fault can be verified end to end in a profile that runs
+	  root_graph.hh's supervise(). Off by default: this ships a way to
+	  crash a service, which production has no reason to carry. Enabled by
+	  configs/guest_defconfig, which tools/verification/smoke.sh uses.
+
 config GUEST_SUPPORT
 	bool "Guest domain support"
 	default y

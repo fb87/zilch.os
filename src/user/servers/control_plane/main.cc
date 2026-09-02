@@ -38,6 +38,17 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         } else if (operation == sys::abi::v1::control_plane_operation::describe) {
             result0 = policy.dependency_mask;
             result1 = (policy.quota_pages << 16U) | policy.restart_limit;
+#if CONFIG_FAULT_INJECTION
+        } else if (operation == sys::abi::v1::control_plane_operation::inject_fault) {
+            /*
+             * Deliberate null dereference: a data abort the kernel reports
+             * to root's fault endpoint exactly like any genuine crash, so
+             * the restart path under test is the real one rather than a
+             * cooperative shutdown. No reply is sent -- the caller times out.
+             */
+            *reinterpret_cast<volatile sys::u64*>(0) = 0U;
+            return 4;
+#endif
         } else if (operation == sys::abi::v1::control_plane_operation::stop) {
             const sys::word_t replied = sys::ipc_reply(0U, role, 0U, 0U);
             if (replied != static_cast<sys::word_t>(sys::error_t::success))

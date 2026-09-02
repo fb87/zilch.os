@@ -40,6 +40,7 @@ failure_markers=(
     "guest: launch failed"
     "guest: load failed"
     "virtio: sector round trip FAIL"
+    "restart FAILED"
 )
 
 run_profile() {
@@ -52,8 +53,25 @@ run_profile() {
     log=$(mktemp)
     trap 'rm -f "$log"' RETURN
 
-    local make_args=(ARCH="$arch" PLATFORM="$platform" BUILD_VARIANT="$variant")
-    [ -n "$defconfig" ] && make_args+=(KCONFIG_DEFCONFIG="$repo_root/$defconfig")
+    # KCONFIG_DEFCONFIG must be passed explicitly for EVERY profile, never
+    # left to mk/config.mk's default. That default uses ?=, and config.mk
+    # exports the variable -- so when this script runs under `make smoke`,
+    # the inner make inherits the OUTER invocation's defconfig from the
+    # environment and it silently wins. That built the release tree with the
+    # debug config (CONFIG_SELFTEST=1), which runs the certification suite
+    # instead of the service graph this is meant to check.
+    local make_args=(ARCH="$arch" PLATFORM="$platform" BUILD_VARIANT="$variant"
+                     KCONFIG_DEFCONFIG="$repo_root/$defconfig")
+
+    # Force the Kconfig regeneration. mk/config.mk's rule depends on the
+    # defconfig as a FILE, not on which defconfig was selected, so pointing
+    # it at a different one does not invalidate an already-newer generated
+    # config -- the tree silently keeps whatever config it was last built
+    # with. Since this script deliberately builds several profiles into
+    # different trees, it has to drop the generated config each time.
+    local objtree="$repo_root/out/build/$arch/$platform/$variant"
+    rm -f "$objtree/.config" "$objtree/include/generated/auto.conf" \
+          "$objtree/include/generated/autoconf.h"
 
     if ! make "${make_args[@]}" all >"$log" 2>&1; then
         echo "  BUILD FAILED"
@@ -85,15 +103,19 @@ run_profile() {
 
 # Production graph: every service up, and critically the supervision thread
 # started -- "graph ready" is printed only after that succeeds.
-run_profile "release (service graph)" "" release \
+run_profile "release (service graph)" "configs/release_defconfig" release \
     "console-server alive" \
     "block-service verified" \
     "graph ready"
 
 # Guest hosting: proves stage-2 trap-and-emulate through the domain manager's
 # vPL011 reaches the real UART.
-run_profile "guest (vPL011 hosting)" "configs/guest_defconfig" development \
+# Also the only profile with CONFIG_FAULT_INJECTION, so it is where
+# restart-on-fault is proven: root crashes the device role and confirms the
+# supervision thread restarted it into a role that answers health checks.
+run_profile "guest (vPL011 hosting + restart)" "configs/guest_defconfig" development \
     "graph ready" \
+    "restart ok" \
     "guest: loaded, serving" \
     "guest alive via vpl011"
 

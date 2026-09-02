@@ -227,6 +227,8 @@ namespace sys::root_graph
      * silent exit with a apparently-healthy boot log -- which is exactly how
      * the supervision-thread spawn failure below went unnoticed.
      */
+    [[nodiscard]] inline bool healthy(word_t index) noexcept;
+
     inline void report(const char* text) noexcept {
         (void)console::write(endpoint_base + console_index, text);
     }
@@ -474,6 +476,58 @@ namespace sys::root_graph
                        console_stdin_endpoint_selector, console_stdin_endpoint,
                        read_write) == success;
     }
+
+#if CONFIG_FAULT_INJECTION
+    /*
+     * Proves the supervision thread actually does its job, not merely that
+     * it started. Spawning it and restarting a crashed role are different
+     * properties, and only the first was ever observable -- the release
+     * profile ran without a supervision thread at all for some time, and a
+     * "graph ready" marker alone would not have caught a thread that starts
+     * and then supervises nothing.
+     *
+     * Crashes the device role: it is restart-covered, and unlike console it
+     * is not the path this reports through, nor is it the domain role
+     * hosting a guest.
+     */
+    inline constexpr word_t device_index =
+        static_cast<word_t>(abi::v1::control_plane_role::device) -
+        static_cast<word_t>(abi::v1::control_plane_role::process);
+
+    [[nodiscard]] inline bool verify_restart_on_fault(supervisor_state& state) noexcept {
+        const u32 before = __atomic_load_n(&state.roles[device_index].thread_id, __ATOMIC_ACQUIRE);
+        const u32 restarts_before =
+            __atomic_load_n(&state.roles[device_index].restart_count, __ATOMIC_ACQUIRE);
+
+        // The role dies instead of replying, so this must not block forever.
+        const abi::v1::ipc_timeout timeout{.ticks = 16U, .enabled = true};
+        (void)ipc_call(endpoint_base + device_index,
+                       static_cast<word_t>(abi::v1::control_plane_operation::inject_fault), 0U, 0U,
+                       0U, {}, timeout);
+
+        /*
+         * Wait for the supervision thread to observe the fault and restart
+         * the role. Bounded: a hang here would otherwise look like a healthy
+         * boot that simply never printed anything more.
+         */
+        constexpr u32 rounds = 200000000U;
+        for (u32 round = 0U; round < rounds; ++round) {
+            const u32 restarts =
+                __atomic_load_n(&state.roles[device_index].restart_count, __ATOMIC_ACQUIRE);
+            if (restarts != restarts_before) {
+                // Restarted; confirm the replacement answers its service
+                // endpoint, so this proves a working role rather than just
+                // an incremented counter.
+                const u32 after =
+                    __atomic_load_n(&state.roles[device_index].thread_id, __ATOMIC_ACQUIRE);
+                (void)before;
+                (void)after;
+                return healthy(device_index);
+            }
+        }
+        return false;
+    }
+#endif
 
     [[nodiscard]] inline bool healthy(word_t index) noexcept {
         const auto reply =
@@ -1101,6 +1155,10 @@ namespace sys::root_graph
                      * tools/verification/smoke.sh asserts on this line.
                      */
                     report("graph ready\n");
+#if CONFIG_FAULT_INJECTION
+                    report(verify_restart_on_fault(state) ? "restart ok\n"
+                                                          : "restart FAILED\n");
+#endif
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE
                 report("guest: starting\n");

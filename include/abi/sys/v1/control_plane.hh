@@ -34,6 +34,14 @@ namespace sys::abi::v1
         // if a byte was available (0 otherwise), message1 = the byte.
         write_byte = 9U,
         read_byte = 10U,
+        /*
+         * Makes the receiving role fault deliberately, so restart-on-fault
+         * can be verified. Only honoured when CONFIG_FAULT_INJECTION is set;
+         * otherwise it falls through to invalid_argument like any unknown
+         * operation. The caller gets no reply -- the role dies before
+         * replying -- so it must use a timeout.
+         */
+        inject_fault = 11U,
     };
 
     inline constexpr usize_t console_write_max_bytes = 24U;
