@@ -128,15 +128,20 @@ namespace sys::platform::timer
      * 1000000U placeholder this replaced, which no periodic interrupt had
      * ever actually produced.
      *
-     * Deliberately does NOT change what ticks() below returns: ticks() is
-     * read from many already-live call sites (kernel.hh's boot readiness
-     * check, kernel/interrupt.hh's delivery timestamping,
-     * thread/scheduler.hh's scheduling-context accounting) that this
-     * change did not set out to touch, and changing ticks()'s semantics
-     * would ripple into all of them at once, untestable in an environment
-     * where amd64 cannot be booted at all (see gdt.md's note on QEMU's
-     * multiboot loader). Wiring the interrupt itself is this change's
-     * scope; re-deriving ticks() from it is a separate, later step.
+     * Now also what ticks() below reads. This was previously TSC-derived
+     * (elapsed real time since CPU power-on, scaled to ticks_per_second
+     * units) rather than counted from this interrupt -- not an
+     * independent design choice, but a mismatch with what the portable
+     * kernel code that reads ticks() actually assumes. kernel/interrupt.hh's
+     * storm_window_ticks is 100 at ticks_per_second == 100 specifically
+     * because it means "one real second of REAL timer interrupts" on
+     * arm64, where ticks() has always been this same kind of
+     * interrupt-count, not a continuously-sampled clock; amd64's
+     * TSC-derived version numerically advanced at a similar rate but for a
+     * different reason; it advanced instantly at boot with no interrupt
+     * ever having fired at all, which is why kernel.hh's boot readiness
+     * loop (`ticks(cpu_id) == 0U` meaning "not yet online") was vacuous on
+     * amd64 before this -- see the previous commit's note on that.
      */
     inline volatile u64 interrupt_count = 0U;
 
@@ -144,10 +149,11 @@ namespace sys::platform::timer
         return __atomic_add_fetch(&interrupt_count, 1U, __ATOMIC_RELAXED);
     }
 
+    // Ignores the cpu argument, same as before: amd64 has no real SMP yet
+    // (arch::smp::online_count() is hardcoded to 1), so there is only one
+    // CPU's worth of state to report regardless of which id is asked for.
     [[nodiscard]] inline u64 ticks(cpu_id_t) noexcept {
-        if (tsc_frequency == 0U)
-            return 0U;
-        return read_tsc() / (tsc_frequency / ticks_per_second);
+        return __atomic_load_n(&interrupt_count, __ATOMIC_ACQUIRE);
     }
 
     [[nodiscard]] inline bool certification_valid() noexcept {
