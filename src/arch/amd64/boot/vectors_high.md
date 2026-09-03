@@ -30,5 +30,5 @@ Auto-generated ISR stubs for exception vectors 128-255, plus
 
 ## Verification
 
-See `vectors_low.md` -- same "not yet reachable" status, for the same
-reason (no IDT installs these addresses yet).
+See `vectors_low.md` -- same status: reachable via a real IDT now, but not
+yet verified by execution in this environment.
