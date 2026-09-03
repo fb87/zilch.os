@@ -46,4 +46,15 @@ namespace sys::arch::cpu
     inline void halt_barrier() noexcept {
         __asm__ volatile("dsb sy; isb" ::: "memory");
     }
+
+    /* Block until another CPU calls wake_parked(), for spinning on a flag
+     * another CPU sets. */
+    inline void park() noexcept {
+        __asm__ volatile("wfe" ::: "memory");
+    }
+
+    /* Wake any CPU blocked in park(). */
+    inline void wake_parked() noexcept {
+        __asm__ volatile("sev" ::: "memory");
+    }
 } // namespace sys::arch::cpu

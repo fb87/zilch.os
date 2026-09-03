@@ -4,6 +4,13 @@
 
 namespace sys::arch::thread
 {
+    /* No real syscall entry yet (Phase 7): a user thread that ran here would
+     * fault the instant it issued a syscall, since EFER.SCE/STAR/LSTAR are
+     * unprogrammed and arch::syscall::is_user_syscall() is unconditionally
+     * false. Gates sys::kernel::thread::enter_first_user_thread() to park in
+     * the kernel idle loop instead of ever attempting real user entry. */
+    inline constexpr bool user_entry_ready = false;
+
     extern "C" [[noreturn]] void sys_amd64_enter_user(context*) noexcept;
 
     [[noreturn]] inline void enter_user(context& value) noexcept {

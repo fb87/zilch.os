@@ -87,4 +87,14 @@ namespace sys::arch::thread
         value.ss = 0x33U;      /* User data segment (ring 3) */
         value.status = 0x200U; /* RFLAGS: IF=1 (interrupts enabled), others reserved */
     }
+
+    /*
+     * No real syscall entry yet (Phase 7): arch::syscall::is_user_syscall()
+     * is unconditionally false on this platform, so nothing ever resumes a
+     * thread expecting these registers to be populated. No-ops until a real
+     * SYSCALL/SYSRET convention lands to define what "the IPC result
+     * register" even means here.
+     */
+    inline void set_ipc_result(context&, word_t) noexcept {}
+    inline void set_ipc_message(context&, word_t, const word_t[4]) noexcept {}
 } // namespace sys::arch::thread

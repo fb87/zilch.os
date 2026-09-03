@@ -58,4 +58,15 @@ namespace sys::arch::cpu
     inline void halt_barrier() noexcept {
         __asm__ volatile("mfence" ::: "memory");
     }
+
+    /* Block until another CPU calls wake_parked(), for spinning on a flag
+     * another CPU sets. No sev/wfe equivalent on x86: poll with a
+     * spin-loop hint instead of truly blocking. */
+    inline void park() noexcept {
+        __asm__ volatile("pause" ::: "memory");
+    }
+
+    /* Wake any CPU blocked in park(). No-op: park() doesn't actually block
+     * on this architecture, so there is nothing to wake. */
+    inline void wake_parked() noexcept {}
 } // namespace sys::arch::cpu

@@ -50,4 +50,19 @@ namespace sys::arch::thread
         value.instruction_pointer = entry;
         value.status = 0U; // EL0t
     }
+
+    /* Publishes a completed IPC's status/error code into the register a
+     * resumed thread reads its syscall result from. */
+    inline void set_ipc_result(context& value, word_t result) noexcept {
+        value.x[0] = result;
+    }
+
+    /* Publishes a completed IPC's sender/badge and four-word message payload
+     * into the registers a resumed thread reads them from. */
+    inline void set_ipc_message(context& value, word_t sender_or_badge,
+                                const word_t message[4]) noexcept {
+        value.x[1] = sender_or_badge;
+        for (usize_t index = 0U; index < 4U; ++index)
+            value.x[index + 2U] = message[index];
+    }
 } // namespace sys::arch::thread

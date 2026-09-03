@@ -4,6 +4,10 @@
 
 namespace sys::arch::thread
 {
+    /* Whether entering a real user thread is safe: gates
+     * sys::kernel::thread::enter_first_user_thread(). */
+    inline constexpr bool user_entry_ready = true;
+
     extern "C" [[noreturn]] void sys_arm64_enter_el0(context*) noexcept;
 
     [[noreturn]] inline void enter_user(context& value) noexcept {

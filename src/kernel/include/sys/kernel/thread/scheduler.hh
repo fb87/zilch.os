@@ -1116,25 +1116,14 @@ namespace sys::kernel::thread
 
     inline void launch_user_scheduler() noexcept {
         __atomic_store_n(&user_scheduler_ready, true, __ATOMIC_RELEASE);
-#if defined(__aarch64__)
-        __asm__ volatile("sev" ::: "memory");
-#endif
+        arch::cpu::wake_parked();
     }
 
-#if defined(__aarch64__)
     inline void wait_until_ready() noexcept {
         while (!__atomic_load_n(&user_scheduler_ready, __ATOMIC_ACQUIRE)) {
-            __asm__ volatile("wfe" ::: "memory");
+            arch::cpu::park();
         }
     }
-#else
-    inline void wait_until_ready() noexcept {
-        /* amd64: poll without event notification (no sev/wfe equivalent) */
-        while (!__atomic_load_n(&user_scheduler_ready, __ATOMIC_ACQUIRE)) {
-            arch::cpu::relax();
-        }
-    }
-#endif
 
     [[nodiscard]] inline u32 current_index() noexcept {
         return current_user_thread[arch::cpu::current_id()];
@@ -1295,7 +1284,6 @@ namespace sys::kernel::thread
             __atomic_store_n(&previous->executing, false, __ATOMIC_RELEASE);
     }
 
-#if defined(__aarch64__)
     inline void load_user(arch::thread::context& frame, u32 id) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
         const u32 old_index = __atomic_load_n(&current_user_thread[cpu], __ATOMIC_ACQUIRE);
@@ -1406,7 +1394,6 @@ namespace sys::kernel::thread
         prepare_block(frame, blocked_state);
         schedule_prepared(frame);
     }
-#endif /* __aarch64__ */
 
     [[nodiscard]] inline bool wake(thread& value) noexcept {
         /*
@@ -1433,7 +1420,6 @@ namespace sys::kernel::thread
         }
     }
 
-#if defined(__aarch64__)
     [[nodiscard]] inline bool deliver_fault_ipc(thread& value, arch::thread::context& frame,
                                                 u64 syndrome, vaddr_t fault_address,
                                                 fault::kind fault_kind) noexcept {
@@ -1541,10 +1527,11 @@ namespace sys::kernel::thread
         load_user(frame, next);
         return true;
     }
-#endif /* __aarch64__ */
 
-#if defined(__aarch64__)
     [[noreturn]] inline void enter_first_user_thread() noexcept {
+        if constexpr (!arch::thread::user_entry_ready)
+            sys_kernel_user_idle();
+
         const cpu_id_t cpu = arch::cpu::current_id();
         arch::irq::disable();
         user_execution_active[cpu] = true;
@@ -1578,9 +1565,4 @@ namespace sys::kernel::thread
         user_threads[first].address_space.activate();
         arch::thread::enter_user(user_threads[first].context);
     }
-#else  /* !__aarch64__ (amd64) */
-    [[noreturn]] inline void enter_first_user_thread() noexcept {
-        sys_kernel_user_idle();
-    }
-#endif /* __aarch64__ */
 } // namespace sys::kernel::thread
