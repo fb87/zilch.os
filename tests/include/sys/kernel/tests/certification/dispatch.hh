@@ -8,7 +8,13 @@
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/hypervisor.hh>
 #include <abi/sys/v1/syscall_numbers.hh>
-#if CONFIG_HYPERVISOR_SELFTEST
+/*
+ * Gated on __aarch64__, not just CONFIG_HYPERVISOR_SELFTEST: control_models.hh
+ * is written against arm64-specific arch::hypervisor internals (guest system
+ * register encodings, HVC ABI) that amd64's stub hypervisor doesn't share.
+ * The hypervisor_self_test case below calls none of it on amd64.
+ */
+#if CONFIG_HYPERVISOR_SELFTEST && defined(__aarch64__)
 #include <sys/kernel/tests/hypervisor/control_models.hh>
 #endif
 #include <sys/kernel/memory/manager.hh>
@@ -501,7 +507,7 @@ namespace sys::kernel::tests::certification
                                       (static_cast<u64>(snapshot.page_tables_in_use) << 56U) ^
                                       (snapshot.resource_used_pages * 0x9e3779b97f4a7c15ULL) ^
                                       (snapshot.resource_delegated_pages * 0xbf58476d1ce4e5b9ULL);
-                frame.x[1] = signature;
+                arch::syscall::set_output(frame, 1U, signature);
                 syscall::set_control_result(frame, memory::invariants_valid()
                                                        ? error_t::success
                                                        : error_t::invalid_argument);
@@ -523,7 +529,7 @@ namespace sys::kernel::tests::certification
                 return true;
             }
             case test_abi::v1::control_operation::hypervisor_self_test:
-#if CONFIG_HYPERVISOR_SELFTEST
+#if CONFIG_HYPERVISOR_SELFTEST && defined(__aarch64__)
                 if (current.owner == nullptr || !current.owner->root)
                     syscall::set_control_result(frame, error_t::denied);
                 else

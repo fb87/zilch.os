@@ -3,13 +3,6 @@
 #include <sys/arch/syscall/entry.hh>
 #include <sys/kernel/hypervisor.hh>
 #include <sys/kernel/interrupt.hh>
-
-#include <abi/sys/v1/control.hh>
-#include <abi/sys/v1/hypervisor.hh>
-#include <abi/sys/v1/syscall_numbers.hh>
-#if CONFIG_HYPERVISOR_SELFTEST && defined(__aarch64__)
-#include <sys/kernel/tests/hypervisor/control_models.hh>
-#endif
 #include <sys/kernel/memory/manager.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/printk.hh>
@@ -21,7 +14,11 @@
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/platform.hh>
 #include <sys/types.hh>
-#if CONFIG_SELFTEST && defined(__aarch64__)
+
+#include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/hypervisor.hh>
+#include <abi/sys/v1/syscall_numbers.hh>
+#if CONFIG_SELFTEST
 #include <sys/kernel/tests/certification/dispatch.hh>
 #endif
 
@@ -206,7 +203,7 @@ namespace sys::kernel::syscall
             return false;
 
         const word_t raw_operation = arch::syscall::argument(frame, 0U);
-#if CONFIG_SELFTEST && defined(__aarch64__)
+#if CONFIG_SELFTEST
         if (tests::certification::dispatch(current, frame, raw_operation))
             return true;
 #endif

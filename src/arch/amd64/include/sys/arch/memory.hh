@@ -95,5 +95,24 @@ namespace sys::arch
             __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
             __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
         }
+
+        /* Hardening self-checks the certification harness's acceptance_finalize
+         * queries: arm64 verifies real page-table guard pages, permission bits,
+         * and CPU feature/system-register state. amd64 hasn't implemented the
+         * equivalent checks yet, so these honestly report false rather than
+         * claim a property that was never verified.
+         */
+        [[nodiscard]] inline bool kernel_stack_guards_valid() noexcept {
+            return false;
+        }
+        [[nodiscard]] inline bool kernel_permissions_valid() noexcept {
+            return false;
+        }
+        [[nodiscard]] inline bool privilege_protection_enabled() noexcept {
+            return false;
+        }
+        [[nodiscard]] inline bool architectural_controls_valid() noexcept {
+            return false;
+        }
     } // namespace memory
 } // namespace sys::arch

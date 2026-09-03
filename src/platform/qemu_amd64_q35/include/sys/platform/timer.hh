@@ -159,4 +159,12 @@ namespace sys::platform::timer
     [[nodiscard]] inline bool certification_valid() noexcept {
         return tsc_frequency != 0U && lapic_frequency != 0U;
     }
+
+    // No per-cpu programmed-delta/tick-count tracking to cross-check yet
+    // (amd64 has no real SMP -- see ticks() above), so this only confirms
+    // the single online CPU's timer calibrated and has ticked at least once.
+    [[nodiscard]] inline bool database_valid(u32 online_cpus) noexcept {
+        return certification_valid() && online_cpus != 0U &&
+               __atomic_load_n(&interrupt_count, __ATOMIC_ACQUIRE) != 0U;
+    }
 } // namespace sys::platform::timer
