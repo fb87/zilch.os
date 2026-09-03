@@ -263,6 +263,13 @@ namespace sys::kernel::syscall
                 thread::release_pending_reply(current);
 
                 thread::lock_ipc_lifecycle();
+                /*
+                 * Published inside the lifecycle lock, before the terminal
+                 * state, so a waiter that observes `exited` can never read a
+                 * status the exiting thread had not written yet.
+                 */
+                current.exit_status = a1;
+                __atomic_store_n(&current.exited, true, __ATOMIC_RELEASE);
                 thread::prepare_block(frame, thread::state::terminated);
                 if (exit_notification != nullptr)
                     notification::signal(*exit_notification, a3);
@@ -720,6 +727,19 @@ namespace sys::kernel::syscall
                     arch::syscall::set_output(frame, 1U, allocated_id);
                     platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
                 }
+                break;
+            }
+            case abi::v1::control_operation::process_wait: {
+                thread::thread* target = nullptr;
+                result = resolve_thread(current, static_cast<capability_id_t>(a1),
+                                        capability::right_t::control, target);
+                if (result != error_t::success)
+                    break;
+                if (!__atomic_load_n(&target->exited, __ATOMIC_ACQUIRE)) {
+                    result = error_t::busy;
+                    break;
+                }
+                arch::syscall::set_output(frame, 1U, target->exit_status);
                 break;
             }
             case abi::v1::control_operation::thread_create:

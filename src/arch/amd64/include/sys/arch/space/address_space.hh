@@ -62,7 +62,9 @@ namespace sys::arch::space
         char* end;
     };
 
-    inline constexpr word_t maximum_role_bindings = 16U;
+    /* Matches arm64: nine static roles plus a pool for dynamically
+     * launched programs, one binding per live child. */
+    inline constexpr word_t maximum_role_bindings = 64U;
     struct role_binding {
         word_t role{};
         u64 offset{};

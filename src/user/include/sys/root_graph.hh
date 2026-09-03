@@ -5,6 +5,7 @@
 #include <sys/control_plane.hh>
 #include <sys/guest_manifest.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
 #include <sys/platform/v1/earlyfs.hh>
 #include <sys/types.hh>
 
@@ -12,6 +13,7 @@
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/fault.hh>
 #include <abi/sys/v1/memory.hh>
+#include <abi/sys/v1/process.hh>
 #include <abi/sys/v1/virtio.hh>
 
 namespace sys::root_graph
@@ -740,6 +742,49 @@ namespace sys::root_graph
     inline constexpr word_t dynamic_launch_role = 0x300U;
 
     /*
+     * A pool of reserved roles for dynamically launched programs, one per
+     * live child, clear of every statically assigned range (0x100-0x117,
+     * 0x200-0x204, 0x300-0x301).
+     *
+     * dynamic_launch_role above is a single slot, and role_image_bind
+     * upserts by role, so binding a second path through it silently
+     * repointed the first -- two dynamically launched programs could not
+     * both stay relaunchable. That was an accepted limit while nothing
+     * launched more than one thing at a time. A shell running commands is
+     * exactly the case it does not survive, so it draws from here instead.
+     */
+    inline constexpr word_t dynamic_role_base = 0x400U;
+    /*
+     * Bounded by root's cspace, not by roles. Each live child costs root
+     * four capability slots (thread, task, space, argument frame), a cspace
+     * holds 256 (capability/cspace.hh's 4x64 radix), and root's own graph
+     * already reaches selector 151 -- so eight children is 32 slots from
+     * 160 with room left over, while the role table could hold far more.
+     */
+    inline constexpr word_t dynamic_role_count = 8U;
+    inline constexpr capability_id_t dynamic_selector_base = 160U;
+    inline constexpr capability_id_t dynamic_selectors_per_child = 4U;
+    static_assert(dynamic_role_count <= 64U - 9U,
+                  "the pool plus the statically bound roles must fit arch role_bindings[]");
+    static_assert(dynamic_selector_base + dynamic_role_count * dynamic_selectors_per_child <= 256U,
+                  "child selectors must fit root's cspace");
+
+    struct child_slot {
+        word_t role;
+        capability_id_t thread;
+        capability_id_t task;
+        capability_id_t space;
+        capability_id_t args_frame;
+    };
+
+    [[nodiscard]] inline constexpr child_slot slot_for(word_t index) noexcept {
+        const capability_id_t base =
+            dynamic_selector_base + static_cast<capability_id_t>(index) * dynamic_selectors_per_child;
+        return {dynamic_role_base + index, base, static_cast<capability_id_t>(base + 1U),
+                static_cast<capability_id_t>(base + 2U), static_cast<capability_id_t>(base + 3U)};
+    }
+
+    /*
      * Root has exactly one thread at boot (kernel bootstrap gives it
      * initial_threads=1), and in the embedded-guest production
      * configuration, that one thread ends up permanently blocked inside
@@ -834,6 +879,205 @@ namespace sys::root_graph
             return false;
         return control(abi::v1::control_operation::process_create, cpu, dynamic_launch_role,
                        thread_selector, task_selector, space_selector) == success;
+    }
+
+    /*
+     * Scratch page where root assembles an argument block before handing
+     * the frame to the child. Distinct from every other scratch address so
+     * assembling one cannot disturb an in-flight earlyfs or block mapping.
+     */
+    inline constexpr word_t args_build_address = 0x20054000U;
+
+    /*
+     * Writes an argv/envp block into a frame root owns, then leaves the
+     * frame ready to mint. The child maps it itself -- see
+     * native::args_frame for why the capability travels rather than the
+     * mapping.
+     *
+     * Returns false without leaving a partial block if anything does not
+     * fit, so a caller can report "argument list too long" rather than
+     * launching a program with a silently truncated argv.
+     */
+    [[nodiscard]] inline bool write_args_block(capability_id_t frame_selector, const char* const* argv,
+                                               word_t argc, const char* const* envp,
+                                               word_t envc) noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const word_t attrs = abi::v1::encode_mapping_attributes(
+            abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
+        if (argc + envc > abi::v1::process_args_max_entries)
+            return false;
+        if (control(abi::v1::control_operation::map_frame, self_space_selector, frame_selector,
+                    args_build_address, read_write, attrs) != success)
+            return false;
+
+        auto* const header =
+            reinterpret_cast<abi::v1::process_args_header*>(static_cast<uintptr_t>(args_build_address));
+        auto* const base = reinterpret_cast<char*>(static_cast<uintptr_t>(args_build_address));
+        for (usize_t index = 0U; index < abi::v1::process_args_size; ++index)
+            base[index] = '\0';
+
+        header->magic = abi::v1::process_args_magic;
+        header->version = abi::v1::process_args_version;
+        header->argc = static_cast<u32>(argc);
+        header->envc = static_cast<u32>(envc);
+        header->bytes_offset = static_cast<u32>(sizeof(abi::v1::process_args_header));
+        header->bytes_size = 0U;
+
+        char* const bytes = base + header->bytes_offset;
+        const u32 capacity = static_cast<u32>(abi::v1::process_args_size) - header->bytes_offset;
+        u32 cursor = 0U;
+        bool overflowed = false;
+        const auto append = [&](const char* text, u32 slot) noexcept {
+            header->entries[slot] = cursor;
+            for (const char* character = text; *character != '\0'; ++character) {
+                if (cursor >= capacity) {
+                    overflowed = true;
+                    return;
+                }
+                bytes[cursor++] = *character;
+            }
+            if (cursor >= capacity) {
+                overflowed = true;
+                return;
+            }
+            bytes[cursor++] = '\0';
+        };
+        for (word_t index = 0U; index < argc && !overflowed; ++index)
+            append(argv[index], static_cast<u32>(index));
+        for (word_t index = 0U; index < envc && !overflowed; ++index)
+            append(envp[index], static_cast<u32>(argc + index));
+        header->bytes_size = cursor;
+
+        const bool unmapped = control(abi::v1::control_operation::unmap_frame, self_space_selector,
+                                      frame_selector, args_build_address) == success;
+        return !overflowed && unmapped;
+    }
+
+    /*
+     * Launches an earlyfs-resident program with arguments, into one of the
+     * bounded child slots.
+     *
+     * Order matters and is not interchangeable: the argument frame is
+     * created and filled BEFORE process_create, because filling it needs a
+     * mapping into root's own space and root must not still hold that
+     * mapping when the child starts. The mint into the child necessarily
+     * comes after, since the child's cspace does not exist until then --
+     * which is exactly the race the child's own bounded retry absorbs (see
+     * native::args_frame).
+     */
+    [[nodiscard]] inline bool spawn(word_t index, const char* path, const char* const* argv,
+                                    word_t argc, const char* const* envp, word_t envc,
+                                    word_t cpu) noexcept {
+        if (index >= dynamic_role_count)
+            return false;
+        const word_t success = static_cast<word_t>(error_t::success);
+        const child_slot slot = slot_for(index);
+        const auto* page =
+            reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
+        constexpr usize_t directory_bound = 4096U;
+        const auto found = platform::v1::earlyfs::find_span(page, directory_bound, path);
+        if (!found.found)
+            return false;
+        if (control(abi::v1::control_operation::role_image_bind, slot.role,
+                    static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success)
+            return false;
+
+        (void)control(abi::v1::control_operation::frame_destroy, slot.args_frame);
+        /* 0 selects the caller's own task, the same form create_supervisor_
+         * state() uses for root's own frames. */
+        if (control(abi::v1::control_operation::frame_create, 0U, slot.args_frame) != success)
+            return false;
+        if (!write_args_block(slot.args_frame, argv, argc, envp, envc)) {
+            (void)control(abi::v1::control_operation::frame_destroy, slot.args_frame);
+            return false;
+        }
+
+        if (control(abi::v1::control_operation::process_create, cpu, slot.role, slot.thread,
+                    slot.task, slot.space) != success) {
+            (void)control(abi::v1::control_operation::frame_destroy, slot.args_frame);
+            return false;
+        }
+        /*
+         * Minted read|write even though the child maps it read-only:
+         * map_frame demands the write right on the frame capability itself
+         * to authorise mapping at all, independently of the permissions
+         * requested for the mapping (see control.hh's map_frame case). The
+         * child's mapping is still read-only, so it cannot modify its own
+         * arguments through the address it reads them at.
+         */
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        return control(abi::v1::control_operation::capability_mint, slot.task,
+                       native::args_frame, slot.args_frame, read_write) == success;
+    }
+
+    /*
+     * Collects a finished child's exit status, or reports that it is still
+     * running. Polls rather than blocks: process_wait is non-blocking by
+     * design (see its ABI comment), so a caller loops on this the way every
+     * other consumer here loops on a bounded ipc_receive timeout.
+     */
+    struct reaped {
+        bool exited;
+        word_t status;
+    };
+
+    [[nodiscard]] inline reaped reap(word_t index) noexcept {
+        if (index >= dynamic_role_count)
+            return {false, 0U};
+        const child_slot slot = slot_for(index);
+        word_t status = 0U;
+        const word_t result =
+            control_result1(status, abi::v1::control_operation::process_wait, slot.thread);
+        if (result != static_cast<word_t>(error_t::success))
+            return {false, 0U};
+        return {true, status};
+    }
+
+    /*
+     * Launches bin/argv-probe and checks the status it reports back.
+     *
+     * This is the only thing exercising the argument path, and it covers
+     * all of it at once: a role drawn from the dynamic pool, an argument
+     * block written by root, the frame minted into a child that maps and
+     * parses it itself, the runtime dispatching to the POSIX entry rather
+     * than the two-word one, and an exit status surviving back through
+     * process_wait. 42 is the probe's success code; anything else is one of
+     * its numbered failure modes (see programs/argv-probe/main.cc), so a
+     * regression identifies which link broke.
+     */
+    inline void release_child(word_t index) noexcept; // defined just below
+
+    [[nodiscard]] inline bool verify_spawn_argv() noexcept {
+        const char* const argv[] = {"argv-probe", "alpha", "beta"};
+        const char* const envp[] = {"ZILCH=1"};
+        if (!spawn(0U, "bin/argv-probe", argv, 3U, envp, 1U, 1U))
+            return false;
+        /*
+         * Bounded poll rather than a blocking wait, matching every other
+         * consumer here. Generous because the child is on another CPU and
+         * has its own bounded retry to get through before it even runs.
+         */
+        reaped outcome{};
+        for (word_t attempt = 0U; attempt < 2000000U && !outcome.exited; ++attempt)
+            outcome = reap(0U);
+        release_child(0U);
+        return outcome.exited && outcome.status == 42U;
+    }
+
+    /*
+     * Releases a reaped child's slot so the next spawn can reuse it. Must
+     * follow reap(), not replace it: destroying the bundle discards the
+     * status along with the thread.
+     */
+    inline void release_child(word_t index) noexcept {
+        if (index >= dynamic_role_count)
+            return;
+        const child_slot slot = slot_for(index);
+        (void)control(abi::v1::control_operation::process_destroy, slot.thread);
+        (void)control(abi::v1::control_operation::frame_destroy, slot.args_frame);
     }
 
     /*
@@ -1147,6 +1391,7 @@ namespace sys::root_graph
                                                              : "block-service FAILED\n");
                     if (block_state == block_check::failed)
                         return 8;
+                    report(verify_spawn_argv() ? "spawn-argv verified\n" : "spawn-argv FAILED\n");
                     console_verified = true;
                 }
                 if (!supervisor_spawned) {

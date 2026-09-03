@@ -134,6 +134,16 @@ namespace sys::kernel::thread
         fault::record last_fault{};
         fault::disposition fault_disposition{fault::disposition::pending};
         volatile bool executing{};
+        /*
+         * thread_exit's status argument used to be accepted and discarded:
+         * a supervisor learned that a child had exited, from the exit
+         * badge, but never learned what it exited with. A shell reporting
+         * `$?` needs the code itself, so it is retained here until the slot
+         * is reused. `exited` is what distinguishes "ran and returned 0"
+         * from "has not finished", which a zero status alone cannot.
+         */
+        word_t exit_status{};
+        volatile bool exited{};
     };
 
     [[nodiscard]] inline constexpr u64 initial_fuzz_seed(thread_id_t id) noexcept {
@@ -157,6 +167,15 @@ namespace sys::kernel::thread
         value.pending_badge = 0U;
         value.ipc_badge = 0U;
         value.pending_ipc_kind = static_cast<u8>(pending_ipc::none);
+        /*
+         * Cleared here rather than at teardown because a thread that calls
+         * thread_exit is not torn down: it sits terminated, holding its
+         * status, until its parent reads it and destroys the bundle. Only
+         * the slot's next occupant must not inherit that, and this is the
+         * one place every creation path passes through.
+         */
+        value.exit_status = 0U;
+        __atomic_store_n(&value.exited, false, __ATOMIC_RELEASE);
         for (usize_t index = 0U; index < 4U; ++index) {
             value.pending_message[index] = 0U;
         }

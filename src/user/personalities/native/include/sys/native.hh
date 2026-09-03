@@ -50,6 +50,29 @@ namespace sys::native
     inline constexpr capability_id_t service_endpoint = 11U;
 
     /*
+     * A spawner mints the argument block's frame here, and the new process
+     * maps it at args_address itself.
+     *
+     * The child maps it rather than receiving it pre-mapped because a
+     * process's address space does not exist until process_create returns,
+     * so the spawner cannot populate it beforehand -- and the child can
+     * start running before the spawner's follow-up call lands. Handing over
+     * a capability makes that race an ordinary bounded retry (the same one
+     * every driver already runs for its root-minted capabilities) instead
+     * of a fault on an address that is not mapped yet.
+     *
+     * Absence is the signal for "no arguments": nothing is minted, the
+     * lookup fails, and the program falls back to the two-word entry.
+     */
+    inline constexpr capability_id_t args_frame = 16U;
+    /*
+     * Immediately above the four scratch pages, all of which sit above the
+     * stack. See root_graph.hh for why that region and not the image
+     * window.
+     */
+    inline constexpr word_t args_address = 0x20054000U;
+
+    /*
      * Signalled to root_notification when bring-up fails. Distinct from the
      * per-service ready badges in abi::v1 (bits 0..7), which root sums into
      * its expected mask.

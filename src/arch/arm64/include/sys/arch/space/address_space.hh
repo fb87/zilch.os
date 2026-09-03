@@ -131,7 +131,16 @@ namespace sys::arch::space
      * introduced and proven before address_space::initialize() was cut
      * over to it.
      */
-    inline constexpr word_t maximum_role_bindings = 16U;
+    /*
+     * Nine roles are bound statically at boot; the rest of the table is the
+     * pool a spawner draws from for dynamically launched programs, one
+     * binding per live child. Sixteen was enough while exactly one dynamic
+     * role existed (root_graph.hh's old single dynamic_launch_role, which
+     * meant two dynamically launched programs could not both stay
+     * relaunchable); a shell running commands needs one per concurrent
+     * child.
+     */
+    inline constexpr word_t maximum_role_bindings = 64U;
     struct role_binding {
         word_t role{};
         u64 offset{};

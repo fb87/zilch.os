@@ -65,5 +65,21 @@ namespace sys::abi::v1
          * its rings live. seL4_ARM_Page_GetAddress is the direct precedent.
          */
         frame_physical_address = 47U,
+        /*
+         * Reports whether the thread named by a1 has exited and, in
+         * result1, the status it passed to thread_exit. Returns `busy` while
+         * it is still running, so a caller polls rather than blocks -- the
+         * same shape as notification_poll, and for the same reason: this
+         * kernel has no blocking wait primitive, and adding a new blocking
+         * state to the scheduler is a much larger change than a supervisor
+         * looping on a bounded ipc_receive timeout, which is what every
+         * other consumer here already does.
+         *
+         * Takes a thread capability rather than the thread id
+         * process_create returns, so a stale reference fails closed through
+         * the ordinary generation check instead of reading whichever
+         * process later reused the slot.
+         */
+        process_wait = 48U,
     };
 } // namespace sys::abi::v1

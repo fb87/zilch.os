@@ -31,6 +31,7 @@ failures=0
 # An earlier version of this list did not, and every entry was dead.
 failure_markers=(
     "block-service FAILED"
+    "spawn-argv FAILED"
     "sup: spawn failed"
     "sup: no thread"
     "sup: bind failed"
@@ -106,6 +107,7 @@ run_profile() {
 run_profile "release (service graph)" "configs/release_defconfig" release \
     "console-server alive" \
     "block-service verified" \
+    "spawn-argv verified" \
     "graph ready"
 
 # Guest hosting: proves stage-2 trap-and-emulate through the domain manager's
