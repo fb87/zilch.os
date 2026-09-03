@@ -1,7 +1,7 @@
 # Zilch Production-Readiness Checklist
 
 Status: **Authoritative project progress tracker**  
-Baseline reconciled through: **patch 0074 runtime evidence / patch 0075 documentation state**  
+Baseline reconciled through: **patch 0130 runtime evidence and documentation state**  
 Scope: **Production-ready L4-style kernel and ARM64 hypervisor**  
 Rule: **No profile, model, mock, bounded fixture, or self-test may be counted as product completion unless the real production mechanism exists and the required evidence is attached.**
 
@@ -78,11 +78,11 @@ Every completed requirement must link to:
 - [x] **PRD-004** Ensure production kernel boots with all self-test options disabled. Runtime evidence: release boot reports `selftests=disabled`.
 - [x] **PRD-005** Ensure production binary contains no profile-specific guest images or test fixtures. Evidence: release ELF symbol/string gate in batch 0079.
 - [x] **PRD-006** CI defines independent ARM64 certification-boot and release jobs, plus AMD64 compile-only, ABI, boundary, sanitizer, documentation, permission, stack, and reproducibility gates.
-- [ ] **PRD-019** A top-level Kconfig hierarchy generates `.config`, `auto.conf`, and `autoconf.h`; generated configuration is the sole source of `CONFIG_*` values for Make, C, C++, and assembly.
-- [ ] **PRD-020** Checked-in debug and release defconfigs replace the development/certification/release variant set; debug enables tests and diagnostics, while release makes every test/debug option unavailable.
-- [ ] **PRD-021** Release compiler flags exclude debug information and enable product optimization; release source/ELF gates reject tests, traces, debug strings, fixtures, and DWARF sections.
-- [ ] **PRD-022** Kconfig exposes generic built-in, external, interactive, and per-sample guest enablement without making an external guest toolchain a core build dependency.
-- [ ] **PRD-023** Guest examples live under `samples/guests/<name>/` with sample-local pinned fetch, nested toolchain shell, build, output, and acceptance ownership; the root release build succeeds with no sample fetched.
+- [x] **PRD-019** A top-level Kconfig hierarchy generates `.config`, `auto.conf`, and `autoconf.h`; generated configuration is the sole source of `CONFIG_*` values for Make, C, C++, and assembly. Evidence: root `Kconfig` sources `src/kernel/Kconfig`, `src/user/Kconfig`, and `samples/guests/Kconfig`; `mk/config.mk` drives `tools/config/generate.py` to emit all three artifacts and exports the resulting `CONFIG_*` set to the submakes.
+- [-] **PRD-020** Checked-in `configs/{debug,release,guest}_defconfig` exist and select the profile through `KCONFIG_DEFCONFIG`; release makes every test/debug option unavailable (`CONFIG_TESTS`/`VERBOSE_DIAGNOSTICS`/`TRACE`/`DEBUG_INFO` all `depends on BUILD_DEBUG`). Open: the defconfigs have not yet *replaced* the variant set -- `Makefile`'s `certification`/`debug` targets still select `BUILD_VARIANT`, and `development`/`release-guest` variant trees remain live, so two selection mechanisms coexist.
+- [x] **PRD-021** Release compiler flags exclude debug information and enable product optimization; release source/ELF gates reject tests, traces, debug strings, fixtures, and DWARF sections. Evidence: `CONFIG_DEBUG_INFO` is `default y if BUILD_DEBUG` only; `tools/release/check_production_elf.sh` fails on any `.debug_`/`.zdebug_` section, alongside `check_production_source.sh` and `check_section_permissions.sh`.
+- [x] **PRD-022** Kconfig exposes generic built-in, external, interactive, and per-sample guest enablement without making an external guest toolchain a core build dependency. Evidence: `CONFIG_GUEST_SUPPORT`/`GUEST_TEST_ARM64`/`GUEST_EXTERNAL`/`GUEST_EMBEDDED_IMAGE`/`GUEST_INTERACTIVE` in `src/user/Kconfig`, with `samples/guests/Kconfig` adding per-sample `GUEST_ZEPHYR`/`GUEST_LINUX`/`GUEST_FREEBSD` gated on `GUEST_EXTERNAL`.
+- [x] **PRD-023** Guest examples live under `samples/guests/<name>/` with sample-local pinned fetch, nested toolchain shell, build, output, and acceptance ownership; the root release build succeeds with no sample fetched. Evidence: `samples/guests/zephyr/` owns its own Kconfig, pinned fetch, and `acceptance` target; the only `samples/` reference in the root build is the checked-in `samples/guests/Kconfig` on `KCONFIG_SOURCES`, so no sample tree is a build input.
 
 ## 1.2 ABI cleanup
 
@@ -350,7 +350,8 @@ Every completed requirement must link to:
 - [ ] **USR-021** IRQ broker implemented. Still open as a *broker*: there is no generic registration/arbitration layer. Two concrete userspace IRQ consumers now exist and share the same fixed pattern (root-gated `interrupt_create` in root, `capability_mint` into the owner, then `interrupt_bind` to a notification and `interrupt_ack` after servicing) -- the domain manager's manifest-driven guest IRQ forwarding, and the serial driver's real PL011 RX interrupt (USR-022). Both hardcode their own IRQ numbers and own their own notification; nothing enumerates, arbitrates, or delegates IRQs as a policy layer, which is what this item requires.
 - [x] **USR-022** Userspace UART driver implemented, and now split out of the console service into its own PL3 process (`src/user/drivers/serial/main.cc`, role `0x107`, wired like memory-server via a direct `process_create` outside the fixed five-slot `control_plane_role` loop since it is not a control-plane role). It exclusively owns the physical PL011: claims the root-minted device frame (`device_frame_create` is root-gated), configures `CR = UARTEN|TXE|RXE` (QEMU's PL011 model accepts TX regardless but gates RX behind `CR.RXE`), and drives real hardware with zero kernel `printk` involvement. **RX is now interrupt-driven rather than polled**: the driver unmasks `IMSC.RXIM`, binds a root-minted IRQ capability to its own notification (`interrupt_create` is root-gated, `interrupt_bind`/`interrupt_ack` are not), and drains the hardware FIFO into a 64-byte ring buffer only when the GIC has actually signaled, instead of re-reading `FR.RXFE` on every loop wakeup. The IRQ number was read off this platform's real device tree rather than assumed -- `pl011@9000000` declares `interrupts = <0 1 4>`, i.e. GIC SPI 1 = INTID 33, level-triggered. Proven end to end: with the driver instrumented, typing `help` at the guest shell fired the interrupt exactly once and drained exactly five bytes (`help\r`), which also demonstrates why the ring buffer is required -- the previous single-pending-byte scheme would have dropped four of those five. Serves a private `serial_operation` ABI (`include/abi/sys/v1/serial.hh`) to its one client, the console server. **Known limitation:** the driver still wakes on a bounded `ipc_receive` timeout rather than sleeping on the interrupt, because this kernel has no blocking-wait syscall for notifications (`notification_poll` is an instant read-and-clear); what the interrupt buys is that FIFO-drain work happens only on real signals, plus correct `IMSC`/ack lifecycle and multi-byte capture. Not covered by restart-on-fault (no `service_policy` entry), same boundary already drawn for memory-server.
 - [x] **USR-023** Console server implemented (`src/user/servers/console/main.cc`): serves `health`/`describe`/`stop`/`write` (string)/`write_byte`/`read_byte` over IPC. It no longer touches hardware at all -- hardware ownership moved to the serial driver (USR-022) and the console server is now a pure IPC relay, **split across two independent threads**: the main thread serves `write`/`write_byte`/`health`/`describe`/`stop` on its existing service endpoint, and a second thread (spawned by the server itself via `thread_create` under reserved role `0x108`, bound to console-server's own binary -- the same mechanism root uses for its supervision thread) serves `read_byte` on a dedicated stdin endpoint. Neither thread shares state with the other; each only forwards its own operation type to the driver, so no cross-thread coordination is needed. `console_client.hh` keeps the same three functions -- only the endpoint value callers pass for `read_byte` changed, and the domain manager now holds a second console capability for it. Two genuine bugs surfaced during this split, both first reachable only because it is the first use of `thread_create` by a non-root task: boot hung nondeterministically (2 of 6 runs) because the stdin thread could spawn before root minted its endpoint, then spin hot on a failing capability resolution and starve its CPU -- fixed by waiting for the capability to resolve before spawning (6/6 after, 4/4 on re-check); and `destroy_user_bundle()` tore down only the thread named by `thread_selector`, leaving sibling threads of the same task pointing at a task object about to be unregistered and reused, which surfaced as a real `process_lifecycle_invariants` failure and is now fixed by tearing down every thread sharing the task. Originally verified end to end via `samples/guests/zephyr`'s `acceptance` target in release mode (`make MODE=release acceptance`, exit 0): guest boots, prints its banner, and its interactive shell responds correctly to a scripted `help` command through the entire real userspace-mediated I/O path (vPL011 MMIO trap/decode/resume, TX forwarding, RX polling, virtual IRQ 33 injection). Debug-mode (`CONFIG_VERBOSE_DIAGNOSTICS=y`) acceptance is functionally identical but its scripted exact-string grep fails on unrelated trace-log interleaving (`console_puts` in `arch/arm64/include/sys/arch/hypervisor.hh`'s per-guest-exit `[HV-TRAP]` diagnostic, pre-existing, now firing far more often since vPL011 makes every guest UART touch a real MMIO exit) -- not a functional gap, just a noisy debug config not designed for scripted matching. vPL011 TX now batches into a 23-byte local FIFO (`domain/main.cc`'s `vpl011::tx_buffer`) flushed via the console-server's existing string `write` op on buffer-full or guest idle (`wait`/`virtual_timer` exit), instead of one blocking IPC round-trip to the console-server per guest register write -- fixes serial output that was visibly slow under QEMU TCG emulation, since every character previously paid two full context switches. `forward_console_input()`'s RX poll (a blocking IPC call to the console-server) is now only invoked on genuinely idle exits (`wait`/`virtual_timer`), not on every mmio exit as it originally was -- measured via a host-side PTY timing harness capturing the `help` command's full response: unthrottled, 1219 bytes over 2.445s (499 B/s); idle-gated, the same 1219 bytes over 0.760s (1604 B/s, 3.2x). The guest's TX poll pattern (read `FR`, write `DR`) produces two mmio exits per output byte, so calling this on every exit taxed every single register access, not just genuine RX checks; gating it to idle exits keeps RX responsiveness between characters (the console-server and real hardware FIFO both cushion a few bytes typed mid-burst) without paying that cost during an active print. Remaining latency is consistent with QEMU TCG guest-CPU emulation speed (string formatting/shell processing between print segments), not I/O virtualization overhead -- not something this layer can improve further.
-- [ ] **USR-024** Driver crash and restart policy implemented.
+- [ ] **USR-024** Driver crash and restart policy implemented. Neither userspace driver is restart-covered: serial-driver (USR-022) and the block driver (USR-038) both lack a `service_policy` entry, the same boundary drawn for memory-server in USR-034, because every holder of a capability into a restarted driver would need a mid-flight re-mint. This is the one item that blocks calling the driver layer production-complete.
+- [-] **USR-038** A second real userspace driver exists: the virtio-mmio block driver (`src/user/drivers/virtio/main.cc`, role `0x109`, wired like serial-driver via a direct `process_create` outside the fixed five-slot `control_plane_role` loop). Root creates the one live virtio-mmio device frame -- exclusivity-checked against the same physical page per USR-019 -- and mints it plus GIC SPI 79 and a serial-driver endpoint into the driver, which then binds the IRQ to its own notification and acks after servicing, the same fixed pattern USR-021 notes is still not a broker. It drives a real split virtqueue and serves a private `block_operation` ABI (`include/abi/sys/v1/virtio.hh`, same non-control-plane-role convention as `serial_operation`): `info` reports capacity and sector size, `probe` returns a transport's device id/version, and `read`/`write` move whole 512-byte sectors through a shared payload frame kept deliberately separate from the virtqueue ring page, so a client holding the payload capability cannot reach the ring. Verified from a real client rather than from inside the driver: `root_graph.hh::verify_block_service()` performs a write/read sector round trip and `make smoke` gates on `block-service verified`. Open: no partition or filesystem layer, no concurrent-client policy, no restart coverage (USR-024), and only one transport is claimed.
 
 ## 7.5 Domain manager
 
@@ -541,7 +542,7 @@ Every completed requirement must link to:
 - [-] **OBS-008** A release-enabled, sequence-published bounded ring audits VM reset, mapping, run, pause/resume, stop, and teardown; device-assignment records remain open.
 - [x] **OBS-009** Emergency record format version 1, event identifiers, publication rules, and field meanings are documented.
 - [x] **OBS-010** Release logs exclude guest registers and user/guest PC, FAR, ESR, and IPA details; verbose diagnostics are restricted to development/certification builds.
-- [ ] **OBS-011** Formatted kernel records use Linux-style boot-relative `[    seconds.microseconds]` timestamps from the calibrated architectural counter; SMP record serialization includes the timestamp and severity prefix.
+- [x] **OBS-011** Formatted kernel records use Linux-style boot-relative `[    seconds.microseconds]` timestamps from the calibrated architectural counter; SMP record serialization includes the timestamp and severity prefix. Evidence: `printk.hh`'s `CONFIG_PRINTK_TIME` path, enabled by both `debug_defconfig` and `release_defconfig`; every certification and release record emits as `[    5.271927] [INFO] ...`.
 
 ---
 
@@ -562,7 +563,7 @@ Every completed requirement must link to:
 
 - [x] **TST-009** QEMU ARM64 smoke and bounded acceptance tests exist.
 - [x] **TST-010** Production configuration boots with self-tests disabled.
-- [ ] **TST-011** Real userspace service graph integration test exists.
+- [x] **TST-011** Real userspace service graph integration test exists: `tools/verification/smoke.sh` (`make smoke`) boots the two profiles the certification suite structurally cannot reach, because `CONFIG_SELFTEST=y` replaces init's `main()` and therefore never runs `root_graph.hh`'s `supervise()` -- the service graph that actually ships. It builds and boots `configs/release_defconfig` and `configs/guest_defconfig` under bounded QEMU and asserts on end state, not exit code (these profiles run forever by design): `graph ready`, `console-server alive`, `block-service verified` for the release graph, and `graph ready`, `restart ok`, `guest: loaded, serving`, `guest alive via vpl011` for the guest profile, with an explicit failure-marker list so unrelated output cannot make the assertions vacuous. This is a production-profile boot test, not a self-test, so the "no self-test counts as completion" rule does not apply. It exists because the release profile once booted for some time with its supervision thread failing to spawn -- and therefore no restart-on-fault -- while the console log looked healthy.
 - [x] **TST-012** Fault IPC and two-client pager integration test exists.
 - [ ] **TST-013** Real multi-vCPU guest integration test exists.
 - [ ] **TST-014** Concurrent two-VM execution test exists.
@@ -678,38 +679,47 @@ The hypervisor may be called **production-ready** only when all of these gates a
 
 # 15. Immediate execution order
 
+These phases track *implementation milestones* and are subordinate to the
+per-requirement sections above; where a phase and an item section disagree,
+the item section governs. Phase status is derived from the completion gates
+in sections 2 through 8, not asserted independently.
+
 ## Phase A — restore architectural discipline
 
 - [x] A1. Add test-only configuration boundaries.
 - [-] A2. Test operations are configuration-guarded; final production ABI cleanup and binary audit remain open.
-- [ ] A3. Split hypervisor implementation into production modules.
+- [x] A3. Split hypervisor implementation into production modules. Covered by PRD-013 through PRD-016: architecture-independent VM/vCPU objects, stage-2, virtual IRQ/timer, and lifecycle/VMID are each isolated in their own module.
 - [-] A4. Stable requirement IDs now exist; implementation/test/evidence links must be populated.
-- [ ] A5. Rename old profiles as verification suites, not product versions.
+- [-] A5. Renaming tracks DOC-005: model-only results now use `HV-MODEL`/`hypervisor_control_model`, but legacy profile documents still require complete renaming and archival.
 
 ## Phase B — complete kernel mechanisms
 
 - [x] B1. Capability derivation and revoke.
-- [ ] B2. Complete IPC, reply objects, transfer, timeout, cancellation.
+- [x] B2. Complete IPC, reply objects, transfer, timeout, cancellation. Covered by IPC-GATE.
 - [-] B3. Fault IPC and a two-client pager protocol exist; failure/death/concurrency policies remain open.
 - [-] B4. Allocator-backed frames/page tables and bounded reverse mappings exist; full root delegation and pressure evidence remain open.
-- [ ] B5. Production RT scheduler and scheduling-context donation.
+- [x] B5. Production RT scheduler and scheduling-context donation. Covered by SCH-GATE.
 
 ## Phase C — build the userspace OS
 
-- [ ] C1. Root resource manager.
+- [-] C1. Root resource manager launches and supervises the production service graph (USR-001, USR-003, USR-034, USR-035); explicit delegation of all allocatable RAM, a unified external management endpoint, and exit-status monitoring remain open (USR-002, USR-004, USR-005, USR-033).
 - [-] C2. Independent memory-server/pager test service exists; production service API and policies remain open.
-- [ ] C3. General earlyfs ELF/process loader is the next implementation milestone.
-- [ ] C4. Device/IRQ manager and console server.
-- [ ] C5. Domain manager/VMM and supervisor.
+- [-] C3. Earlyfs paths resolve at runtime and `launch_path()` can launch an arbitrary earlyfs-resident image (USR-013, USR-017); a general loader is still bounded to a 256 KiB image window and one concurrently-resolvable dynamic role, and TLS/argv/auxv remain deferred (USR-015).
+- [-] C4. Console server and two real drivers exist (USR-022, USR-023, USR-038); the device/IRQ *manager* does not -- no device database, no MMIO broker, no IRQ arbitration (USR-019, USR-020, USR-021), and no driver restart policy (USR-024).
+- [-] C5. Domain manager/VMM and supervisor run in production with bounded restart admission (USR-032, USR-034); production guest deployment, device-assignment policy, and the production management protocol remain open (USR-025, USR-028, USR-029).
 
 ## Phase D — complete real hypervisor execution
 
-- [ ] D1. Real secondary guest CPU entry.
-- [ ] D2. Four simultaneous EL2 guest execution loops.
-- [ ] D3. Production virtual GIC and timer.
-- [ ] D4. Real preemption and migration.
-- [ ] D5. Concurrent multi-VM execution.
-- [ ] D6. Secure teardown and VMID rollover.
+Every item below is covered by HYP-EXEC-GATE. These are execution milestones
+only; the Hypervisor 1.0 gate in section 14 additionally requires device
+assignment, SMMU, soak, and real-hardware evidence, and remains open.
+
+- [x] D1. Real secondary guest CPU entry. Covered by HYP-017.
+- [x] D2. Four simultaneous EL2 guest execution loops. Covered by HYP-018 and HYP-019.
+- [x] D3. Production virtual GIC and timer. Covered by HYP-025 through HYP-040.
+- [x] D4. Real preemption and migration. Covered by HYP-021 and HYP-022.
+- [x] D5. Concurrent multi-VM execution. Covered by HYP-023 and HYP-024.
+- [x] D6. Secure teardown and VMID rollover. Covered by HYP-013 and TST-021.
 
 ## Phase E — devices and production certification
 
@@ -830,10 +840,37 @@ Separately, default_manifest.cc (the built-in synthetic ARM64 verification
 guest's manifest, unrelated to the Zephyr sample) was still declaring a
 UART passthrough device it never actually touches (confirmed: no UART
 reference anywhere in guests/test-arm64/entry.S) -- corrected to zero
-devices, matching the guest's real needs. Newly discovered, explicitly out
-of scope here: a plain release build with no embedded guest
-(configs/release_defconfig as committed, CONFIG_GUEST_EMBEDDED_IMAGE unset)
-fails to link -- domain-manager's forward_device_irqs() references the
-guest-manifest symbol unconditionally, with no guard for the no-guest case.
-This predates this session's changes and was never previously exercised;
-worth its own pass. -->
+devices, matching the guest's real needs. This batch also recorded that a
+plain release build with no embedded guest (configs/release_defconfig,
+CONFIG_GUEST_EMBEDDED_IMAGE unset) failed to link, because
+domain-manager's forward_device_irqs() referenced the guest-manifest symbol
+unconditionally. That is now fixed, and the no-guest release profile is a
+gating build: tools/verification/smoke.sh builds and boots
+configs/release_defconfig on every `make smoke` (see TST-011). -->
+
+<!-- 0131 evidence: reconciliation pass only, no product change. The header
+baseline had drifted 56 patches behind this file's own trailing evidence
+notes. Verified against the tree and flipped: PRD-019, PRD-021, PRD-022, and
+PRD-023 (the Kconfig hierarchy, release DWARF/debug gates, per-sample guest
+enablement, and sample-local ownership all exist and were merely never
+re-scored); OBS-011 (boot-relative printk timestamps ship in both
+defconfigs); TST-011 (tools/verification/smoke.sh is a real production-
+profile service-graph test, not a self-test). PRD-020 was downgraded from
+NOT STARTED to IN PROGRESS -- the defconfigs exist but have not replaced the
+BUILD_VARIANT set, so two selection mechanisms coexist. Section 15's phase
+list contradicted the item sections it summarizes (B2/B5 unchecked against
+completed IPC and scheduler gates; all of D1-D6 unchecked against a
+completed HYP-EXEC-GATE; C1/C4 unchecked against completed root, console,
+and driver items); phases are now explicitly derived from the completion
+gates and subordinate to the item sections. Added USR-038 for the
+virtio-mmio block driver, which was live in the production service graph
+and gated by `make smoke` while having no requirement ID anywhere in this
+checklist. Re-verified while scoring: certification ledger 144 PASS / 0
+FAIL with root-only acceptance PASS, `make smoke` PASS across both
+profiles, and amd64 still builds clean but cannot boot under tools/run
+(QEMU multiboot is 32-bit only), so PLT-007's compile-only claim stands
+unchanged. Note for anyone reproducing this: the build requires the repo's
+flake devShell (`nix develop`); an ambient shell without it lacks kconfiglib
+-- leaving autoconf.h stale, which surfaces as a -Wundef error on
+CONFIG_FAULT_INJECTION -- and injects -fstack-clash-protection, which clang
+does not implement for aarch64. -->
