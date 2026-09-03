@@ -1048,6 +1048,15 @@ namespace sys::root_graph
      * its numbered failure modes (see programs/argv-probe/main.cc), so a
      * regression identifies which link broke.
      */
+    /*
+     * The pool's last role, reserved as bin/fork-probe's exec target rather
+     * than used for spawning. role_image_bind is root-gated, so a forked
+     * child cannot bind its own image; root binds this one ahead of time and
+     * the child execs it by number. programs/fork-probe/main.cc hardcodes
+     * the same value and must be kept in step.
+     */
+    inline constexpr word_t exec_probe_role = dynamic_role_base + dynamic_role_count - 1U;
+
     inline void release_child(word_t index) noexcept; // defined just below
 
     [[nodiscard]] inline bool verify_spawn_argv() noexcept {
@@ -1065,6 +1074,46 @@ namespace sys::root_graph
             outcome = reap(0U);
         release_child(0U);
         return outcome.exited && outcome.status == 42U;
+    }
+
+    /*
+     * Runs bin/fork-probe, which exercises fork and exec from inside a real
+     * process and reports 44 only if both rounds passed. Its numbered
+     * failure codes (see programs/fork-probe/main.cc) say which link broke.
+     */
+    [[nodiscard]] inline bool verify_fork_exec() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const auto* page =
+            reinterpret_cast<const u8*>(static_cast<uintptr_t>(earlyfs_scratch_address));
+        constexpr usize_t directory_bound = 4096U;
+        const auto target = platform::v1::earlyfs::find_span(page, directory_bound,
+                                                             "bin/exec-probe");
+        if (!target.found)
+            return false;
+        if (control(abi::v1::control_operation::role_image_bind, exec_probe_role,
+                    static_cast<word_t>(target.offset),
+                    static_cast<word_t>(target.size)) != success)
+            return false;
+
+        const char* const argv[] = {"fork-probe"};
+        if (!spawn(1U, "bin/fork-probe", argv, 1U, nullptr, 0U, 2U))
+            return false;
+        /*
+         * Yields a tick between polls instead of spinning: process_wait
+         * takes the global authority lock, so hammering it starves the very
+         * child being waited on. drain_fault_reports() is the yield -- it
+         * blocks on a one-tick receive -- and doubles as fault reaping,
+         * which matters here because the supervision thread that normally
+         * does it is not spawned until after this check.
+         */
+        reaped outcome{};
+        for (word_t attempt = 0U; attempt < 20000U && !outcome.exited; ++attempt) {
+            outcome = reap(1U);
+            if (!outcome.exited)
+                drain_fault_reports(nullptr);
+        }
+        release_child(1U);
+        return outcome.exited && outcome.status == 44U;
     }
 
     /*
@@ -1392,6 +1441,7 @@ namespace sys::root_graph
                     if (block_state == block_check::failed)
                         return 8;
                     report(verify_spawn_argv() ? "spawn-argv verified\n" : "spawn-argv FAILED\n");
+                    report(verify_fork_exec() ? "fork-exec verified\n" : "fork-exec FAILED\n");
                     console_verified = true;
                 }
                 if (!supervisor_spawned) {

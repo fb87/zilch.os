@@ -81,5 +81,23 @@ namespace sys::abi::v1
          * process later reused the slot.
          */
         process_wait = 48U,
+        /*
+         * Duplicates the caller into a new process. Returns success in both,
+         * distinguished by result1: the child's thread id in the parent, and
+         * zero in the child.
+         *
+         * The copy is eager -- no copy-on-write -- so it costs one physical
+         * page per mapped page. Frame-backed mappings are duplicated as
+         * private copies; device mappings are not, since a device frame is a
+         * specific MMIO page and no private copy of one exists.
+         */
+        process_fork = 49U,
+        /*
+         * Replaces the caller's image with the one bound to role a1,
+         * discarding its address space and restarting at the new entry
+         * point. The cspace survives, which is what lets a forked child
+         * arrange its capabilities and then exec.
+         */
+        process_exec = 50U,
     };
 } // namespace sys::abi::v1

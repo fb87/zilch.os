@@ -324,6 +324,21 @@ namespace sys::arch::space
         __asm__ volatile("invpcid %1, %%rax" : : "a"(1U), "m"(desc));
     }
 
+    /*
+     * fork is not available on AMD64.
+     *
+     * Duplicating an address space means copying page tables and every
+     * backing page, and this backend has no runtime at all (PLT-007) -- so
+     * such code could not be executed, let alone tested, and a plausible
+     * but unverified implementation is worse than an honest refusal.
+     * Reported as unsupported so a caller fails cleanly rather than
+     * receiving a half-built child.
+     */
+    [[nodiscard]] inline error_t clone(address_space&, const address_space&,
+                                       elf64::page_allocate_fn, elf64::page_release_fn) noexcept {
+        return error_t::unsupported;
+    }
+
     [[nodiscard]] inline constexpr bool is_guard_page(vaddr_t address) noexcept {
         return address == user_stack_base - memory::page_size;
     }

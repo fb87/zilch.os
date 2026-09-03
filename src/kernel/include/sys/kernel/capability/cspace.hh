@@ -452,6 +452,107 @@ namespace sys::kernel::capability
         return result;
     }
 
+    /*
+     * Duplicates a capability into a forked child's cspace, preserving its
+     * rights, badge and derivation parentage.
+     *
+     * Unlike derive(), this does not require the grant right. Grant governs
+     * whether a holder may *delegate* a capability to someone else, and most
+     * capabilities a process is given deliberately lack it -- a fault
+     * endpoint or a service endpoint is write-only. fork is not a
+     * delegation: the kernel is duplicating a process, and the parent's
+     * authority over capabilities it already holds is not in question. A
+     * child that could not inherit a write-only endpoint would come back
+     * unable to talk to the servers its parent was using.
+     *
+     * Parentage is still recorded, so revoking the parent's capability
+     * reaches the child's copy. Installing the reference directly would
+     * have been simpler and would have silently broken descendant revoke
+     * (CAP-013) for every forked process.
+     *
+     * The badge is carried over rather than reset, because a badged
+     * endpoint identifies its holder to a server and an inherited
+     * connection must keep answering as the same client. fork overrides the
+     * one badge that must change -- the fault endpoint's -- itself.
+     */
+    [[nodiscard]] inline error_t inherit_locked(cspace_t& destination,
+                                                capability_id_t destination_selector,
+                                                const cspace_t& source,
+                                                capability_id_t source_selector,
+                                                bool override_badge = false,
+                                                badge_t replacement_badge = 0U) noexcept {
+        u32 destination_index{};
+        u32 source_index{};
+        if (!resolve_selector(destination, destination_selector, destination_index) ||
+            !resolve_selector(source, source_selector, source_index))
+            return error_t::invalid_argument;
+        cspace_t& mutable_source = const_cast<cspace_t&>(source);
+        cspace_t* first = &destination < &mutable_source ? &destination : &mutable_source;
+        cspace_t* second = &destination < &mutable_source ? &mutable_source : &destination;
+        lock(*first);
+        if (second != first)
+            lock(*second);
+        const slot_t source_slot = slot_at(source, source_index);
+        slot_t& destination_slot = slot_at(destination, destination_index);
+        error_t result = error_t::success;
+        if (source_slot.object.type == object::type_t::none ||
+            object::resolve(source_slot.object) == nullptr) {
+            result = error_t::not_found;
+        } else if (source_slot.depth >= maximum_derivation_depth) {
+            result = error_t::invalid_argument;
+        } else if (destination_slot.object.type != object::type_t::none) {
+            result = error_t::busy;
+        } else {
+            const derivation_id_t id =
+                allocate_derivation(source_slot.derivation, source_slot.object);
+            if (id == 0U) {
+                result = error_t::no_memory;
+            } else {
+                destination_slot.object = source_slot.object;
+                destination_slot.rights = source_slot.rights;
+                destination_slot.derivation = id;
+                destination_slot.parent = source_slot.derivation;
+                destination_slot.badge = override_badge ? replacement_badge : source_slot.badge;
+                destination_slot.depth = source_slot.depth + 1U;
+                mark_occupied(destination, destination_index);
+            }
+        }
+        if (second != first)
+            unlock(*second);
+        unlock(*first);
+        return result;
+    }
+
+    [[nodiscard]] inline error_t inherit(cspace_t& destination,
+                                         capability_id_t destination_selector,
+                                         const cspace_t& source,
+                                         capability_id_t source_selector) noexcept {
+        lock_authority();
+        const error_t result =
+            inherit_locked(destination, destination_selector, source, source_selector);
+        unlock_authority();
+        return result;
+    }
+
+    /*
+     * Inheritance with a replacement badge, for the one capability a forked
+     * child must not inherit verbatim: its fault endpoint. The badge is how
+     * a fault is attributed to a thread, so a child carrying its parent's
+     * badge would have its crashes charged to the parent -- and root's
+     * restart logic decodes exactly this badge to decide what to restart.
+     */
+    [[nodiscard]] inline error_t inherit_badged(cspace_t& destination,
+                                                capability_id_t destination_selector,
+                                                const cspace_t& source,
+                                                capability_id_t source_selector,
+                                                badge_t badge) noexcept {
+        lock_authority();
+        const error_t result = inherit_locked(destination, destination_selector, source,
+                                              source_selector, true, badge);
+        unlock_authority();
+        return result;
+    }
+
     [[nodiscard]] inline error_t derive(cspace_t& destination, capability_id_t destination_selector,
                                         const cspace_t& source, capability_id_t source_selector,
                                         rights_t rights_mask, badge_t badge) noexcept {

@@ -571,6 +571,249 @@ namespace sys::kernel::thread
     }
 
     /*
+     * Duplicates the calling process into a new task, thread and address
+     * space: POSIX fork.
+     *
+     * Differs from create_user_bundle() in what fills the new space and
+     * cspace. There is no role and no ELF load -- the image, stack and
+     * frame-backed mappings are copied from the parent -- and the child's
+     * cspace starts as a copy of the parent's rather than the fixed
+     * bootstrap set, so it inherits every capability the parent held. The
+     * four self-referring slots (task, thread, space, scheduling context)
+     * are then overwritten to name the child's own objects, and the fault
+     * endpoint is re-minted with the child's badge so faults are
+     * attributable to it and not to its parent.
+     *
+     * The copy is eager: there is no copy-on-write, so a fork costs one
+     * physical page per mapped page up front. That is the honest cost of
+     * having no fault-driven sharing, and it is why fork is bounded by the
+     * frame pool.
+     */
+    [[nodiscard]] inline error_t fork_user_bundle(thread& parent,
+                                                  const arch::thread::context& parent_frame,
+                                                  capability_id_t child_selector,
+                                                  u32* allocated_id) noexcept {
+        if (parent.owner == nullptr)
+            return error_t::denied;
+        if (child_selector >= capability::cspace_slot_count)
+            return error_t::invalid_argument;
+        if (capability::slot_at(parent.owner->cspace, child_selector).object.type !=
+            object::type_t::none)
+            return error_t::busy;
+        const u32 id = find_free_user_slot(parent.pinned_cpu);
+        if (id >= user_thread_count)
+            return error_t::no_memory;
+
+        task::task& owner = user_tasks[id];
+        thread& target = user_threads[id];
+        task::initialize(owner, static_cast<space_id_t>(id));
+        /*
+         * The child lands on the next CPU rather than its parent's.
+         *
+         * There is no yield syscall here, so a parent waiting on a child
+         * spins through process_wait -- and every capability operation takes
+         * a global authority lock, so a parent spinning on its child's own
+         * CPU starves exactly the thread it is waiting for. Keeping POSIX's
+         * usual affinity would make the common fork-then-wait pattern
+         * livelock rather than merely run slowly.
+         */
+        const cpu_id_t child_cpu =
+            static_cast<cpu_id_t>((parent.pinned_cpu + 1U) % maximum_cpu_count);
+        /*
+         * Role 0 with no fuzz seed: initialize_user() would load role 0's
+         * image, which fork must not do, so the image it loads is discarded
+         * immediately below by clone(). Going through it anyway keeps every
+         * other field reset in exactly one place.
+         */
+        error_t result = initialize_user(target, static_cast<thread_id_t>(id), child_cpu, 0U, 0U);
+        if (result != error_t::success)
+            return result;
+        target.owner = &owner;
+        owner.fault_endpoint = parent.owner->fault_endpoint;
+        owner.memory_quota_pages = parent.owner->memory_quota_pages;
+
+        result = arch::space::clone(target.address_space.native, parent.address_space.native,
+                                    &memory::allocate_physical_page,
+                                    &memory::release_physical_page);
+
+        if (result == error_t::success)
+            result = object::register_dynamic_object(owner.object, object::type_t::task);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.object, object::type_t::thread);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.address_space.object,
+                                                     object::type_t::address_space);
+        if (result == error_t::success)
+            result = object::register_dynamic_object(target.scheduling_context.object,
+                                                     object::type_t::scheduling_context);
+
+        const capability::rights_t control_rights{static_cast<u32>(capability::right_t::read) |
+                                                  static_cast<u32>(capability::right_t::write) |
+                                                  static_cast<u32>(capability::right_t::grant) |
+                                                  static_cast<u32>(capability::right_t::control)};
+
+        /*
+         * Inherit the parent's capabilities, then correct the ones that must
+         * name the child. Slots 1-4 and 10 are overwritten below; 15 is the
+         * parent's memory resource, which is deliberately shared rather than
+         * re-delegated, so a forked child draws from the same quota its
+         * parent was granted instead of silently doubling it.
+         */
+        for (capability_id_t selector = 0U;
+             result == error_t::success && selector < capability::cspace_slot_count; ++selector) {
+            const capability::slot_t& source = capability::slot_at(parent.owner->cspace, selector);
+            if (source.object.type == object::type_t::none)
+                continue;
+            result = capability::inherit(owner.cspace, selector, parent.owner->cspace, selector);
+        }
+
+        const auto replace = [&](capability_id_t selector,
+                                 object::reference_t reference) noexcept -> error_t {
+            (void)capability::delete_capability(owner.cspace, selector);
+            return capability::install(owner.cspace, selector, reference, control_rights);
+        };
+        if (result == error_t::success)
+            result = replace(1U, object::reference(owner.object));
+        if (result == error_t::success)
+            result = replace(2U, object::reference(target.object));
+        if (result == error_t::success)
+            result = replace(3U, object::reference(target.address_space.object));
+        if (result == error_t::success)
+            result = replace(4U, object::reference(target.scheduling_context.object));
+        if (result == error_t::success) {
+            const capability::slot_t& fault = capability::slot_at(parent.owner->cspace, 10U);
+            if (fault.object.type != object::type_t::none) {
+                (void)capability::delete_capability(owner.cspace, 10U);
+                /*
+                 * inherit_badged, not mint: mint derives, and derivation
+                 * requires the grant right, which a write-only fault
+                 * endpoint deliberately lacks.
+                 */
+                result = capability::inherit_badged(owner.cspace, 10U, parent.owner->cspace, 10U,
+                                                    endpoint_badge(target));
+            }
+        }
+        if (result == error_t::success)
+            result = memory::clone_mappings(target.address_space, parent.address_space, owner);
+        /*
+         * Installed into the PARENT, after the child's cspace was copied, so
+         * the child does not also receive a capability to itself here -- it
+         * already has one at slot 2. Without this a parent could not wait on
+         * its own child: fork reports a thread id, and process_wait takes a
+         * capability precisely so a stale reference fails closed.
+         */
+        if (result == error_t::success)
+            result = capability::install(parent.owner->cspace, child_selector,
+                                         object::reference(target.object), control_rights);
+
+        if (result != error_t::success) {
+            (void)capability::delete_capability(parent.owner->cspace, child_selector);
+            capability::revoke_reference(object::reference(target.scheduling_context.object));
+            capability::revoke_reference(object::reference(target.address_space.object));
+            capability::revoke_reference(object::reference(target.object));
+            capability::revoke_reference(object::reference(owner.object));
+            memory::unmap_all(target.address_space);
+            memory::reclaim_task_memory(object::reference(owner.object));
+            target.address_space.release(&memory::release_physical_page);
+            if (target.scheduling_context.object.type != object::type_t::none)
+                (void)object::unregister_object(
+                    object::reference(target.scheduling_context.object));
+            if (target.address_space.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.address_space.object));
+            if (target.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target.object));
+            if (owner.object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(owner.object));
+            clear_user_bundle(target, owner);
+            return result;
+        }
+
+        /*
+         * The child resumes at the same instruction as the parent, on a copy
+         * of its register state, distinguished only by fork's return value.
+         */
+        /* Field-wise, not a struct assignment: the kernel is built
+         * -fno-builtin with no memcpy to lower an aggregate copy onto. */
+        arch::thread::copy(target.context, parent_frame);
+        /*
+         * fork reports 0 in the child and the child's thread id in the
+         * parent. Zero is unambiguous: slot 0 is the boot root thread, which
+         * is occupied from bring-up and never exits, so find_free_user_slot()
+         * cannot return it.
+         */
+        arch::syscall::set_output(target.context, 0U, static_cast<word_t>(error_t::success));
+        arch::syscall::set_output(target.context, 1U, 0U);
+
+        if (id >= active_user_thread_count)
+            __atomic_store_n(&active_user_thread_count, id + 1U, __ATOMIC_RELEASE);
+        store_state(target, state::ready);
+        if (allocated_id != nullptr)
+            *allocated_id = id;
+        return error_t::success;
+    }
+
+    /*
+     * Replaces the calling process's image with the one bound to `role`,
+     * in place: POSIX exec.
+     *
+     * The task, cspace and thread identity all survive; only the address
+     * space is rebuilt. That is what makes fork-then-exec work -- a child
+     * can arrange its capabilities (redirecting a standard stream, say) and
+     * then replace its code without losing them.
+     *
+     * Failure is not recoverable in the usual sense. Once the old address
+     * space has been torn down there is nothing to return to, so a failed
+     * load leaves the thread with image_status set and terminates it rather
+     * than resuming a process whose code has been unmapped. The one case
+     * that IS recoverable is a role with no image bound, which is checked
+     * before anything is destroyed.
+     */
+    [[nodiscard]] inline error_t exec_user_image(thread& current, arch::thread::context& frame,
+                                                 word_t role) noexcept {
+        if (current.owner == nullptr)
+            return error_t::denied;
+        /* Checked first, while the caller is still intact and can be told. */
+        const auto image = arch::space::image_for_role(role);
+        if (image.end <= image.start)
+            return error_t::not_found;
+
+        /*
+         * Drop the old address space's frame-backed mappings and pages
+         * before the space itself is reinitialised. reclaim_task_memory()
+         * is what returns the frames a heap was built from; without it an
+         * exec would leak every page the previous image had mapped, which
+         * is the same defect USR-034 found on the destroy path.
+         */
+        memory::unmap_all(current.address_space);
+        memory::reclaim_task_memory(object::reference(current.owner->object));
+
+        /*
+         * Switch to the permanent kernel root before rebuilding this space.
+         *
+         * Kernel execution currently shares TTBR0 with each user address
+         * space, and initialize() rewrites l0/l1/l2 in place -- so doing it
+         * while TTBR0 still points at them wipes the translation backing the
+         * kernel's own instruction stream, mid-syscall, on the CPU doing the
+         * rewriting. activate_kernel() exists for precisely this hazard on
+         * the teardown path; exec is the first caller that rebuilds a live
+         * space rather than retiring it.
+         */
+        arch::space::activate_kernel();
+
+        const error_t result = current.address_space.initialize(
+            static_cast<space_id_t>(current.id), role, &memory::allocate_physical_page,
+            &memory::release_physical_page);
+        if (result != error_t::success) {
+            store_state(current, state::terminated);
+            return result;
+        }
+        current.address_space.activate();
+        arch::thread::initialize_user(frame, arch::space::entry(current.address_space.native),
+                                      arch::space::stack_top(), role, 0U);
+        return error_t::success;
+    }
+
+    /*
      * Unlike create_user_bundle(), this attaches a fresh thread to the
      * CALLER's own EXISTING task instead of allocating a new one -- no
      * task_selector, no root-gating (you can only ever add a thread to

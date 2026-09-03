@@ -891,6 +891,51 @@ namespace sys::kernel::memory
             --owner.memory_pages_owned;
     }
 
+    /*
+     * Allocates a frame charged to `owner` without installing a capability
+     * for it.
+     *
+     * create_frame() below is this plus a capability install. fork needs the
+     * allocation alone: a page duplicated into a child is reachable through
+     * the child's address space, not through a selector, and it is reclaimed
+     * by reclaim_task_memory() on teardown like any other frame the task
+     * owns. Spending a child cspace slot per copied page would exhaust the
+     * 256-slot space long before the frame pool.
+     */
+    [[nodiscard]] inline error_t allocate_owned_frame(task::task& owner, frame*& result) noexcept {
+        result = nullptr;
+        error_t status = charge_page(owner);
+        if (status != error_t::success)
+            return status;
+        frame* target = nullptr;
+        for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
+            bool expected = false;
+            if (__atomic_compare_exchange_n(&frames[index].in_use, &expected, true, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                target = &frames[index];
+                break;
+            }
+        }
+        if (target == nullptr) {
+            uncharge_page(owner);
+            return error_t::no_memory;
+        }
+        status = object::register_dynamic_object(target->object, object::type_t::frame);
+        if (status == error_t::success)
+            status = assign_frame(*target, owner.address_space_id, object::reference(owner.object));
+        if (status != error_t::success) {
+            if (target->allocated)
+                (void)release_frame(*target);
+            if (target->object.type != object::type_t::none)
+                (void)object::unregister_object(object::reference(target->object));
+            __atomic_store_n(&target->in_use, false, __ATOMIC_RELEASE);
+            uncharge_page(owner);
+            return status;
+        }
+        result = target;
+        return error_t::success;
+    }
+
     [[nodiscard]] inline error_t create_frame(task::task& owner,
                                               capability_id_t destination) noexcept {
         if (destination >= capability::cspace_slot_count)
@@ -1523,6 +1568,93 @@ namespace sys::kernel::memory
         }
         unlock_mappings();
         return first_error;
+    }
+
+    /*
+     * Gives `destination` a private copy of every frame-backed page mapped
+     * into `source`, at the same addresses with the same permissions and
+     * attributes, charged to `owner`.
+     *
+     * fork needs this because arch::space::clone() deliberately copies only
+     * the address-space-owned image and stack; everything a process mapped
+     * for itself -- a heap above all -- lives in frames whose mapping
+     * records, quota and teardown belong to this layer.
+     *
+     * The parent's mappings are snapshotted under the mapping lock and
+     * copied after releasing it, because map() takes the same lock. The
+     * snapshot is bounded: a fork duplicates at most this many mapped
+     * pages, and reports no_memory rather than silently producing a child
+     * missing part of its address space.
+     *
+     * Device mappings are skipped, not copied. A device frame is a specific
+     * physical MMIO page, so there is no such thing as a private copy of
+     * one -- duplicating it would either alias the hardware silently or
+     * hand the child a copy of stale register values. A forked child that
+     * needs a device inherits the capability and maps it deliberately.
+     */
+    inline constexpr u32 maximum_cloned_mappings = 64U;
+
+    [[nodiscard]] inline error_t clone_mappings(space::address_space& destination,
+                                                const space::address_space& source,
+                                                task::task& owner) noexcept {
+        struct snapshot_entry {
+            paddr_t physical;
+            vaddr_t address;
+            permission permissions;
+            mapping_attributes attributes;
+        };
+        /* Left uninitialised on purpose: a value-initialised array lowers to
+         * a memset the kernel has no definition for, and only the first
+         * `count` entries are ever read. */
+        snapshot_entry snapshot[maximum_cloned_mappings];
+        u32 count = 0U;
+        bool overflowed = false;
+
+        const object::reference_t space_reference = object::reference(source.object);
+        lock_mappings();
+        for (auto& candidate : frames) {
+            if (!candidate.allocated || candidate.mapping_count == 0U || candidate.device)
+                continue;
+            for (const auto& mapping : candidate.mappings) {
+                if (!mapping.valid || !same_reference(mapping.address_space, space_reference))
+                    continue;
+                if (count >= maximum_cloned_mappings) {
+                    overflowed = true;
+                    break;
+                }
+                snapshot[count++] = {candidate.physical_address, mapping.address,
+                                     mapping.permissions, mapping.attributes};
+            }
+            if (overflowed)
+                break;
+        }
+        unlock_mappings();
+        if (overflowed)
+            return error_t::no_memory;
+
+        for (u32 index = 0U; index < count; ++index) {
+            frame* copy = nullptr;
+            error_t status = allocate_owned_frame(owner, copy);
+            if (status != error_t::success)
+                return status;
+            auto* out = reinterpret_cast<volatile u64*>(
+                static_cast<uintptr_t>(copy->physical_address));
+            const auto* in =
+                reinterpret_cast<const volatile u64*>(static_cast<uintptr_t>(snapshot[index].physical));
+            for (u32 word = 0U; word < page_size / sizeof(u64); ++word)
+                out[word] = in[word];
+            /*
+             * Zero authorities: this mapping was not established through a
+             * capability invocation, so no derivation owns it. A capability
+             * revoke therefore cannot unmap it -- process teardown does,
+             * through unmap_all() and reclaim_task_memory().
+             */
+            status = map(destination, *copy, snapshot[index].address, snapshot[index].permissions,
+                         0U, 0U, snapshot[index].attributes);
+            if (status != error_t::success)
+                return status;
+        }
+        return error_t::success;
     }
 
     inline void unmap_all(space::address_space& target) noexcept {

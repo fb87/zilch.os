@@ -729,6 +729,22 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
+            case abi::v1::control_operation::process_fork: {
+                u32 child = 0U;
+                result = thread::fork_user_bundle(current, frame,
+                                                  static_cast<capability_id_t>(a1), &child);
+                if (result == error_t::success) {
+                    arch::syscall::set_output(frame, 1U, child);
+                    platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
+                }
+                break;
+            }
+            case abi::v1::control_operation::process_exec: {
+                result = thread::exec_user_image(current, frame, a1);
+                if (result == error_t::success)
+                    return true; // frame now holds the new image's entry state
+                break;
+            }
             case abi::v1::control_operation::process_wait: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, static_cast<capability_id_t>(a1),

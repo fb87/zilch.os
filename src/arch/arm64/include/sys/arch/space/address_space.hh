@@ -489,6 +489,86 @@ namespace sys::arch::space
         return value.image_status;
     }
 
+    /*
+     * Duplicates the private, address-space-owned memory of `source`: its
+     * ELF image pages and its stack, each into freshly allocated physical
+     * pages with the same permissions.
+     *
+     * Deliberately does NOT touch frame-backed mappings. Those pages belong
+     * to frame objects in the memory manager, which owns their mapping
+     * records, quota accounting and teardown; installing descriptors for
+     * them here would create page-table entries the mapping database does
+     * not know about, so nothing would ever unmap or reclaim them.
+     * Duplicating those is memory::clone_mappings()' job, and fork does
+     * both.
+     */
+    [[nodiscard]] inline error_t clone(address_space& destination, const address_space& source,
+                                       elf64::page_allocate_fn allocate_page,
+                                       elf64::page_release_fn release_page) noexcept {
+        release_image_backing(destination, release_page);
+        release_dynamic_tables(destination, release_page);
+        release_stack_backing(destination, release_page);
+
+        asid::handle identifier{};
+        const error_t asid_result = asid::allocate(identifier);
+        if (asid_result != error_t::success)
+            return asid_result;
+        destination.asid = identifier.value;
+        destination.asid_generation = identifier.generation;
+        destination.active_cpu_mask = 0U;
+        memory::build_kernel_table(destination.l0, destination.l1, destination.l2);
+        memory::clear(destination.l3);
+        const usize_t code_l2 = static_cast<usize_t>((user_code >> 21U) & 0x1ffU);
+        destination.l2.entry[code_l2] = memory::table_descriptor(destination.l3);
+        destination.image_entry = source.image_entry;
+        destination.image_status = source.image_status;
+
+        const auto copy_page = [](paddr_t to, paddr_t from) noexcept {
+            auto* out = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(to));
+            const auto* in = reinterpret_cast<const volatile u64*>(static_cast<uintptr_t>(from));
+            for (usize_t index = 0U; index < memory::page_size / sizeof(u64); ++index)
+                out[index] = in[index];
+        };
+
+        const usize_t first_index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
+        for (usize_t page = 0U; page < elf64::bootstrap_pages; ++page) {
+            destination.image_permissions[page] = source.image_permissions[page];
+            if (!source.image_permissions[page].present || source.image_backing[page] == 0U)
+                continue;
+            paddr_t physical = 0U;
+            if (allocate_page(physical) != error_t::success || physical == 0U)
+                return error_t::no_memory;
+            destination.image_backing[page] = physical;
+            copy_page(physical, source.image_backing[page]);
+            /* The copy went out through the data path; the child may execute
+             * these bytes, so they have to reach the instruction path too. */
+            synchronize_instruction_cache(reinterpret_cast<void*>(static_cast<uintptr_t>(physical)),
+                                          memory::page_size);
+            const auto permission = source.image_permissions[page];
+            u64 descriptor = (physical & ~0xfffULL) | memory::descriptor_page |
+                             memory::access_flag | memory::inner_shareable | memory::attr_normal;
+            descriptor |= permission.writable ? memory::ap_el0_rw : memory::ap_el0_ro;
+            if (!permission.executable)
+                descriptor |= memory::pxn | memory::uxn;
+            destination.l3.entry[first_index + page] = descriptor;
+        }
+
+        const usize_t stack_index = static_cast<usize_t>((user_stack_base >> 12U) & 0x1ffU);
+        for (usize_t page = 0U; page < user_stack_pages; ++page) {
+            paddr_t physical = 0U;
+            if (allocate_page(physical) != error_t::success || physical == 0U)
+                return error_t::no_memory;
+            destination.stack_backing[page] = physical;
+            if (source.stack_backing[page] != 0U)
+                copy_page(physical, source.stack_backing[page]);
+            destination.l3.entry[stack_index + page] =
+                (physical & ~0xfffULL) | memory::descriptor_page | memory::access_flag |
+                memory::inner_shareable | memory::attr_normal | memory::ap_el0_rw | memory::pxn |
+                memory::uxn;
+        }
+        return error_t::success;
+    }
+
     inline void activate(address_space& value) noexcept {
         asid::handle identifier{value.asid, value.asid_generation};
         if (asid::refresh(identifier) != error_t::success)
