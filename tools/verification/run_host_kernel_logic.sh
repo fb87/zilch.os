@@ -1,5 +1,18 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
+#
+# Compiles and natively runs tests/host/kernel_logic.cc with ASan/UBSan on
+# whatever machine invokes this script. It used to point at
+# src/arch/amd64/include for the sys::arch::* headers the portable kernel
+# logic under test transitively includes -- which happened to compile and
+# run correctly on an x86_64 host (amd64's cpu.hh uses `cpuid`, unprivileged
+# on x86) but failed to assemble at all on an aarch64 host ("=a" is not a
+# valid register constraint for that target). src/arch/host/include exists
+# so this script, and the CI/local host it runs on, no longer needs to be
+# x86_64 to exercise this test -- see that tree's cpu.hh for the fuller
+# story, including why simply using the host's OWN native arch tree instead
+# would have been worse on aarch64, not better (arm64's cpu.hh reads an
+# EL1-only register that SIGILLs from an ordinary process).
 set -eu
 
 root=${1:?source root required}
@@ -15,7 +28,7 @@ mkdir -p "$profiles"
   -fprofile-instr-generate -fcoverage-mapping \
   -I"$root/include" -I"$root/include/abi" \
   -I"$root/src/user/include" \
-  -I"$root/src/kernel/include" -I"$root/src/arch/amd64/include" \
+  -I"$root/src/kernel/include" -I"$root/src/arch/host/include" \
   "$root/tests/host/kernel_logic.cc" -o "$binary"
 
 LLVM_PROFILE_FILE="$profiles/logic.profraw" \

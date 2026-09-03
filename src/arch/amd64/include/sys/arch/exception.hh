@@ -22,10 +22,10 @@ namespace sys::arch::exception
         u64 r15;
         u64 vector;
         u64 error_code;
-        u64 instruction_pointer;  /* rip */
+        u64 instruction_pointer; /* rip */
         u64 cs;
-        u64 status;               /* rflags */
-        u64 stack_pointer;        /* rsp */
+        u64 status;        /* rflags */
+        u64 stack_pointer; /* rsp */
         u64 ss;
     };
 

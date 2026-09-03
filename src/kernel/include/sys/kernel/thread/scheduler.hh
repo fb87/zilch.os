@@ -619,7 +619,8 @@ namespace sys::kernel::thread
             space_selector >= capability::cspace_slot_count || thread_selector == space_selector) {
             return error_t::invalid_argument;
         }
-        if (capability::slot_at(owner.cspace, thread_selector).object.type != object::type_t::none ||
+        if (capability::slot_at(owner.cspace, thread_selector).object.type !=
+                object::type_t::none ||
             capability::slot_at(owner.cspace, space_selector).object.type != object::type_t::none)
             return error_t::busy;
 
@@ -650,9 +651,9 @@ namespace sys::kernel::thread
             result = capability::install(owner.cspace, thread_selector,
                                          object::reference(target.object), control_rights);
         if (result == error_t::success)
-            result = capability::install(owner.cspace, space_selector,
-                                         object::reference(target.address_space.object),
-                                         control_rights);
+            result =
+                capability::install(owner.cspace, space_selector,
+                                    object::reference(target.address_space.object), control_rights);
 
         if (result != error_t::success) {
             (void)capability::delete_capability(owner.cspace, thread_selector);
@@ -661,7 +662,8 @@ namespace sys::kernel::thread
             capability::revoke_reference(object::reference(target.address_space.object));
             capability::revoke_reference(object::reference(target.object));
             if (target.scheduling_context.object.type != object::type_t::none)
-                (void)object::unregister_object(object::reference(target.scheduling_context.object));
+                (void)object::unregister_object(
+                    object::reference(target.scheduling_context.object));
             if (target.address_space.object.type != object::type_t::none)
                 (void)object::unregister_object(object::reference(target.address_space.object));
             if (target.object.type != object::type_t::none)
@@ -1042,7 +1044,8 @@ namespace sys::kernel::thread
             return result;
         return error_t::success;
 #else
-        /* amd64: selftest harness will be added in Phase 12 once architecture features are complete */
+        /* amd64: selftest harness will be added in Phase 12 once architecture features are complete
+         */
         return error_t::success;
 #endif
     }
@@ -1575,7 +1578,7 @@ namespace sys::kernel::thread
         user_threads[first].address_space.activate();
         arch::thread::enter_user(user_threads[first].context);
     }
-#else /* !__aarch64__ (amd64) */
+#else  /* !__aarch64__ (amd64) */
     [[noreturn]] inline void enter_first_user_thread() noexcept {
         sys_kernel_user_idle();
     }

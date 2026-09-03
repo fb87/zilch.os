@@ -72,21 +72,19 @@ namespace sys::arch::thread
         return value.instruction_pointer >= user_code_begin &&
                value.instruction_pointer < user_code_end &&
                (value.instruction_pointer & 0x3U) == 0U &&
-               value.stack_pointer >= user_stack_begin &&
-               value.stack_pointer <= user_stack_end &&
-               (value.stack_pointer & 0xfU) == 0U &&
-               value.cs == 0x2bU && value.ss == 0x33U;
+               value.stack_pointer >= user_stack_begin && value.stack_pointer <= user_stack_end &&
+               (value.stack_pointer & 0xfU) == 0U && value.cs == 0x2bU && value.ss == 0x33U;
     }
 
     inline void initialize_user(context& value, vaddr_t entry, vaddr_t stack, word_t argument0,
                                 word_t argument1) noexcept {
         clear(value);
-        value.rdi = argument0;  /* First arg in RDI */
-        value.rsi = argument1;  /* Second arg in RSI */
+        value.rdi = argument0; /* First arg in RDI */
+        value.rsi = argument1; /* Second arg in RSI */
         value.stack_pointer = stack;
         value.instruction_pointer = entry;
-        value.cs = 0x2bU;       /* User code segment (ring 3) */
-        value.ss = 0x33U;       /* User data segment (ring 3) */
-        value.status = 0x200U;  /* RFLAGS: IF=1 (interrupts enabled), others reserved */
+        value.cs = 0x2bU;      /* User code segment (ring 3) */
+        value.ss = 0x33U;      /* User data segment (ring 3) */
+        value.status = 0x200U; /* RFLAGS: IF=1 (interrupts enabled), others reserved */
     }
 } // namespace sys::arch::thread

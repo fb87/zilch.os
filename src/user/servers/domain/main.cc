@@ -5,17 +5,15 @@
 #include <sys/guest_manifest.hh>
 #include <sys/hypervisor.hh>
 #include <sys/ipc.hh>
+#include <sys/native.hh>
+#include <sys/platform/v1/earlyfs.hh>
 #include <sys/thread.hh>
 #include <sys/types.hh>
-
-#include <sys/platform/v1/earlyfs.hh>
-
-#include <abi/sys/v1/control.hh>
-#include <abi/sys/v1/capability.hh>
-#include <sys/native.hh>
 #include <sys/vmm/elf.hh>
 #include <sys/vmm/vpl011.hh>
 
+#include <abi/sys/v1/capability.hh>
+#include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/memory.hh>
 
 namespace
@@ -103,7 +101,7 @@ namespace
     }
 
     [[nodiscard]] inline constexpr sys::word_t load_error(sys::word_t stage,
-                                                           sys::word_t status) noexcept {
+                                                          sys::word_t status) noexcept {
         return (stage << 32U) | (status & 0xffffffffU);
     }
 
@@ -113,7 +111,7 @@ namespace
 
     [[nodiscard]] inline sys::platform::v1::earlyfs::view guest_elf_view() noexcept {
         const auto size = static_cast<sys::usize_t>(sys_arm64_guest_earlyfs_image_end -
-                                                     sys_arm64_guest_earlyfs_image_start);
+                                                    sys_arm64_guest_earlyfs_image_start);
         return sys::platform::v1::earlyfs::find(sys_arm64_guest_earlyfs_image_start, size,
                                                 "guest.elf");
     }
@@ -154,20 +152,21 @@ namespace
 
         const sys::capability_id_t slot = guest_frame_base + page_index;
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
-        const sys::word_t read_write = static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
-                                       static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
+        const sys::word_t read_write =
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
         const sys::word_t attrs = sys::abi::v1::encode_mapping_attributes(
             sys::abi::v1::memory_type::normal, sys::abi::v1::memory_shareability::inner_shareable);
 
-        const sys::word_t created = sys::control(sys::abi::v1::control_operation::frame_create,
-                                                  self_task_selector, slot);
+        const sys::word_t created =
+            sys::control(sys::abi::v1::control_operation::frame_create, self_task_selector, slot);
         if (created != success) {
             load_failure = load_error(2U, created);
             return false;
         }
-        const sys::word_t mapped = sys::control(sys::abi::v1::control_operation::map_frame,
-                                                 self_space_selector, slot, scratch_address,
-                                                 read_write, attrs);
+        const sys::word_t mapped =
+            sys::control(sys::abi::v1::control_operation::map_frame, self_space_selector, slot,
+                         scratch_address, read_write, attrs);
         if (mapped != success) {
             load_failure = load_error(3U, mapped);
             (void)sys::control(sys::abi::v1::control_operation::frame_destroy, slot);
@@ -181,7 +180,7 @@ namespace
         }
 
         const sys::word_t unmapped = sys::control(sys::abi::v1::control_operation::unmap_frame,
-                                                   self_space_selector, slot, scratch_address);
+                                                  self_space_selector, slot, scratch_address);
         if (unmapped != success) {
             load_failure = load_error(4U, unmapped);
             (void)sys::control(sys::abi::v1::control_operation::frame_destroy, slot);
@@ -215,9 +214,9 @@ namespace
     inline void forward_device_irqs() noexcept {
         const auto& manifest = ::sys_arm64_domain_guest_manifest;
         sys::word_t signaled = 0U;
-        const sys::word_t polled = sys::control_result1(
-            signaled, sys::abi::v1::control_operation::notification_poll,
-            device_irq_notification_selector);
+        const sys::word_t polled =
+            sys::control_result1(signaled, sys::abi::v1::control_operation::notification_poll,
+                                 device_irq_notification_selector);
         if (polled != static_cast<sys::word_t>(sys::error_t::success) || signaled == 0U)
             return;
         for (sys::word_t index = 0U; index < manifest.device_count; ++index) {
@@ -261,7 +260,8 @@ namespace
      * arm64/include/sys/arch/hypervisor.hh), just from userspace via
      * vcpu_state_read/write instead of direct register-frame access.
      */
-    [[nodiscard]] inline bool handle_vpl011_mmio(const sys::abi::v1::vm_exit_result& exit) noexcept {
+    [[nodiscard]] inline bool
+    handle_vpl011_mmio(const sys::abi::v1::vm_exit_result& exit) noexcept {
         /*
          * exit.fault_address is populated from raw FAR_EL2, which for a
          * stage-2-only abort (guest stage-1 already translated the access)
@@ -279,8 +279,8 @@ namespace
             return false;
         const sys::word_t offset = ipa - vpl011::base_ipa;
         const bool write = ((exit.qualification >> vpl011::qualification_write_bit) & 1U) != 0U;
-        const sys::word_t target =
-            (exit.qualification >> vpl011::qualification_srt_shift) & vpl011::qualification_srt_mask;
+        const sys::word_t target = (exit.qualification >> vpl011::qualification_srt_shift) &
+                                   vpl011::qualification_srt_mask;
 
         sys::word_t value = 0U;
         if (write && target != vpl011::xzr_register) {
@@ -336,8 +336,8 @@ namespace
      * capabilities at device_frame_base/device_irq_base + index (see
      * root_graph.hh::start_embedded_guest()); this just consumes them.
      */
-    [[maybe_unused]] [[nodiscard]] inline sys::word_t map_manifest_devices(
-        const sys::guest_manifest::manifest& manifest) noexcept {
+    [[maybe_unused]] [[nodiscard]] inline sys::word_t
+    map_manifest_devices(const sys::guest_manifest::manifest& manifest) noexcept {
         const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
         bool any_irq = false;
         for (sys::word_t index = 0U; index < manifest.device_count; ++index) {
@@ -376,14 +376,13 @@ namespace
         return false;
     }
 
-    [[nodiscard]] inline sys::u32 elf_page_flags(const elf64_header& header,
-                                                  const sys::u8* begin, sys::word_t size,
-                                                  sys::word_t ipa) noexcept {
+    [[nodiscard]] inline sys::u32 elf_page_flags(const elf64_header& header, const sys::u8* begin,
+                                                 sys::word_t size, sys::word_t ipa) noexcept {
         constexpr sys::u64 section_alloc = 1U << 1U;
         constexpr sys::u64 section_write = 1U << 0U;
         constexpr sys::u64 section_execute = 1U << 2U;
-        if (header.shentsize != sizeof(elf64_section_header) ||
-            header.shoff > size || header.shnum > (size - header.shoff) / header.shentsize)
+        if (header.shentsize != sizeof(elf64_section_header) || header.shoff > size ||
+            header.shnum > (size - header.shoff) / header.shentsize)
             return 0U;
 
         const auto* sections = reinterpret_cast<const elf64_section_header*>(begin + header.shoff);
@@ -416,20 +415,18 @@ namespace
 
         const sys::word_t size = static_cast<sys::word_t>(end - begin);
         const auto* header = reinterpret_cast<const elf64_header*>(begin);
-        const bool elf = size >= sizeof(elf64_header) && header->ident[0] == 0x7fU &&
-                         header->ident[1] == 'E' && header->ident[2] == 'L' &&
-                         header->ident[3] == 'F' && header->ident[4] == 2U &&
-                         header->ident[5] == 1U && header->machine == 0xb7U &&
-                         header->version == 1U;
+        const bool elf =
+            size >= sizeof(elf64_header) && header->ident[0] == 0x7fU && header->ident[1] == 'E' &&
+            header->ident[2] == 'L' && header->ident[3] == 'F' && header->ident[4] == 2U &&
+            header->ident[5] == 1U && header->machine == 0xb7U && header->version == 1U;
 
         if (!elf) {
             entry = 0U;
             sys::word_t page_index = 0U;
             for (sys::word_t offset = 0U; offset < size; offset += guest_page_size) {
-                const sys::word_t chunk = size - offset < guest_page_size ? size - offset
-                                                                          : guest_page_size;
-                if (!stage_guest_page(page_index, offset, begin + offset, chunk,
-                                      1U | 4U)) {
+                const sys::word_t chunk =
+                    size - offset < guest_page_size ? size - offset : guest_page_size;
+                if (!stage_guest_page(page_index, offset, begin + offset, chunk, 1U | 4U)) {
                     cleanup_loaded_guest();
                     return false;
                 }
@@ -455,8 +452,8 @@ namespace
                 return false;
             }
 
-            const sys::word_t base = static_cast<sys::word_t>(program.paddr != 0U ? program.paddr
-                                                                                   : program.vaddr);
+            const sys::word_t base =
+                static_cast<sys::word_t>(program.paddr != 0U ? program.paddr : program.vaddr);
             if ((base & (guest_page_size - 1U)) != 0U) {
                 cleanup_loaded_guest();
                 return false;
@@ -468,10 +465,10 @@ namespace
                     cleanup_loaded_guest();
                     return false;
                 }
-                const sys::word_t file_remaining = program.filesz > offset ? program.filesz - offset
-                                                                           : 0U;
-                const sys::word_t chunk = file_remaining < guest_page_size ? file_remaining
-                                                                            : guest_page_size;
+                const sys::word_t file_remaining =
+                    program.filesz > offset ? program.filesz - offset : 0U;
+                const sys::word_t chunk =
+                    file_remaining < guest_page_size ? file_remaining : guest_page_size;
                 const sys::word_t ipa = base + offset;
                 const sys::u32 flags = elf_page_flags(*header, begin, size, ipa);
                 const sys::u8* source = chunk != 0U ? begin + program.offset + offset : nullptr;
@@ -544,8 +541,8 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
             const auto guest_elf = guest_elf_view();
             sys::word_t entry = 0U;
             result0 = sys::guest_manifest::valid(manifest) && guest_elf.valid() &&
-                             load_guest_image(guest_elf.data, guest_elf.data + guest_elf.size,
-                                              manifest.ram_size, entry)
+                              load_guest_image(guest_elf.data, guest_elf.data + guest_elf.size,
+                                               manifest.ram_size, entry)
                           ? map_manifest_devices(manifest)
                           : static_cast<sys::word_t>(sys::error_t::invalid_argument);
             if (result0 == static_cast<sys::word_t>(sys::error_t::success))

@@ -34,8 +34,8 @@ extern "C" void sys_amd64_exception_handler(sys::arch::exception::frame_t* frame
     }
 
     /* All other exceptions are fatal in Phase 7 */
-    pr_info("[EXCEPTION] vector=%llu error_code=%llu rip=%llx\n", vector,
-            frame->error_code, frame->instruction_pointer);
+    pr_info("[EXCEPTION] vector=%llu error_code=%llu rip=%llx\n", vector, frame->error_code,
+            frame->instruction_pointer);
 
     if (vector == 14U) {
         sys::u64 fault_addr = sys::arch::exception::fault_address();
@@ -43,7 +43,8 @@ extern "C" void sys_amd64_exception_handler(sys::arch::exception::frame_t* frame
     }
 
     __asm__ volatile("cli; hlt");
-    for (;;);
+    for (;;)
+        ;
 }
 
 extern "C" void sys_arch_link_anchor() noexcept {}

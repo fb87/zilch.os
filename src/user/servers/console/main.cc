@@ -43,9 +43,10 @@ namespace
     namespace serial
     {
         [[nodiscard]] inline sys::word_t write_byte(sys::u8 value) noexcept {
-            const auto reply = sys::ipc_call(
-                serial_endpoint, static_cast<sys::word_t>(sys::abi::v1::serial_operation::write_byte),
-                static_cast<sys::word_t>(value), 0U, 0U);
+            const auto reply =
+                sys::ipc_call(serial_endpoint,
+                              static_cast<sys::word_t>(sys::abi::v1::serial_operation::write_byte),
+                              static_cast<sys::word_t>(value), 0U, 0U);
             return reply.status;
         }
 
@@ -56,8 +57,8 @@ namespace
 
         [[nodiscard]] inline read_byte_result read_byte() noexcept {
             const auto reply = sys::ipc_call(
-                serial_endpoint, static_cast<sys::word_t>(sys::abi::v1::serial_operation::read_byte),
-                0U, 0U, 0U);
+                serial_endpoint,
+                static_cast<sys::word_t>(sys::abi::v1::serial_operation::read_byte), 0U, 0U, 0U);
             if (reply.status != static_cast<sys::word_t>(sys::error_t::success) ||
                 reply.message0 == 0U)
                 return {};
@@ -131,10 +132,9 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
     // itself rather than by root. CPU 1 deliberately: not root's CPU 0,
     // and not this server's own (console is index 2, so `index % 4` pins
     // its main thread to CPU 2).
-    if (!stdin_ready ||
-        sys::control(sys::abi::v1::control_operation::thread_create, 1U, stdin_role,
-                     stdin_thread_selector, stdin_space_selector) !=
-            static_cast<sys::word_t>(sys::error_t::success)) {
+    if (!stdin_ready || sys::control(sys::abi::v1::control_operation::thread_create, 1U, stdin_role,
+                                     stdin_thread_selector, stdin_space_selector) !=
+                            static_cast<sys::word_t>(sys::error_t::success)) {
         (void)sys::control(sys::abi::v1::control_operation::notification_signal, root_notification,
                            failure_badge);
         return 1;

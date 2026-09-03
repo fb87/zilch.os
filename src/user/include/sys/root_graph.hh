@@ -51,8 +51,8 @@ namespace sys::root_graph
      * (service_endpoint) below, same convention every other role's own
      * service endpoint already uses.
      */
-    inline constexpr capability_id_t memory_service_endpoint = endpoint_base +
-                                                               abi::v1::control_plane_role_count;
+    inline constexpr capability_id_t memory_service_endpoint =
+        endpoint_base + abi::v1::control_plane_role_count;
 
     /*
      * serial-driver, same non-control-plane-role wiring as memory-server
@@ -207,8 +207,8 @@ namespace sys::root_graph
             return false;
         word_t allocated_id = 0U;
         if (control_result1(allocated_id, abi::v1::control_operation::process_create, index % 4U,
-                            role, selector, selector + 1U, selector + 2U) !=
-            static_cast<word_t>(error_t::success))
+                            role, selector, selector + 1U,
+                            selector + 2U) != static_cast<word_t>(error_t::success))
             return false;
         if (control(abi::v1::control_operation::capability_mint, selector + 1U, service_endpoint,
                     endpoint, read_write, index + 1U) != static_cast<word_t>(error_t::success))
@@ -218,8 +218,9 @@ namespace sys::root_graph
         return true;
     }
 
-    inline constexpr word_t console_index = static_cast<word_t>(abi::v1::control_plane_role::console) -
-                                            static_cast<word_t>(abi::v1::control_plane_role::process);
+    inline constexpr word_t console_index =
+        static_cast<word_t>(abi::v1::control_plane_role::console) -
+        static_cast<word_t>(abi::v1::control_plane_role::process);
 
     /*
      * Bring-up progress reporting through console-server. supervise() had
@@ -332,8 +333,8 @@ namespace sys::root_graph
      */
     [[nodiscard]] inline bool create_block_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
-        if (control(abi::v1::control_operation::device_frame_create,
-                    block_mmio_root_frame_selector, block_mmio_physical_address) != success)
+        if (control(abi::v1::control_operation::device_frame_create, block_mmio_root_frame_selector,
+                    block_mmio_physical_address) != success)
             return false;
         // Third argument non-zero selects edge triggering, matching the
         // device tree's <0 47 1>.
@@ -359,14 +360,13 @@ namespace sys::root_graph
         const word_t write_control = static_cast<word_t>(abi::v1::CapabilityRight::write) |
                                      static_cast<word_t>(abi::v1::CapabilityRight::control);
         if (control(abi::v1::control_operation::capability_mint, block_task,
-                    block_irq_child_selector, block_irq_root_selector,
-                    write_control) != success)
+                    block_irq_child_selector, block_irq_root_selector, write_control) != success)
             return false;
         // Control as well as read/write: the driver must call
         // frame_physical_address on this to aim a virtqueue descriptor at
         // it, and that operation is gated on the control right.
-        const word_t read_write_control = read_write |
-                                          static_cast<word_t>(abi::v1::CapabilityRight::control);
+        const word_t read_write_control =
+            read_write | static_cast<word_t>(abi::v1::CapabilityRight::control);
         if (control(abi::v1::control_operation::capability_mint, block_task,
                     block_shared_child_frame_selector, block_shared_root_frame_selector,
                     read_write_control) != success)
@@ -443,17 +443,17 @@ namespace sys::root_graph
         // holds what was just put there.
         for (word_t offset = 0U; offset < abi::v1::block_sector_size; offset += 8U)
             *block_buffer(offset) = block_probe_seed ^ offset;
-        const auto wrote = ipc_call(block_service_endpoint,
-                                    static_cast<word_t>(abi::v1::block_operation::write),
-                                    block_probe_sector);
+        const auto wrote =
+            ipc_call(block_service_endpoint, static_cast<word_t>(abi::v1::block_operation::write),
+                     block_probe_sector);
         if (wrote.status != success || wrote.message0 != success)
             return block_check::failed;
 
         for (word_t offset = 0U; offset < abi::v1::block_sector_size; offset += 8U)
             *block_buffer(offset) = 0U;
-        const auto read = ipc_call(block_service_endpoint,
-                                   static_cast<word_t>(abi::v1::block_operation::read),
-                                   block_probe_sector);
+        const auto read =
+            ipc_call(block_service_endpoint, static_cast<word_t>(abi::v1::block_operation::read),
+                     block_probe_sector);
         if (read.status != success || read.message0 != success)
             return block_check::failed;
 
@@ -538,8 +538,9 @@ namespace sys::root_graph
                reply.message0 == abi::v1::control_plane_health_magic && reply.message1 == role;
     }
 
-    inline constexpr word_t domain_index = static_cast<word_t>(abi::v1::control_plane_role::domain) -
-                                           static_cast<word_t>(abi::v1::control_plane_role::process);
+    inline constexpr word_t domain_index =
+        static_cast<word_t>(abi::v1::control_plane_role::domain) -
+        static_cast<word_t>(abi::v1::control_plane_role::process);
 
 #if CONFIG_GUEST_EMBEDDED_IMAGE
     inline constexpr capability_id_t device_frame_base = 100U;
@@ -566,8 +567,8 @@ namespace sys::root_graph
             return false;
         for (word_t index = 0U; index < manifest.device_count; ++index) {
             const auto& dev = manifest.devices[index];
-            if (control(abi::v1::control_operation::device_frame_create,
-                        device_frame_base + index, dev.ipa) != success)
+            if (control(abi::v1::control_operation::device_frame_create, device_frame_base + index,
+                        dev.ipa) != success)
                 return false;
             if (dev.forward_irq == guest_manifest::no_irq)
                 continue;
@@ -611,14 +612,13 @@ namespace sys::root_graph
         for (word_t index = 0U; index < manifest.device_count; ++index) {
             const auto& dev = manifest.devices[index];
             if (control(abi::v1::control_operation::capability_mint, domain_task,
-                        device_frame_base + index, device_frame_base + index, read_write) !=
-                success)
+                        device_frame_base + index, device_frame_base + index,
+                        read_write) != success)
                 return false;
             if (dev.forward_irq == guest_manifest::no_irq)
                 continue;
             if (control(abi::v1::control_operation::capability_mint, domain_task,
-                        device_irq_base + index, device_irq_base + index, write_control) !=
-                success)
+                        device_irq_base + index, device_irq_base + index, write_control) != success)
                 return false;
         }
         if (control(abi::v1::control_operation::capability_mint, domain_task,
@@ -789,7 +789,8 @@ namespace sys::root_graph
             return false;
         }
         if (control(abi::v1::control_operation::role_image_bind, root_supervisor_role,
-                    static_cast<word_t>(found.offset), static_cast<word_t>(found.size)) != success) {
+                    static_cast<word_t>(found.offset),
+                    static_cast<word_t>(found.size)) != success) {
             report("sup: bind failed\n");
             return false;
         }
@@ -918,11 +919,11 @@ namespace sys::root_graph
             if (!mint_embedded_guest_resources())
                 return false;
             if (ipc_call(endpoint_base + domain_index,
-                        static_cast<word_t>(abi::v1::control_plane_operation::launch), 0U)
+                         static_cast<word_t>(abi::v1::control_plane_operation::launch), 0U)
                     .status != success)
                 return false;
             if (ipc_call(endpoint_base + domain_index,
-                        static_cast<word_t>(abi::v1::control_plane_operation::load), 0U)
+                         static_cast<word_t>(abi::v1::control_plane_operation::load), 0U)
                     .status != success)
                 return false;
         }
@@ -966,13 +967,13 @@ namespace sys::root_graph
         const capability_id_t domain_endpoint = endpoint_base + domain_index;
         const word_t success = static_cast<word_t>(error_t::success);
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::launch),
-                    0U)
+                     0U)
                 .status != success) {
             report("guest: launch failed\n");
             return false;
         }
         if (ipc_call(domain_endpoint, static_cast<word_t>(abi::v1::control_plane_operation::load),
-                    0U)
+                     0U)
                 .status != success) {
             report("guest: load failed\n");
             return false;
@@ -1083,10 +1084,9 @@ namespace sys::root_graph
                 return 1;
         }
 
-        const word_t expected = ((1U << abi::v1::control_plane_role_count) - 1U) |
-                                abi::v1::memory_service_ready_badge |
-                                abi::v1::serial_service_ready_badge |
-                                abi::v1::block_service_ready_badge;
+        const word_t expected =
+            ((1U << abi::v1::control_plane_role_count) - 1U) | abi::v1::memory_service_ready_badge |
+            abi::v1::serial_service_ready_badge | abi::v1::block_service_ready_badge;
         word_t ready = 0U;
         bool console_verified = false;
         bool supervisor_spawned = false;
@@ -1141,8 +1141,7 @@ namespace sys::root_graph
                 }
                 if (!supervisor_spawned) {
                     if (!spawn_supervision_thread()) {
-                        (void)console::write(endpoint_base + console_index,
-                                             "sup: spawn failed\n");
+                        (void)console::write(endpoint_base + console_index, "sup: spawn failed\n");
                         return 7;
                     }
                     supervisor_spawned = true;
@@ -1156,8 +1155,7 @@ namespace sys::root_graph
                      */
                     report("graph ready\n");
 #if CONFIG_FAULT_INJECTION
-                    report(verify_restart_on_fault(state) ? "restart ok\n"
-                                                          : "restart FAILED\n");
+                    report(verify_restart_on_fault(state) ? "restart ok\n" : "restart FAILED\n");
 #endif
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE

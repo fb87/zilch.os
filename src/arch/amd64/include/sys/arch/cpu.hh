@@ -5,8 +5,9 @@
 namespace sys::arch::cpu
 {
     inline void cpuid(u32 leaf, u32 subleaf, u32& eax, u32& ebx, u32& ecx, u32& edx) noexcept {
-        __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
-                                  : "a"(leaf), "c"(subleaf));
+        __asm__ volatile("cpuid"
+                         : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                         : "a"(leaf), "c"(subleaf));
     }
 
     [[nodiscard]] inline u32 read_apic_id() noexcept {

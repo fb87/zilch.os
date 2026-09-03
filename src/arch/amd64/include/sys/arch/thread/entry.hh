@@ -14,8 +14,8 @@ namespace sys::arch::thread
         /* Kernel idle frame: no user mode context */
         clear(value);
         value.instruction_pointer = entry;
-        value.cs = 0x08U;       /* Kernel code segment */
-        value.ss = 0x10U;       /* Kernel data segment */
-        value.status = 0x200U;  /* RFLAGS: IF=1 */
+        value.cs = 0x08U;      /* Kernel code segment */
+        value.ss = 0x10U;      /* Kernel data segment */
+        value.status = 0x200U; /* RFLAGS: IF=1 */
     }
 } // namespace sys::arch::thread

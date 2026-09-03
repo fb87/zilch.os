@@ -54,8 +54,10 @@ namespace sys::platform::interrupt
         u64 apic_base;
         __asm__ volatile("rdmsr" : "=a"(apic_base) : "c"(0x1bU) : "edx");
         apic_base |= (1ULL << 11U);
-        __asm__ volatile("wrmsr" : : "c"(0x1bU), "a"(apic_base & 0xffffffffULL),
-                         "d"((apic_base >> 32U) & 0xffffffffULL));
+        __asm__ volatile("wrmsr"
+                         :
+                         : "c"(0x1bU), "a"(apic_base & 0xffffffffULL),
+                           "d"((apic_base >> 32U) & 0xffffffffULL));
 
         /* Set LAPIC spurious interrupt vector (vector 255, APIC enable bit 8) */
         lapic_write(0xf0U, lapic_read(0xf0U) | 0x100U | 0xffU);
@@ -91,7 +93,7 @@ namespace sys::platform::interrupt
             return;
         const u32 entry_index = (irq - 32U) * 2U;
         u64 entry = static_cast<u64>(ioapic_read(entry_index)) |
-                   (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
+                    (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
         entry |= (1ULL << 16U);
         ioapic_write(entry_index, static_cast<u32>(entry));
         ioapic_write(entry_index + 1U, static_cast<u32>(entry >> 32U));
@@ -102,7 +104,7 @@ namespace sys::platform::interrupt
             return;
         const u32 entry_index = (irq - 32U) * 2U;
         u64 entry = static_cast<u64>(ioapic_read(entry_index)) |
-                   (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
+                    (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
         entry &= ~(1ULL << 16U);
         ioapic_write(entry_index, static_cast<u32>(entry));
         ioapic_write(entry_index + 1U, static_cast<u32>(entry >> 32U));
@@ -114,7 +116,7 @@ namespace sys::platform::interrupt
         const u32 entry_index = (irq - 32U) * 2U;
         const u32 cpu_id = sys::arch::cpu::read_apic_id();
         u64 entry = static_cast<u64>(ioapic_read(entry_index)) |
-                   (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
+                    (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
         entry = (entry & 0x00ffffffULL) | (static_cast<u64>(cpu_id) << 32U);
         ioapic_write(entry_index, static_cast<u32>(entry));
         ioapic_write(entry_index + 1U, static_cast<u32>(entry >> 32U));
@@ -125,7 +127,7 @@ namespace sys::platform::interrupt
             return error_t::invalid_argument;
         const u32 entry_index = (irq - 32U) * 2U;
         u64 entry = static_cast<u64>(ioapic_read(entry_index)) |
-                   (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
+                    (static_cast<u64>(ioapic_read(entry_index + 1U)) << 32U);
         entry = (entry & ~(0xfULL)) | (irq & 0xffULL);
         if (edge_triggered)
             entry &= ~(1ULL << 15U);

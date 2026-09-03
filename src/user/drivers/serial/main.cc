@@ -127,8 +127,9 @@ namespace
     }
 
     [[nodiscard]] inline bool map_uart() noexcept {
-        const sys::word_t read_write = static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
-                                       static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
+        const sys::word_t read_write =
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
+            static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
         const sys::word_t attrs = sys::abi::v1::encode_mapping_attributes(
             sys::abi::v1::memory_type::device, sys::abi::v1::memory_shareability::non_shareable);
         return native::retry([&] {
@@ -164,9 +165,9 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
 
     for (;;) {
         sys::word_t signaled = 0U;
-        const sys::word_t polled = sys::control_result1(
-            signaled, sys::abi::v1::control_operation::notification_poll,
-            irq_notification_selector);
+        const sys::word_t polled =
+            sys::control_result1(signaled, sys::abi::v1::control_operation::notification_poll,
+                                 irq_notification_selector);
         if (polled == static_cast<sys::word_t>(sys::error_t::success) && signaled != 0U)
             drain_rx();
 
@@ -175,8 +176,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         // idiom as root_graph.hh's drain_fault_reports() and
         // domain-manager's forward_device_irqs(); this codebase has no
         // blocking-wait syscall for notifications.
-        const auto request =
-            sys::ipc_receive(service_endpoint, sys::abi::v1::encode_timeout(1U));
+        const auto request = sys::ipc_receive(service_endpoint, sys::abi::v1::encode_timeout(1U));
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             continue;
         const auto operation = static_cast<sys::abi::v1::serial_operation>(request.message0);
@@ -185,7 +185,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         if (operation == sys::abi::v1::serial_operation::write) {
             const sys::word_t words[3] = {request.message1, request.message2, request.message3};
             for (sys::usize_t index = 0U; index < sys::abi::v1::console_write_max_bytes - 1U;
-                ++index) {
+                 ++index) {
                 const sys::usize_t word_index = index / 8U;
                 const sys::usize_t byte_index = index % 8U;
                 const char value =

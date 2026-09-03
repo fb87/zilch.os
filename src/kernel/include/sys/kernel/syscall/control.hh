@@ -737,9 +737,9 @@ namespace sys::kernel::syscall
                     result = error_t::denied;
                     break;
                 }
-                result = thread::create_user_thread(
-                    *current.owner, static_cast<cpu_id_t>(a1), a2, static_cast<capability_id_t>(a3),
-                    static_cast<capability_id_t>(a4));
+                result = thread::create_user_thread(*current.owner, static_cast<cpu_id_t>(a1), a2,
+                                                    static_cast<capability_id_t>(a3),
+                                                    static_cast<capability_id_t>(a4));
                 if (result == error_t::success) {
                     platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
                 }

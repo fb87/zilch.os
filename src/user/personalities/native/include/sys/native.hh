@@ -100,8 +100,7 @@ namespace sys::native
     namespace text
     {
         inline void byte(capability_id_t serial, char value) noexcept {
-            (void)ipc_call(serial,
-                           static_cast<word_t>(abi::v1::serial_operation::write_byte),
+            (void)ipc_call(serial, static_cast<word_t>(abi::v1::serial_operation::write_byte),
                            static_cast<word_t>(static_cast<u8>(value)));
         }
 

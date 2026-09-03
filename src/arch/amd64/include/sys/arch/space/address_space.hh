@@ -66,7 +66,7 @@ namespace sys::arch::space
         if (page_index >= page_count)
             return false;
         address = reinterpret_cast<paddr_t>(sys_amd64_earlyfs_image_start) +
-                 static_cast<paddr_t>(page_index) * memory::page_size;
+                  static_cast<paddr_t>(page_index) * memory::page_size;
         return true;
     }
 #else
@@ -127,7 +127,8 @@ namespace sys::arch::space
         else if (role == console_stdin_image_role)
             name = "bin/console-server";
 #if CONFIG_TESTS
-        else if (role == pager_client_image_role_base || role == pager_client_image_role_base + 1U ||
+        else if (role == pager_client_image_role_base ||
+                 role == pager_client_image_role_base + 1U ||
                  role == undefined_instruction_image_role ||
                  role == ipc_lifecycle_client_role_base ||
                  role == ipc_lifecycle_client_role_base + 1U ||
@@ -144,12 +145,12 @@ namespace sys::arch::space
         else if (role >= control_plane_image_role_base &&
                  role < control_plane_image_role_base + control_plane_image_role_count)
             name = role == domain_manager_image_role   ? "bin/domain-manager"
-                  : role == console_server_image_role ? "bin/console-server"
-                                                        : "bin/control-plane";
+                   : role == console_server_image_role ? "bin/console-server"
+                                                       : "bin/control-plane";
 
         const auto* earlyfs_begin = reinterpret_cast<const u8*>(sys_amd64_earlyfs_image_start);
-        const auto earlyfs_size = static_cast<usize_t>(sys_amd64_earlyfs_image_end -
-                                                        sys_amd64_earlyfs_image_start);
+        const auto earlyfs_size =
+            static_cast<usize_t>(sys_amd64_earlyfs_image_end - sys_amd64_earlyfs_image_start);
         const auto found = platform::v1::earlyfs::find(earlyfs_begin, earlyfs_size, name);
         if (!found.valid())
             return {sys_amd64_earlyfs_image_start, sys_amd64_earlyfs_image_start};
@@ -211,7 +212,8 @@ namespace sys::arch::space
         volatile u32 active_cpu_mask{};
     };
 
-    inline void release_image_backing(address_space& value, elf64::page_release_fn release_page) noexcept {
+    inline void release_image_backing(address_space& value,
+                                      elf64::page_release_fn release_page) noexcept {
         for (usize_t page = 0U; page < elf64::bootstrap_pages; ++page) {
             if (value.image_backing[page] != 0U) {
                 (void)release_page(value.image_backing[page]);
@@ -250,12 +252,11 @@ namespace sys::arch::space
                 const auto permission = value.image_permissions[page];
                 if (!permission.present)
                     continue;
-                auto* page_address = reinterpret_cast<void*>(
-                    static_cast<uintptr_t>(value.image_backing[page]));
+                auto* page_address =
+                    reinterpret_cast<void*>(static_cast<uintptr_t>(value.image_backing[page]));
                 synchronize_instruction_cache(page_address, memory::page_size);
                 u64 descriptor = (reinterpret_cast<u64>(page_address) & ~0xfffULL) |
-                                 memory::descriptor_page |
-                                 memory::descriptor_valid;
+                                 memory::descriptor_page | memory::descriptor_valid;
                 descriptor |= memory::ap_el0_rw;
                 if (!permission.writable)
                     descriptor &= ~memory::ap_el0_rw;
@@ -266,9 +267,9 @@ namespace sys::arch::space
         }
 
         const u64 stack_phys = reinterpret_cast<u64>(value.stack) & ~0xfffULL;
-        value.pt.entry[(user_stack_base >> 12U) & 0x1ffU] =
-            stack_phys | memory::descriptor_page | memory::descriptor_valid | memory::ap_el0_rw |
-            memory::uxn;
+        value.pt.entry[(user_stack_base >> 12U) & 0x1ffU] = stack_phys | memory::descriptor_page |
+                                                            memory::descriptor_valid |
+                                                            memory::ap_el0_rw | memory::uxn;
         return value.image_status;
     }
 

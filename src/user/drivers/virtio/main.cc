@@ -106,7 +106,8 @@ namespace
 
     /* ---- MMIO accessors ---- */
 
-    [[nodiscard]] inline volatile sys::u32* reg(sys::u32 transport, sys::uintptr_t offset) noexcept {
+    [[nodiscard]] inline volatile sys::u32* reg(sys::u32 transport,
+                                                sys::uintptr_t offset) noexcept {
         return reinterpret_cast<volatile sys::u32*>(
             mmio_scratch_address + static_cast<sys::uintptr_t>(transport) * transport_stride +
             offset);
@@ -122,13 +123,11 @@ namespace
 
     /* ---- DMA accessors ---- */
 
-    template <typename T>
-    [[nodiscard]] inline volatile T* dma(sys::uintptr_t offset) noexcept {
+    template <typename T> [[nodiscard]] inline volatile T* dma(sys::uintptr_t offset) noexcept {
         return reinterpret_cast<volatile T*>(dma_scratch_address + offset);
     }
 
-    template <typename T>
-    [[nodiscard]] inline volatile T* payload(sys::uintptr_t offset) noexcept {
+    template <typename T> [[nodiscard]] inline volatile T* payload(sys::uintptr_t offset) noexcept {
         return reinterpret_cast<volatile T*>(shared_scratch_address + offset);
     }
 
@@ -216,8 +215,7 @@ namespace
         // No frame_allocate here: create_frame already calls assign_frame,
         // so the frame comes back allocated and physically backed. Calling
         // frame_allocate on top of it correctly fails with busy.
-        const sys::error_t physical =
-            sys::frame_physical_address(dma_frame_selector, dma_physical);
+        const sys::error_t physical = sys::frame_physical_address(dma_frame_selector, dma_physical);
         if (physical != sys::error_t::success) {
             emit_text("virtio: frame_physical_address failed ");
             emit_hex(static_cast<sys::u64>(static_cast<sys::word_t>(physical)));
@@ -395,11 +393,10 @@ namespace
 
         const sys::u64 base = static_cast<sys::u64>(dma_physical);
         const sys::u16 data_flags = static_cast<sys::u16>(
-            abi::virtq_desc_next |
-            (type == abi::block_request_in ? abi::virtq_desc_write : 0U));
+            abi::virtq_desc_next | (type == abi::block_request_in ? abi::virtq_desc_write : 0U));
         write_desc(0U, base + header_offset, 16U, abi::virtq_desc_next, 1U);
-        write_desc(1U, static_cast<sys::u64>(shared_physical) + data_offset,
-                   abi::block_sector_size, data_flags, 2U);
+        write_desc(1U, static_cast<sys::u64>(shared_physical) + data_offset, abi::block_sector_size,
+                   data_flags, 2U);
         write_desc(2U, base + status_offset, 1U, abi::virtq_desc_write, 0U);
 
         // Publish the head into the available ring, then its index. The
@@ -429,9 +426,8 @@ namespace
              */
             if (interrupt_bound) {
                 sys::word_t signaled = 0U;
-                const sys::word_t polled =
-                    sys::control_result1(signaled, abi::control_operation::notification_poll,
-                                         irq_notification_selector);
+                const sys::word_t polled = sys::control_result1(
+                    signaled, abi::control_operation::notification_poll, irq_notification_selector);
                 if (polled == static_cast<sys::word_t>(sys::error_t::success) && signaled != 0U) {
                     ++interrupt_signals;
                     const sys::u32 pending = read_reg(block_transport, mmio::interrupt_status);

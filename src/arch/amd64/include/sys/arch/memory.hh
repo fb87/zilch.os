@@ -28,8 +28,8 @@ namespace sys::arch
         inline constexpr u64 attr_normal = 0ULL;       /* not applicable to x86 basic paging */
         inline constexpr u64 ap_el0_ro = 1ULL << 2U;   /* USER bit (bit 2), no WRITE bit */
         inline constexpr u64 ap_el0_rw = (1ULL << 2U) | (1ULL << 1U); /* USER + WRITE bits */
-        inline constexpr u64 pxn = 0ULL;               /* x86 NX is global, not per-privilege */
-        inline constexpr u64 uxn = 1ULL << 63U;        /* NX bit (bit 63) */
+        inline constexpr u64 pxn = 0ULL;        /* x86 NX is global, not per-privilege */
+        inline constexpr u64 uxn = 1ULL << 63U; /* NX bit (bit 63) */
 
         struct alignas(page_size) table_t {
             u64 entry[entries];
@@ -63,7 +63,7 @@ namespace sys::arch
              * Using kernel-mode read-write (PRESENT | WRITE, no USER bit).
              */
             for (usize_t i = 0U; i < 512U; ++i) {
-                const paddr_t phys = i * (2ULL << 20U);  /* 2 MiB pages */
+                const paddr_t phys = i * (2ULL << 20U); /* 2 MiB pages */
                 /* Bits: PRESENT(1) | WRITE(2) | PS(128=0x80) | ACCESSED(32=0x20) */
                 pd.entry[i] = phys | 0x183U;
             }

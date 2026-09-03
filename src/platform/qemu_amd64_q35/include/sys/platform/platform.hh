@@ -23,7 +23,6 @@ namespace sys::platform
                !interrupt::userspace_assignable(interrupt::virtual_timer_irq) &&
                memory::ram_base != 0U && (memory::ram_base & 0xfffU) == 0U &&
                (interrupt::lapic_base & 0xfffffU) == 0U &&
-               (interrupt::ioapic_base & 0xfffffU) == 0U &&
-               timer::certification_valid();
+               (interrupt::ioapic_base & 0xfffffU) == 0U && timer::certification_valid();
     }
 } // namespace sys::platform
