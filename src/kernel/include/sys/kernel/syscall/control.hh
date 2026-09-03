@@ -238,7 +238,6 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
-#if defined(__aarch64__)
             case abi::v1::control_operation::thread_exit: {
                 /*
                  * Returning from a userspace program is a one-way transition.
@@ -281,7 +280,6 @@ namespace sys::kernel::syscall
                     result = thread::quiesce_user_thread(*target);
                 break;
             }
-#endif
             case abi::v1::control_operation::map_frame: {
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -381,7 +379,6 @@ namespace sys::kernel::syscall
                     result =
                         memory::destroy_resource(*current.owner, static_cast<capability_id_t>(a1));
                 break;
-#if defined(__aarch64__)
             case abi::v1::control_operation::memory_resource_query: {
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -391,13 +388,14 @@ namespace sys::kernel::syscall
                 result = memory::resolve_resource(*current.owner, static_cast<capability_id_t>(a1),
                                                   authority);
                 if (result == error_t::success) {
-                    frame.x[1] = __atomic_load_n(&authority->used_pages, __ATOMIC_ACQUIRE);
-                    frame.x[2] = authority->quota_pages;
-                    frame.x[3] = __atomic_load_n(&authority->delegated_pages, __ATOMIC_ACQUIRE);
+                    arch::syscall::set_output(
+                        frame, 1U, __atomic_load_n(&authority->used_pages, __ATOMIC_ACQUIRE));
+                    arch::syscall::set_output(frame, 2U, authority->quota_pages);
+                    arch::syscall::set_output(
+                        frame, 3U, __atomic_load_n(&authority->delegated_pages, __ATOMIC_ACQUIRE));
                 }
                 break;
             }
-#endif
             case abi::v1::control_operation::frame_destroy:
                 if (current.owner == nullptr)
                     result = error_t::denied;
@@ -442,7 +440,6 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
-#if defined(__aarch64__)
             case abi::v1::control_operation::frame_physical_address: {
                 /*
                  * Gated on the frame's control right, not read: a task that
@@ -458,7 +455,8 @@ namespace sys::kernel::syscall
                     if (!target_frame->allocated)
                         result = error_t::not_found;
                     else
-                        frame.x[1] = static_cast<word_t>(target_frame->physical_address);
+                        arch::syscall::set_output(
+                            frame, 1U, static_cast<word_t>(target_frame->physical_address));
                 }
                 break;
             }
@@ -466,14 +464,13 @@ namespace sys::kernel::syscall
                 if (current.owner == nullptr)
                     result = error_t::denied;
                 else {
-                    frame.x[1] = current.owner->memory_pages_owned;
-                    frame.x[2] = current.owner->memory_quota_pages;
-                    frame.x[3] = memory::free_pages;
-                    frame.x[4] = memory::managed_pages;
+                    arch::syscall::set_output(frame, 1U, current.owner->memory_pages_owned);
+                    arch::syscall::set_output(frame, 2U, current.owner->memory_quota_pages);
+                    arch::syscall::set_output(frame, 3U, memory::free_pages);
+                    arch::syscall::set_output(frame, 4U, memory::managed_pages);
                     result = error_t::success;
                 }
                 break;
-#endif
             case abi::v1::control_operation::fault_reply_map: {
                 thread::thread* target = nullptr;
                 memory::frame* source = nullptr;
@@ -619,7 +616,6 @@ namespace sys::kernel::syscall
                     result = arch::space::bind_role_image(a1, static_cast<u64>(a2),
                                                           static_cast<u64>(a3));
                 break;
-#if defined(__aarch64__)
             case abi::v1::control_operation::notification_signal:
             case abi::v1::control_operation::notification_poll: {
                 if (current.owner == nullptr) {
@@ -638,12 +634,11 @@ namespace sys::kernel::syscall
                     if (operation == abi::v1::control_operation::notification_signal) {
                         notification::signal(notification, a2);
                     } else {
-                        frame.x[1] = notification::consume(notification);
+                        arch::syscall::set_output(frame, 1U, notification::consume(notification));
                     }
                 }
                 break;
             }
-#endif
             case abi::v1::control_operation::interrupt_bind: {
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -713,7 +708,6 @@ namespace sys::kernel::syscall
                 }
                 break;
             }
-#if defined(__aarch64__)
             case abi::v1::control_operation::child_create:
             case abi::v1::control_operation::process_create: {
                 if (current.owner == nullptr || !current.owner->root) {
@@ -726,12 +720,11 @@ namespace sys::kernel::syscall
                     static_cast<capability_id_t>(a4), static_cast<capability_id_t>(a5),
                     &allocated_id);
                 if (result == error_t::success) {
-                    frame.x[1] = allocated_id;
+                    arch::syscall::set_output(frame, 1U, allocated_id);
                     platform::interrupt::send_ipi_all_others(platform::interrupt::reschedule_ipi);
                 }
                 break;
             }
-#endif
             case abi::v1::control_operation::thread_create:
                 if (current.owner == nullptr) {
                     result = error_t::denied;
@@ -788,7 +781,6 @@ namespace sys::kernel::syscall
                         if (result == error_t::success)
                             result = hypervisor::stage2_unmap(*vm, a3);
                         break;
-#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::stage2_tracking_query:
                     case abi::v1::hypervisor_operation::stage2_tracking_clear: {
                         result = resolve_vm(current, a2, capability::right_t::read, vm);
@@ -799,16 +791,14 @@ namespace sys::kernel::syscall
                                 hv_operation ==
                                     abi::v1::hypervisor_operation::stage2_tracking_clear,
                                 flags);
-                        frame.x[1] = flags;
+                        arch::syscall::set_output(frame, 1U, flags);
                         break;
                     }
-#endif
                     case abi::v1::hypervisor_operation::vcpu_configure:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
                         if (result == error_t::success)
                             result = hypervisor::configure_vcpu(*vcpu, a3, a4, a5);
                         break;
-#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::vcpu_state_read:
                     case abi::v1::hypervisor_operation::vcpu_state_write: {
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
@@ -818,10 +808,9 @@ namespace sys::kernel::syscall
                                 *vcpu, static_cast<u32>(a3),
                                 hv_operation == abi::v1::hypervisor_operation::vcpu_state_write,
                                 value);
-                        frame.x[1] = value;
+                        arch::syscall::set_output(frame, 1U, value);
                         break;
                     }
-#endif
                     case abi::v1::hypervisor_operation::virtual_irq_inject:
                         result = resolve_vcpu(current, a2, capability::right_t::control, vcpu);
                         if (result == error_t::success)
@@ -894,33 +883,30 @@ namespace sys::kernel::syscall
                         if (result == error_t::success)
                             result = hypervisor::destroy_vm(*vm);
                         break;
-#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::vcpu_run: {
                         result = resolve_vcpu(current, a2, capability::right_t::execute, vcpu);
                         if (result == error_t::success) {
                             hypervisor::exit_record exit{};
                             result = hypervisor::run(*vcpu, exit);
-                            frame.x[1] = static_cast<word_t>(exit.reason);
-                            frame.x[2] = exit.syndrome;
-                            frame.x[3] = exit.fault_address;
-                            frame.x[4] = exit.guest_pc;
-                            frame.x[5] = exit.qualification;
+                            arch::syscall::set_output(frame, 1U, static_cast<word_t>(exit.reason));
+                            arch::syscall::set_output(frame, 2U, exit.syndrome);
+                            arch::syscall::set_output(frame, 3U, exit.fault_address);
+                            arch::syscall::set_output(frame, 4U, exit.guest_pc);
+                            arch::syscall::set_output(frame, 5U, exit.qualification);
                         }
                         break;
                     }
-#endif
-#if defined(__aarch64__)
                     case abi::v1::hypervisor_operation::diagnostics:
                         result = resolve_vm(current, a2, capability::right_t::read, vm);
                         if (result == error_t::success) {
-                            frame.x[1] = vm->last_diagnostic.checkpoint;
-                            frame.x[2] =
-                                static_cast<word_t>(static_cast<s64>(vm->last_diagnostic.result));
-                            frame.x[3] = vm->last_diagnostic.ipa;
-                            frame.x[4] = vm->last_diagnostic.value;
+                            arch::syscall::set_output(frame, 1U, vm->last_diagnostic.checkpoint);
+                            arch::syscall::set_output(
+                                frame, 2U,
+                                static_cast<word_t>(static_cast<s64>(vm->last_diagnostic.result)));
+                            arch::syscall::set_output(frame, 3U, vm->last_diagnostic.ipa);
+                            arch::syscall::set_output(frame, 4U, vm->last_diagnostic.value);
                         }
                         break;
-#endif
                     default:
                         result = error_t::unsupported;
                         break;

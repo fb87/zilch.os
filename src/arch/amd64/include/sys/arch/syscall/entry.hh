@@ -13,4 +13,8 @@ namespace sys::arch::syscall
         return 0U;
     }
     inline void set_result(thread::context&, word_t) noexcept {}
+
+    /* No real syscall entry yet (Phase 7): nothing ever resumes a thread
+     * expecting an out-parameter register to be populated. */
+    inline void set_output(thread::context&, usize_t, word_t) noexcept {}
 } // namespace sys::arch::syscall

@@ -20,4 +20,11 @@ namespace sys::arch::syscall
     inline void set_result(thread::context& frame, word_t result) noexcept {
         frame.x[0] = result;
     }
+
+    /* Publishes an additional (beyond the primary result in x0) return
+     * value at register index, for syscalls that report out-parameters. */
+    inline void set_output(thread::context& frame, usize_t index, word_t value) noexcept {
+        if (index < 8U)
+            frame.x[index] = value;
+    }
 } // namespace sys::arch::syscall
