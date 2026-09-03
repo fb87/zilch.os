@@ -94,6 +94,10 @@ namespace
  */
 extern "C" [[gnu::weak]] int sys_user_main(int argc, char** argv, char** envp) noexcept;
 
+/* libc's getenv() reads this; weak so a program linking no libc still
+ * links. */
+extern "C" [[gnu::weak]] char** environ;
+
 extern "C" [[noreturn]] void sys_user_entry(sys::word_t argument0, sys::word_t argument1) noexcept {
     /*
      * Which main a program defines decides the shape, not whether a block
@@ -111,6 +115,8 @@ extern "C" [[noreturn]] void sys_user_entry(sys::word_t argument0, sys::word_t a
              */
             sys_user_exit(127);
         }
+        if (&environ != nullptr)
+            environ = envp_storage;
         sys_user_exit(static_cast<sys::s32>(sys_user_main(argc, argv_storage, envp_storage)));
     }
     if (main != nullptr)

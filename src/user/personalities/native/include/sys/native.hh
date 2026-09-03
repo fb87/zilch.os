@@ -73,6 +73,24 @@ namespace sys::native
     inline constexpr word_t args_address = 0x20054000U;
 
     /*
+     * Where a process's heap begins, one page above the argument block.
+     * Everything below is fixed at link or spawn time -- image, guard,
+     * stack, scratch pages, arguments -- so the heap is the only region
+     * that grows, and it grows upward into the address space Stage 1's
+     * on-demand L3 tables opened up.
+     */
+    inline constexpr word_t heap_address = 0x20055000U;
+
+    /*
+     * Console endpoints a spawner mints so a program has standard streams.
+     * Absent for servers, which talk to their own service endpoint instead;
+     * libc reports a closed stream rather than faulting when they are not
+     * present.
+     */
+    inline constexpr capability_id_t stdout_endpoint = 17U;
+    inline constexpr capability_id_t stdin_endpoint = 18U;
+
+    /*
      * Signalled to root_notification when bring-up fails. Distinct from the
      * per-service ready badges in abi::v1 (bits 0..7), which root sums into
      * its expected mask.

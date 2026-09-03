@@ -28,6 +28,7 @@ $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$
 		--entry bin/argv-probe=$(USER_OBJDIR)/argv-probe.elf \
 		--entry bin/exec-probe=$(USER_OBJDIR)/exec-probe.elf \
 		--entry bin/fork-probe=$(USER_OBJDIR)/fork-probe.elf \
+		--entry bin/libc-probe=$(USER_OBJDIR)/libc-probe.elf \
 		$(if $(filter arm64,$(ARCH)),--entry bin/virtio-driver=$(USER_OBJDIR)/virtio-driver.elf) \
 		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
 		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \

@@ -1009,8 +1009,24 @@ namespace sys::root_graph
          */
         const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
                                   static_cast<word_t>(abi::v1::CapabilityRight::write);
+        if (control(abi::v1::control_operation::capability_mint, slot.task, native::args_frame,
+                    slot.args_frame, read_write) != success)
+            return false;
+
+        /*
+         * Standard streams. Without these a spawned program's libc has no
+         * stdout, so anything it printed would vanish -- which is most of
+         * what makes a program observable at all. Write-only for output and
+         * read/write for input, matching what console-server's two threads
+         * expect from any other client.
+         */
+        const word_t write_only = static_cast<word_t>(abi::v1::CapabilityRight::write);
+        if (control(abi::v1::control_operation::capability_mint, slot.task,
+                    native::stdout_endpoint, endpoint_base + console_index,
+                    write_only) != success)
+            return false;
         return control(abi::v1::control_operation::capability_mint, slot.task,
-                       native::args_frame, slot.args_frame, read_write) == success;
+                       native::stdin_endpoint, console_stdin_endpoint, read_write) == success;
     }
 
     /*
@@ -1114,6 +1130,27 @@ namespace sys::root_graph
         }
         release_child(1U);
         return outcome.exited && outcome.status == 44U;
+    }
+
+    /*
+     * Runs bin/libc-probe, which checks the freestanding libc from inside a
+     * real process: strings, conversions, formatting, the heap, argv and the
+     * environment. 66 is its success code; every other value names a
+     * specific check (see programs/libc-probe/main.cc).
+     */
+    [[nodiscard]] inline bool verify_libc() noexcept {
+        const char* const argv[] = {"libc-probe", "run"};
+        const char* const envp[] = {"SHELL=zilch"};
+        if (!spawn(2U, "bin/libc-probe", argv, 2U, envp, 1U, 3U))
+            return false;
+        reaped outcome{};
+        for (word_t attempt = 0U; attempt < 20000U && !outcome.exited; ++attempt) {
+            outcome = reap(2U);
+            if (!outcome.exited)
+                drain_fault_reports(nullptr);
+        }
+        release_child(2U);
+        return outcome.exited && outcome.status == 66U;
     }
 
     /*
@@ -1442,6 +1479,7 @@ namespace sys::root_graph
                         return 8;
                     report(verify_spawn_argv() ? "spawn-argv verified\n" : "spawn-argv FAILED\n");
                     report(verify_fork_exec() ? "fork-exec verified\n" : "fork-exec FAILED\n");
+                    report(verify_libc() ? "libc verified\n" : "libc FAILED\n");
                     console_verified = true;
                 }
                 if (!supervisor_spawned) {
