@@ -12,6 +12,10 @@
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/platform.hh>
 
+#if CONFIG_SELFTEST
+#include <sys/kernel/tests/bootstrap/validate.hh>
+#endif
+
 namespace sys::kernel
 {
     inline constexpr const char* name = "zilch";
@@ -125,7 +129,7 @@ namespace sys::kernel
                 arch::cpu::halt();
             }
 #if CONFIG_SELFTEST
-            const error_t bootstrap_result = thread::validate_bootstrap_objects();
+            const error_t bootstrap_result = tests::self_test::validate();
             if (bootstrap_result != error_t::success) {
                 pr_err("kernel bootstrap self-test failed=%d\n",
                        static_cast<int>(bootstrap_result));
