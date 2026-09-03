@@ -588,6 +588,10 @@ namespace sys::arch::hypervisor
         (void)call(call_id::stage2_invalidate, vmid);
     }
 
+    inline void publish_stage2_tables() noexcept {
+        __asm__ volatile("dsb ishst" ::: "memory");
+    }
+
     template <typename Context, typename Exit>
     [[nodiscard]] inline error_t run_guest(u16 vmid, paddr_t stage2_root, Context& context,
                                            Exit& exit, u64 counter_offset,

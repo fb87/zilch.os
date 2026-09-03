@@ -131,16 +131,11 @@ namespace sys::kernel::memory
             mapping = {};
     }
     extern "C" char __kernel_end[];
-#if defined(__aarch64__) // store barrier: visible before page reuse
-#define SYS_KERNEL_MEMORY_STORE_BARRIER() __asm__ volatile("dsb ishst" ::: "memory")
-#else
-#define SYS_KERNEL_MEMORY_STORE_BARRIER() __asm__ volatile("mfence" ::: "memory")
-#endif
     inline void zero_page(paddr_t address) noexcept {
         auto* words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(address));
         for (u32 index = 0U; index < page_size / sizeof(u64); ++index)
             words[index] = 0U;
-        SYS_KERNEL_MEMORY_STORE_BARRIER();
+        arch::cpu::store_barrier();
     }
 
     [[nodiscard]] inline bool page_is_zero(paddr_t address) noexcept {
@@ -162,7 +157,7 @@ namespace sys::kernel::memory
         auto* words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(first));
         for (u32 index = 0U; index < page_size / sizeof(u64); ++index)
             words[index] = 0xa5a55a5adeadbeefULL ^ static_cast<u64>(index);
-        SYS_KERNEL_MEMORY_STORE_BARRIER();
+        arch::cpu::store_barrier();
         if (release_physical_page(first) != error_t::success)
             return false;
 
@@ -271,11 +266,9 @@ namespace sys::kernel::memory
         physical_inventory_source = inventory_source::firmware_register;
         error_t parse_result = boot::fdt::parse(firmware_data, inventory);
         firmware_inventory_result = parse_result;
-#if defined(__aarch64__)
         if (parse_result != error_t::success) {
-            constexpr paddr_t probes[]{platform::memory::ram_base,
-                                       platform::memory::firmware_dtb_probe};
-            for (paddr_t probe : probes) {
+            for (u32 index = 0U; index < platform::memory::boot_inventory_probe_count; ++index) {
+                const paddr_t probe = platform::memory::boot_inventory_probes[index];
                 if (probe == firmware_data)
                     continue;
                 parse_result = boot::fdt::parse(static_cast<uintptr_t>(probe), inventory);
@@ -285,7 +278,6 @@ namespace sys::kernel::memory
                 }
             }
         }
-#endif
         firmware_inventory_result = parse_result;
         if (parse_result != error_t::success) {
             inventory.memory_count = 0U;

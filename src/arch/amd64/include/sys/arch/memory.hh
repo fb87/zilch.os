@@ -73,7 +73,13 @@ namespace sys::arch
             __asm__ volatile("mov %0, %%cr3" : : "r"(pml4_phys) : "memory");
         }
 
-        inline void initialize() noexcept {}
+        inline void initialize() noexcept {
+            /* For now, we keep using the temporary tables from boot/start.S; this just
+             * verifies the table building logic works. In later phases, we'll switch to
+             * using these real tables.
+             */
+            build_kernel_table(kernel_pml4, kernel_pdpt, kernel_pd);
+        }
         inline void initialize_cpu() noexcept {}
 
         [[nodiscard]] inline error_t map_page([[maybe_unused]] paddr_t pml4_phys,

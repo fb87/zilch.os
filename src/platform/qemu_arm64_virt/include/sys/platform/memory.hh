@@ -11,6 +11,14 @@ namespace sys::platform::memory
     inline constexpr psize_t uart_size = 0x1000ULL;
     inline constexpr paddr_t firmware_dtb_probe = ram_base + 0x08000000ULL;
 
+    /* Fallback addresses to retry an FDT parse against if the firmware-handed
+     * blob pointer didn't work out. amd64 has no FDT-based boot protocol, so
+     * its counterpart is an empty (nullptr, 0) pair.
+     */
+    inline constexpr paddr_t boot_inventory_probes_storage[]{ram_base, firmware_dtb_probe};
+    inline constexpr const paddr_t* boot_inventory_probes = boot_inventory_probes_storage;
+    inline constexpr u32 boot_inventory_probe_count = 2U;
+
     /*
      * virtio-mmio transport window. Confirmed against this platform's real
      * device tree (dumpdtb of the same `virt,gic-version=3,virtualization=on`

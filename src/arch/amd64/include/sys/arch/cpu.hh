@@ -36,4 +36,26 @@ namespace sys::arch::cpu
             wait_for_event();
         }
     }
+
+    /* Store barrier: orders prior stores before subsequent ones become visible,
+     * e.g. before reusing a page whose zeroing must be visible to any observer.
+     */
+    inline void store_barrier() noexcept {
+        __asm__ volatile("mfence" ::: "memory");
+    }
+
+    /* Full system barrier: orders all prior memory accesses against all
+     * subsequent ones, system-wide.
+     */
+    inline void full_barrier() noexcept {
+        __asm__ volatile("mfence" ::: "memory");
+    }
+
+    /* Full barrier for use immediately before an unconditional halt. x86 has
+     * no ISB equivalent to add here: there is no pipelined instruction-fetch
+     * state to flush before an unconditional halt.
+     */
+    inline void halt_barrier() noexcept {
+        __asm__ volatile("mfence" ::: "memory");
+    }
 } // namespace sys::arch::cpu

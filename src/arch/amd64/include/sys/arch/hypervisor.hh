@@ -45,6 +45,14 @@ namespace sys::arch::hypervisor
         return error_t::unsupported;
     }
     inline void invalidate_stage2(u16) noexcept {}
+    /*
+     * No amd64 equivalent yet: arm64's version makes stage-2 page table
+     * entries visible to the hardware translation-table walker before use.
+     * amd64 has no such walker to synchronize with -- EPT/VMX (Phase 13)
+     * isn't implemented, so nothing real is ever installed into a virtual
+     * machine's stage2_table_addresses on this architecture yet.
+     */
+    inline void publish_stage2_tables() noexcept {}
     template <typename Context, typename Exit>
     [[nodiscard]] inline error_t run_guest(u16, paddr_t, Context&, Exit&, u64,
                                            bool = false) noexcept {

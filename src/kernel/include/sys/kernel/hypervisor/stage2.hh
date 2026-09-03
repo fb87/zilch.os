@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/arch/cpu.hh>
+#include <sys/arch/hypervisor.hh>
 #include <sys/kernel/hypervisor/diagnostics.hh>
 #include <sys/kernel/hypervisor/vmid.hh>
 #include <sys/kernel/lock/order.hh>
@@ -117,15 +118,7 @@ namespace sys::kernel::hypervisor
                     return status;
             }
         }
-#if defined(__aarch64__)
-        __asm__ volatile("dsb ishst" ::: "memory");
-#endif
-        // No amd64 equivalent yet: this barrier's job is making stage-2
-        // page table entries visible to the hardware translation-table
-        // walker before use, and amd64 has no such walker to synchronize
-        // with -- EPT/VMX (Phase 13) isn't implemented, so nothing real is
-        // ever installed into vm.stage2_table_addresses on this
-        // architecture yet.
+        arch::hypervisor::publish_stage2_tables();
         return error_t::success;
     }
 

@@ -99,11 +99,7 @@ namespace sys::kernel::emergency
         value.instruction_pointer = instruction_pointer;
         value.checksum = checksum(value);
         preserved_crash = value;
-#if defined(__aarch64__)
-        __asm__ volatile("dsb sy" ::: "memory");
-#else
-        __asm__ volatile("mfence" ::: "memory");
-#endif
+        arch::cpu::full_barrier();
     }
 
     [[nodiscard]] inline bool crash_valid() noexcept {

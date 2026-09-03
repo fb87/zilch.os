@@ -27,11 +27,7 @@ namespace sys::kernel::panic
                                   u64 fault_address, u64 instruction_pointer) noexcept {
         arch::irq::mask_all();
         capture(cause, level, vector, syndrome, fault_address, instruction_pointer);
-#if defined(__aarch64__)
-        __asm__ volatile("dsb sy; isb" ::: "memory");
-#else
-        __asm__ volatile("mfence" ::: "memory");
-#endif
+        arch::cpu::halt_barrier();
         arch::cpu::halt();
     }
 } // namespace sys::kernel::panic
