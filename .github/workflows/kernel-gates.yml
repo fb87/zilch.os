@@ -26,10 +26,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+      - name: Install toolchain and QEMU
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm
       - name: ARM64 production gate
         run: make production-gate
+      # production-gate above is static only (ABI/boundary checks) -- it
+      # never boots the release profile. That gap is what let the
+      # supervision thread fail to spawn in release (no restart-on-fault)
+      # while every static check and the (SELFTEST-only) debug boot stayed
+      # green: CONFIG_SELFTEST replaces init's main() with the
+      # certification suite, so debug boot structurally cannot exercise
+      # root_graph.hh's supervise(), the graph that ships. This is the
+      # actual production boot gate.
+      - name: ARM64 service graph + guest hosting + restart-on-fault
+        run: make smoke
       - name: AMD64 compile-only release gate
         run: |
           make BUILD_VARIANT=release ARCH=amd64 PLATFORM=qemu-amd64-q35 O=out/release/amd64 all

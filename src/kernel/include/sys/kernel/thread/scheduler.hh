@@ -1033,42 +1033,60 @@ namespace sys::kernel::thread
 #endif
 
     inline void log_cpu_assignment(cpu_id_t cpu) noexcept {
-        thread_id_t assigned[3]{};
+        // Every thread could in principle pin to the same CPU, so this is
+        // sized for the whole pool rather than an arbitrary small constant
+        // -- see the comment below on what that constant used to cost.
+        // Deliberately uninitialized: only indices [0, count) are ever
+        // read below, and value-initializing an array this size lowers to
+        // a memset call this freestanding kernel does not provide.
+        thread_id_t assigned[user_thread_count];
         u32 count = 0U;
         for (u32 index = 0U; index < active_user_thread_count; ++index) {
             if (user_threads[index].pinned_cpu != cpu)
                 continue;
-            if (count < 3U)
-                assigned[count] = user_threads[index].id;
+            assigned[count] = user_threads[index].id;
             ++count;
         }
 
-        switch (count) {
-            case 0U:
-                pr_info("user scheduler: cpu=%u threads=[]\n", static_cast<unsigned int>(cpu));
-                break;
-            case 1U:
-                pr_info("user scheduler: cpu=%u threads=[%llu]\n", static_cast<unsigned int>(cpu),
-                        static_cast<unsigned long long>(assigned[0]));
-                break;
-            case 2U:
-                pr_info("user scheduler: cpu=%u threads=[%llu,%llu]\n",
-                        static_cast<unsigned int>(cpu),
-                        static_cast<unsigned long long>(assigned[0]),
-                        static_cast<unsigned long long>(assigned[1]));
-                break;
-            default:
-                pr_info("user scheduler: cpu=%u threads=[%llu,%llu,%llu]\n",
-                        static_cast<unsigned int>(cpu),
-                        static_cast<unsigned long long>(assigned[0]),
-                        static_cast<unsigned long long>(assigned[1]),
-                        static_cast<unsigned long long>(assigned[2]));
-                break;
+        /*
+         * Built into one buffer and emitted with a single pr_info() call,
+         * rather than one pr_info() per id: printk prepends its own
+         * timestamp per call (CONFIG_PRINTK_TIME), so a sequence of calls
+         * meant to form one logical line would instead interleave a
+         * timestamp mid-line for every id past the first.
+         *
+         * Sized for user_thread_count ids at up to 20 digits (u64) plus a
+         * comma each, which is generous -- thread ids are small counters --
+         * but this is a diagnostic, not a wire format, and cheap to size
+         * comfortably. Previously this array's declared size (assigned[3])
+         * silently capped what a switch on a hardcoded 0/1/2/default ever
+         * printed, backed by a static_assert that limited user_thread_count
+         * itself to 3 per CPU -- a logging ceiling, not a scheduling one,
+         * that would have quietly truncated output the moment a real
+         * scheduling constraint allowed more.
+         */
+        // Also deliberately uninitialized past index `at`, for the same
+        // reason: nothing reads past the NUL this function itself writes.
+        char line[16U + user_thread_count * 21U];
+        usize_t at = 0U;
+        for (u32 index = 0U; index < count && at + 21U < sizeof(line); ++index) {
+            if (index != 0U)
+                line[at++] = ',';
+            u64 value = assigned[index];
+            char digits[20U];
+            usize_t digit_count = 0U;
+            do {
+                digits[digit_count++] = static_cast<char>('0' + value % 10U);
+                value /= 10U;
+            } while (value != 0U);
+            while (digit_count != 0U)
+                line[at++] = digits[--digit_count];
         }
+        line[at] = '\0';
+        pr_info("user scheduler: cpu=%u threads=[%s]\n", static_cast<unsigned int>(cpu), line);
     }
 
     inline void log_pinning_table(u32 online_cpu_count) noexcept {
-        static_assert(((user_thread_count + maximum_cpu_count - 1U) / maximum_cpu_count) <= 3U);
         pr_info("user scheduler pinning table:\n");
         const u32 count =
             online_cpu_count < maximum_cpu_count ? online_cpu_count : maximum_cpu_count;
