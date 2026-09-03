@@ -19,8 +19,17 @@ namespace sys::kernel::tests::hardening
             user_access::valid_range(root_space, arch::space::kernel_identity_base - 1U, 2U,
                                      false) ||
             user_access::valid_range(root_space, ~static_cast<vaddr_t>(0U) - 1U, 4U, false) ||
-            user_access::valid_range(root_space, arch::space::user_image_end() + 0x1000U, 16U,
-                                     false) ||
+            /*
+             * An address inside the user window with nothing mapped at it
+             * must still be rejected. This used to probe one page past the
+             * image end, which worked only while the stack was exactly one
+             * page: user_image_end() is user_stack_base, so "image end plus
+             * a page" is now the stack's second page and is legitimately
+             * readable. The heap base is in-window and unmapped until
+             * something allocates, which is what this check was always
+             * trying to express.
+             */
+            user_access::valid_range(root_space, arch::space::user_heap_base, 16U, false) ||
             thread::classify_user_fault(0x00U) != fault::kind::instruction_abort ||
             thread::classify_user_fault(0x24U) != fault::kind::data_abort ||
             thread::classify_user_fault(0x3fU) != fault::kind::none ||

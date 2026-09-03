@@ -42,7 +42,7 @@ namespace
      * well as read/write so this driver can resolve its physical address.
      */
     inline constexpr sys::capability_id_t shared_frame_selector = 25U;
-    inline constexpr sys::word_t shared_scratch_address = 0x2003c000U;
+    inline constexpr sys::word_t shared_scratch_address = 0x20050000U;
 
     /*
      * The IRQ capability root minted covers INTID 79 = transport 31, the
@@ -53,8 +53,8 @@ namespace
      */
     inline constexpr sys::u32 expected_irq = 79U;
     inline constexpr sys::capability_id_t self_space_selector = native::own_space;
-    inline constexpr sys::word_t mmio_scratch_address = 0x2003e000U;
-    inline constexpr sys::word_t dma_scratch_address = 0x2003d000U;
+    inline constexpr sys::word_t mmio_scratch_address = 0x20052000U;
+    inline constexpr sys::word_t dma_scratch_address = 0x20051000U;
 
     /*
      * One 4 KiB grant page covers 8 transports at 0x200 stride. That page is

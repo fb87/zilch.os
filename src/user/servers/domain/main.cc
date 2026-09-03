@@ -43,7 +43,7 @@ namespace
     // this is that endpoint, minted alongside console_endpoint_selector.
     inline constexpr sys::capability_id_t console_stdin_endpoint_selector = 52U;
     inline constexpr sys::capability_id_t guest_frame_base = 20U;
-    inline constexpr sys::word_t scratch_address = 0x2003f000U;
+    inline constexpr sys::word_t scratch_address = 0x20053000U;
     inline constexpr sys::word_t guest_page_size = 4096U;
     inline constexpr sys::word_t guest_page_limit = 32U;
     inline constexpr sys::word_t failure_badge = sys::native::failure_badge;

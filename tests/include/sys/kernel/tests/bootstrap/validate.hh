@@ -39,6 +39,7 @@
 #include <sys/kernel/tests/scheduling/donation.hh>
 #include <sys/kernel/tests/scheduling/sporadic.hh>
 #include <sys/kernel/tests/space/asid_rollover.hh>
+#include <sys/kernel/tests/space/window_mapping.hh>
 #endif
 #endif
 
@@ -59,6 +60,8 @@ namespace sys::kernel::tests::self_test
         if (!memory::verify_page_reuse_scrubbing())
             return error_t::invalid_argument;
         if (tests::space::run_rollover_reuse(thread::user_threads[0]) != error_t::success)
+            return error_t::invalid_argument;
+        if (tests::space::run_window_mapping(thread::user_threads[0]) != error_t::success)
             return error_t::invalid_argument;
 
         if (tests::physical_memory::run_layout_check() != error_t::success)

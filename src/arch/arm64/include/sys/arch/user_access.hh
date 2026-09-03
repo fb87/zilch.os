@@ -10,17 +10,24 @@ namespace sys::arch::user_access
     [[nodiscard]] inline bool valid_range(const space::address_space& space, vaddr_t address,
                                           usize_t size, bool write) noexcept {
         if (size == 0U)
-            return address >= space::user_code && address < space::kernel_identity_base;
-        if (address >= space::kernel_identity_base || size > space::kernel_identity_base - address)
+            return space::in_user_window(address);
+        if (address >= space::user_window_end || size > space::user_window_end - address)
             return false;
         const vaddr_t final = address + size - 1U;
-        if (address < space::user_code || final >= space::kernel_identity_base)
+        if (!space::in_user_window(address) || !space::in_user_window(final))
             return false;
-        const usize_t expected_l2 = static_cast<usize_t>((space::user_code >> 21U) & 0x1ffU);
-        if (((address >> 21U) & 0x1ffU) != expected_l2 || ((final >> 21U) & 0x1ffU) != expected_l2)
-            return false;
+        /*
+         * Walks descriptors through space::page_descriptor() rather than
+         * indexing one embedded table. The old form assumed every user page
+         * lived in the single L2 block holding user_code and rejected
+         * anything else outright, which silently became wrong the moment a
+         * process could map a heap into a second block -- a range there
+         * would have been refused, not mis-validated, but refusing a legal
+         * copy is still a bug. Unmapped blocks return a zero descriptor and
+         * fail the valid-bit test below exactly like an unmapped page.
+         */
         for (vaddr_t page = address & ~(memory::page_size - 1U); page <= final;) {
-            const u64 descriptor = space.l3.entry[(page >> 12U) & 0x1ffU];
+            const u64 descriptor = space::page_descriptor(space, page);
             if ((descriptor & memory::descriptor_valid) == 0U)
                 return false;
             const u64 access = descriptor & (3ULL << 6U);

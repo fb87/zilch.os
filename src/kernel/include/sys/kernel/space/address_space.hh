@@ -26,11 +26,17 @@ namespace sys::kernel::space
             arch::space::release(native, release_page);
         }
 
+        /*
+         * `allocate_page` backs the L3 table for the 2 MiB block this
+         * address falls in, on the first mapping into that block. Passing
+         * nullptr keeps the old behaviour of only ever mapping into blocks
+         * that already have a table.
+         */
         [[nodiscard]] inline error_t map_page(vaddr_t address, void* page, bool writable,
-                                              bool executable, bool device,
-                                              bool inner_shareable) noexcept {
+                                              bool executable, bool device, bool inner_shareable,
+                                              arch::space::page_allocate_fn allocate_page) noexcept {
             return arch::space::map_page(native, address, page, writable, executable, device,
-                                         inner_shareable);
+                                         inner_shareable, allocate_page);
         }
 
         [[nodiscard]] inline error_t unmap_page(vaddr_t address) noexcept {

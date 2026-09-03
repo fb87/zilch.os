@@ -12,15 +12,31 @@ namespace sys::arch::space
     inline constexpr bool user_available = true;
 #if CONFIG_ROOT_ONLY_BOOT
     inline constexpr vaddr_t user_code = 0x20000000ULL;
-    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
 #else
     inline constexpr vaddr_t user_code = 0x10000000ULL;
-    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
 #endif
+
+    /*
+     * Mirrors arm64's layout vocabulary so portable code can use one set of
+     * names, but deliberately keeps AMD64's actual geometry: a single
+     * embedded page table covering one 2 MiB block, and a one-page stack.
+     * AMD64 remains compile-only (PLT-007), so widening it here would add
+     * untested page-table code to a backend that never runs. The names
+     * exist; the capacity does not, and that is the honest state.
+     */
+    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
+    inline constexpr usize_t user_stack_pages = 1U;
+    inline constexpr usize_t user_stack_size = user_stack_pages * memory::page_size;
+    inline constexpr vaddr_t user_heap_base = user_stack_base + user_stack_size;
+    inline constexpr u64 user_block_size = 0x200000ULL;
+    inline constexpr usize_t user_block_count = 1U;
+    inline constexpr vaddr_t user_window_base = user_code;
+    inline constexpr vaddr_t user_window_end =
+        user_window_base + user_block_count * user_block_size;
 
     inline constexpr vaddr_t kernel_identity_base = 0x40000000ULL;
     static_assert(user_code < kernel_identity_base);
-    static_assert(user_stack_base < kernel_identity_base);
+    static_assert(user_window_end <= kernel_identity_base);
 
 #if CONFIG_ROOT_ONLY_BOOT
     extern "C" char sys_amd64_earlyfs_image_start[];
@@ -306,13 +322,25 @@ namespace sys::arch::space
         __asm__ volatile("invpcid %1, %%rax" : : "a"(1U), "m"(desc));
     }
 
+    [[nodiscard]] inline constexpr bool is_guard_page(vaddr_t address) noexcept {
+        return address == user_stack_base - memory::page_size;
+    }
+
+    [[nodiscard]] inline constexpr bool in_user_window(vaddr_t address) noexcept {
+        return address >= user_window_base && address < user_window_end;
+    }
+
     [[nodiscard]] inline error_t map_page(address_space& value, vaddr_t address, void* page,
                                           bool writable, bool executable, bool device,
-                                          bool inner_shareable_mapping) noexcept {
+                                          bool inner_shareable_mapping,
+                                          elf64::page_allocate_fn allocate_page) noexcept {
         (void)device;
         (void)inner_shareable_mapping;
-        if ((address & (memory::page_size - 1U)) != 0U || address < user_code ||
-            address >= user_stack_base || (writable && executable))
+        /* One embedded table covers the whole window, so nothing is ever
+         * allocated on demand here. */
+        (void)allocate_page;
+        if ((address & (memory::page_size - 1U)) != 0U || !in_user_window(address) ||
+            is_guard_page(address) || (writable && executable))
             return error_t::invalid_argument;
         const usize_t pt_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
         if (value.pt.entry[pt_index] != 0U)
@@ -328,8 +356,15 @@ namespace sys::arch::space
         return error_t::success;
     }
 
+    [[nodiscard]] inline u64 page_descriptor(const address_space& value,
+                                             vaddr_t address) noexcept {
+        if (!in_user_window(address))
+            return 0U;
+        return value.pt.entry[(address >> 12U) & 0x1ffU];
+    }
+
     [[nodiscard]] inline error_t unmap_page(address_space& value, vaddr_t address) noexcept {
-        if ((address & (memory::page_size - 1U)) != 0U)
+        if ((address & (memory::page_size - 1U)) != 0U || !in_user_window(address))
             return error_t::invalid_argument;
         const usize_t pt_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
         if (value.pt.entry[pt_index] == 0U)
@@ -343,6 +378,6 @@ namespace sys::arch::space
         return value.image_entry;
     }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
-        return user_stack_base + memory::page_size;
+        return user_stack_base + user_stack_size;
     }
 } // namespace sys::arch::space

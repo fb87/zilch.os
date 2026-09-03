@@ -12,18 +12,54 @@ namespace sys::arch::space
     inline constexpr bool user_available = true;
 #if CONFIG_ROOT_ONLY_BOOT
     inline constexpr vaddr_t user_code = 0x20000000ULL;
-    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
 #else
     inline constexpr vaddr_t user_code = 0x10000000ULL;
-    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
 #endif
+
+    /*
+     * The user virtual layout, in one place.
+     *
+     * Every process used to get exactly the image window plus a single
+     * stack page, because the entire address space was one statically
+     * embedded L3 table covering one 2 MiB block and map_page() rejected
+     * every address outside it. That is enough for a server that never
+     * allocates; it is not enough for a program with a heap, so the window
+     * now spans several L2 blocks whose L3 tables are allocated on demand.
+     *
+     *   [user_code, +bootstrap_size)       ELF image, 63 loadable pages
+     *   the page below user_stack_base     permanent unmapped guard
+     *   [user_stack_base, +stack_size)     stack, grows down onto the guard
+     *   [user_heap_base, user_window_end)  heap and everything else
+     *
+     * The guard is not new -- elf64::stack_guard_pages already reserved the
+     * image window's top page -- but it matters more now that the stack is
+     * multi-page and something can actually run far enough to overflow it.
+     */
+    inline constexpr vaddr_t user_stack_base = user_code + elf64::bootstrap_size;
+    inline constexpr usize_t user_stack_pages = 16U;
+    inline constexpr usize_t user_stack_size = user_stack_pages * memory::page_size;
+    inline constexpr vaddr_t user_heap_base = user_stack_base + user_stack_size;
+
+    /* One L2 block is 2 MiB; the window is a whole number of them so a
+     * virtual address maps to an L3 table by a shift, with no partial
+     * block at either end. */
+    inline constexpr u64 user_block_size = 0x200000ULL;
+    inline constexpr usize_t user_block_count = 16U;
+    inline constexpr vaddr_t user_window_base = user_code;
+    inline constexpr vaddr_t user_window_end =
+        user_window_base + user_block_count * user_block_size;
 
     // TTBR0 currently preserves the kernel identity block at 0x40000000.
     // User mappings must remain below that L1 block until kernel mappings
     // move to TTBR1_EL1.
     inline constexpr vaddr_t kernel_identity_base = 0x40000000ULL;
+    static_assert((user_code & (user_block_size - 1U)) == 0U,
+                  "user_code must be L2-block aligned: the window indexes L3 tables from it");
     static_assert(user_code < kernel_identity_base);
-    static_assert(user_stack_base < kernel_identity_base);
+    static_assert(user_window_end <= kernel_identity_base);
+    static_assert(user_heap_base < user_window_end);
+    static_assert(user_stack_base + user_stack_size <= user_window_base + user_block_size,
+                  "image, guard and stack must share block 0's statically embedded L3");
 
 #if CONFIG_ROOT_ONLY_BOOT
     extern "C" char sys_arm64_earlyfs_image_start[];
@@ -288,7 +324,22 @@ namespace sys::arch::space
         memory::table_t l3{};
         paddr_t image_backing[elf64::bootstrap_pages]{};
         elf64::page_permissions image_permissions[elf64::bootstrap_pages]{};
-        alignas(memory::page_size) u8 stack[memory::page_size]{};
+        /*
+         * Block 0's L3 is the embedded `l3` above. Blocks 1.. are allocated
+         * from the physical page supply the first time something maps into
+         * them, so a process that never grows a heap pays nothing for the
+         * larger window -- which is the whole reason these are pointers and
+         * not embedded tables. Sixteen embedded L3s would be 60 KiB per
+         * address space, and there is one address space per user thread
+         * slot, so the static cost would land whether or not anything used
+         * it. l3_backing records what release() has to hand back.
+         */
+        memory::table_t* l3_tables[user_block_count]{};
+        paddr_t l3_backing[user_block_count]{};
+        /* The stack is frame-backed for the same reason: an embedded
+         * 64 KiB array per slot would be paid by every server that only
+         * ever needs one page of it. */
+        paddr_t stack_backing[user_stack_pages]{};
         vaddr_t image_entry{user_code};
         error_t image_status{error_t::invalid_argument};
         u16 asid{};
@@ -313,10 +364,60 @@ namespace sys::arch::space
         }
     }
 
+    /*
+     * Returns every on-demand L3 table. Block 0 is the embedded `l3` and is
+     * never released -- it has no backing page of its own. Runs on the same
+     * two occasions as release_image_backing(): real teardown, and
+     * defensively before a reused slot loads a new image, because a slot
+     * that grew a heap once would otherwise leak its tables into the next
+     * process to occupy it.
+     */
+    // Defined below, with the rest of the TLB maintenance helpers.
+    inline void invalidate_asid(u16 asid) noexcept;
+
+    inline void release_dynamic_tables(address_space& value,
+                                       elf64::page_release_fn release_page) noexcept {
+        bool detached = false;
+        for (usize_t block = 1U; block < user_block_count; ++block) {
+            if (value.l3_backing[block] == 0U) {
+                value.l3_tables[block] = nullptr;
+                continue;
+            }
+            /*
+             * Clear the L2 entry BEFORE handing the page back. Freeing it
+             * first leaves the table descriptor pointing at a page the
+             * allocator is free to reissue, so a walk through this space --
+             * speculative or real -- could translate through whatever the
+             * next owner writes there. The page is only safe to release
+             * once nothing can reach it.
+             */
+            const vaddr_t block_base = user_window_base + block * user_block_size;
+            value.l2.entry[(block_base >> 21U) & 0x1ffU] = 0U;
+            detached = true;
+            value.l3_tables[block] = nullptr;
+            (void)release_page(value.l3_backing[block]);
+            value.l3_backing[block] = 0U;
+        }
+        if (detached)
+            invalidate_asid(value.asid);
+    }
+
+    inline void release_stack_backing(address_space& value,
+                                      elf64::page_release_fn release_page) noexcept {
+        for (usize_t page = 0U; page < user_stack_pages; ++page) {
+            if (value.stack_backing[page] != 0U) {
+                (void)release_page(value.stack_backing[page]);
+                value.stack_backing[page] = 0U;
+            }
+        }
+    }
+
     [[nodiscard]] inline error_t initialize(address_space& value, word_t role,
                                             elf64::page_allocate_fn allocate_page,
                                             elf64::page_release_fn release_page) noexcept {
         release_image_backing(value, release_page);
+        release_dynamic_tables(value, release_page);
+        release_stack_backing(value, release_page);
 
         asid::handle identifier{};
         const error_t asid_result = asid::allocate(identifier);
@@ -356,10 +457,26 @@ namespace sys::arch::space
             }
         }
 
-        const u64 stack_phys = reinterpret_cast<u64>(value.stack) & ~0xfffULL;
-        value.l3.entry[(user_stack_base >> 12U) & 0x1ffU] =
-            stack_phys | memory::descriptor_page | memory::access_flag | memory::inner_shareable |
-            memory::attr_normal | memory::ap_el0_rw | memory::pxn | memory::uxn;
+        /*
+         * The stack is now several frame-backed pages rather than one
+         * embedded array. Allocation can fail, and a half-mapped stack is
+         * worse than none: the thread would run with a plausible SP and
+         * fault partway down. Report no_memory instead and let the caller
+         * release the slot, which returns whatever was allocated here.
+         */
+        const usize_t stack_index = static_cast<usize_t>((user_stack_base >> 12U) & 0x1ffU);
+        for (usize_t page = 0U; page < user_stack_pages; ++page) {
+            paddr_t physical = 0U;
+            if (allocate_page(physical) != error_t::success || physical == 0U) {
+                value.image_status = error_t::no_memory;
+                return error_t::no_memory;
+            }
+            value.stack_backing[page] = physical;
+            value.l3.entry[stack_index + page] =
+                (physical & ~0xfffULL) | memory::descriptor_page | memory::access_flag |
+                memory::inner_shareable | memory::attr_normal | memory::ap_el0_rw | memory::pxn |
+                memory::uxn;
+        }
         return value.image_status;
     }
 
@@ -419,6 +536,8 @@ namespace sys::arch::space
 
     inline void release(address_space& value, elf64::page_release_fn release_page) noexcept {
         release_image_backing(value, release_page);
+        release_dynamic_tables(value, release_page);
+        release_stack_backing(value, release_page);
         asid::handle identifier{value.asid, value.asid_generation};
         asid::release(identifier);
         value.asid = 0U;
@@ -433,17 +552,74 @@ namespace sys::arch::space
                          : "memory");
     }
 
+    /*
+     * The one page that must never carry a mapping: the stack's guard.
+     * Everything else in the window is either already mapped (and so
+     * rejected as busy) or legitimately available, which is why this is the
+     * only address map_page() refuses by position rather than by state.
+     */
+    [[nodiscard]] inline constexpr bool is_guard_page(vaddr_t address) noexcept {
+        return address == user_stack_base - memory::page_size;
+    }
+
+    [[nodiscard]] inline constexpr bool in_user_window(vaddr_t address) noexcept {
+        return address >= user_window_base && address < user_window_end;
+    }
+
+    /*
+     * Resolves the L3 table covering `address`, allocating it if this is the
+     * first mapping into that 2 MiB block. Returns nullptr only when a table
+     * was needed and could not be allocated; block 0 always resolves,
+     * because its table is embedded in the address space itself.
+     */
+    [[nodiscard]] inline memory::table_t* resolve_l3(address_space& value, vaddr_t address,
+                                                     elf64::page_allocate_fn allocate_page) noexcept {
+        const usize_t block = static_cast<usize_t>((address - user_window_base) / user_block_size);
+        if (block >= user_block_count)
+            return nullptr;
+        /*
+         * Block 0's table is the embedded `l3`, structurally, so resolve it
+         * without consulting l3_tables[]. The bootstrap root space is built
+         * by a path that never calls initialize(), so anything that depends
+         * on initialize() having populated a pointer here is wrong for
+         * exactly the one address space that exists before userspace does.
+         */
+        if (block == 0U)
+            return &value.l3;
+        if (value.l3_tables[block] != nullptr)
+            return value.l3_tables[block];
+        if (allocate_page == nullptr)
+            return nullptr;
+        paddr_t physical = 0U;
+        if (allocate_page(physical) != error_t::success || physical == 0U)
+            return nullptr;
+        auto* table = reinterpret_cast<memory::table_t*>(static_cast<uintptr_t>(physical));
+        memory::clear(*table);
+        value.l3_backing[block] = physical;
+        value.l3_tables[block] = table;
+        /*
+         * Publish the table into the L2 only after it is cleared, so no CPU
+         * can walk into a block full of whatever the page previously held.
+         */
+        arch::cpu::store_barrier();
+        const usize_t l2_index = static_cast<usize_t>((address >> 21U) & 0x1ffU);
+        value.l2.entry[l2_index] = memory::table_descriptor(*table);
+        invalidate_asid(value.asid);
+        return table;
+    }
+
     [[nodiscard]] inline error_t map_page(address_space& value, vaddr_t address, void* page,
                                           bool writable, bool executable, bool device,
-                                          bool inner_shareable_mapping) noexcept {
-        if ((address & (memory::page_size - 1U)) != 0U || address < user_code ||
-            address >= user_stack_base || (writable && executable))
+                                          bool inner_shareable_mapping,
+                                          elf64::page_allocate_fn allocate_page) noexcept {
+        if ((address & (memory::page_size - 1U)) != 0U || !in_user_window(address) ||
+            is_guard_page(address) || (writable && executable))
             return error_t::invalid_argument;
-        const usize_t l2_index = static_cast<usize_t>((address >> 21U) & 0x1ffU);
-        if (l2_index != static_cast<usize_t>((user_code >> 21U) & 0x1ffU))
-            return error_t::unsupported;
+        memory::table_t* table = resolve_l3(value, address, allocate_page);
+        if (table == nullptr)
+            return error_t::no_memory;
         const usize_t l3_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
-        if (value.l3.entry[l3_index] != 0U)
+        if (table->entry[l3_index] != 0U)
             return error_t::busy;
         u64 descriptor = (reinterpret_cast<u64>(page) & ~0xfffULL) | memory::descriptor_page |
                          memory::access_flag |
@@ -452,26 +628,51 @@ namespace sys::arch::space
         descriptor |= writable ? memory::ap_el0_rw : memory::ap_el0_ro;
         if (!executable)
             descriptor |= memory::pxn | memory::uxn;
-        value.l3.entry[l3_index] = descriptor;
+        table->entry[l3_index] = descriptor;
         invalidate_asid(value.asid);
         return error_t::success;
     }
 
     [[nodiscard]] inline error_t unmap_page(address_space& value, vaddr_t address) noexcept {
-        if ((address & (memory::page_size - 1U)) != 0U)
+        if ((address & (memory::page_size - 1U)) != 0U || !in_user_window(address))
             return error_t::invalid_argument;
-        const usize_t l3_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
-        if (value.l3.entry[l3_index] == 0U)
+        /* Never allocates: unmapping an address in a block that was never
+         * populated is not-found, not a reason to build a table. */
+        memory::table_t* table = resolve_l3(value, address, nullptr);
+        if (table == nullptr)
             return error_t::not_found;
-        value.l3.entry[l3_index] = 0U;
+        const usize_t l3_index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
+        if (table->entry[l3_index] == 0U)
+            return error_t::not_found;
+        table->entry[l3_index] = 0U;
         invalidate_asid(value.asid);
         return error_t::success;
+    }
+
+    /*
+     * Read-only descriptor lookup for the same window map_page() serves.
+     * user_access.hh validates every user copy through this rather than
+     * indexing a single embedded table, which stopped being correct once a
+     * process could hold mappings outside block 0.
+     */
+    [[nodiscard]] inline u64 page_descriptor(const address_space& value,
+                                             vaddr_t address) noexcept {
+        if (!in_user_window(address))
+            return 0U;
+        const usize_t block = static_cast<usize_t>((address - user_window_base) / user_block_size);
+        if (block >= user_block_count)
+            return 0U;
+        const memory::table_t* table =
+            block == 0U ? &value.l3 : value.l3_tables[block];
+        if (table == nullptr)
+            return 0U;
+        return table->entry[(address >> 12U) & 0x1ffU];
     }
 
     [[nodiscard]] inline vaddr_t entry(const address_space& value) noexcept {
         return value.image_entry;
     }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
-        return user_stack_base + memory::page_size;
+        return user_stack_base + user_stack_size;
     }
 } // namespace sys::arch::space

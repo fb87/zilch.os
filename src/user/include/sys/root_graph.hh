@@ -146,7 +146,7 @@ namespace sys::root_graph
     };
 
     inline constexpr capability_id_t supervisor_state_frame_selector = 96U;
-    inline constexpr word_t supervisor_state_address = 0x2003e000U;
+    inline constexpr word_t supervisor_state_address = 0x20052000U;
 
     [[nodiscard]] inline supervisor_state* supervisor_state_ptr() noexcept {
         return reinterpret_cast<supervisor_state*>(
@@ -395,7 +395,7 @@ namespace sys::root_graph
      * uses the last one, so a distinct sector proves this transfer rather
      * than re-reading bytes the driver already left in the buffer.
      */
-    inline constexpr word_t block_scratch_address = 0x2003d000U;
+    inline constexpr word_t block_scratch_address = 0x20051000U;
     inline constexpr word_t block_probe_sector = 0U;
     inline constexpr u64 block_probe_seed = 0x726f6f74626c6b00ULL; // "rootblk\0"
 
@@ -643,15 +643,25 @@ namespace sys::root_graph
      */
     inline constexpr capability_id_t earlyfs_frame_selector = 90U;
     /*
-     * map_page() only accepts addresses in [user_code, user_stack_base) --
-     * the stack page and anything at or past it are rejected outright, not
-     * just "already occupied". This is one page below user_stack_base
-     * (0x20040000), the same convention domain-manager's own scratch_address
-     * (0x2003f000) uses: inside root's own 256 KiB image region, but past
-     * where root's own (small) ELF segments actually land, so this L3 slot
-     * is free for a one-off scratch mapping.
+     * Scratch mappings live above the stack, in the region that opened up
+     * once an address space stopped being one 2 MiB L3 with only its first
+     * 64 pages reachable.
+     *
+     * They used to sit in the top pages of the image window, and the
+     * highest of them (0x2003f000) was exactly user_stack_base - one page:
+     * the stack guard. elf64::stack_guard_pages reserves that page from the
+     * image loader precisely so a stack overflow faults instead of quietly
+     * eating the image's last page -- but every process that mapped a
+     * scratch page there filled the guard in by hand, so the guarantee only
+     * ever held for processes that did no scratch mapping at all. Nothing
+     * caught it because the stack was a single page and never came close to
+     * overflowing into it.
+     *
+     * Sitting inside the image window was also fragile in its own right:
+     * these addresses were free only because every current binary is small
+     * enough that its ELF segments stop short of them.
      */
-    inline constexpr word_t earlyfs_scratch_address = 0x2003f000U;
+    inline constexpr word_t earlyfs_scratch_address = 0x20053000U;
 
     struct role_image_entry final {
         word_t role;

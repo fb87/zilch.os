@@ -28,7 +28,7 @@ namespace
     inline constexpr sys::capability_id_t irq_selector = 21U;
     inline constexpr sys::capability_id_t irq_notification_selector = 22U;
     inline constexpr sys::capability_id_t self_space_selector = native::own_space;
-    inline constexpr sys::word_t uart_scratch_address = 0x2003f000U;
+    inline constexpr sys::word_t uart_scratch_address = 0x20053000U;
 
     // Same PL011 register layout console-server used to poke directly
     // (src/platform/qemu_arm64_virt/include/sys/platform/console.hh) --

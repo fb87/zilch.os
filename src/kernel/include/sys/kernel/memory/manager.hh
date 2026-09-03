@@ -17,8 +17,21 @@ namespace sys::kernel::memory
 {
     inline constexpr u32 bootstrap_frame_count = 4U;
     inline constexpr u32 bootstrap_page_table_count = 4U;
-    inline constexpr u32 frame_count = 64U;
-    inline constexpr u32 page_table_count = 32U;
+    /*
+     * These pools bound every frame and page table the kernel can hand out,
+     * and both were sized for a world where a "process" was a 256 KiB image
+     * with a one-page stack and no heap at all. A process with a real heap
+     * needs frames by the hundred, and dynamically allocated L3 tables come
+     * out of the same physical page supply, so the old 64/32 could not
+     * survive a single heap-bearing program -- USR-034 already hit the
+     * frame pool's ceiling from a much smaller direction, where destroying
+     * one domain-manager leaked enough frames to fail the next guest load.
+     *
+     * The cost is static: these are BSS arrays, so raising them trades
+     * kernel image size against how much userspace can exist at once.
+     */
+    inline constexpr u32 frame_count = 2048U;
+    inline constexpr u32 page_table_count = 512U;
     inline constexpr u32 resource_count = 32U;
     inline constexpr u32 extent_node_count = 256U;
     inline constexpr u64 page_size = arch::memory::page_size;
@@ -1386,7 +1399,7 @@ namespace sys::kernel::memory
         const error_t result = target.map_page(
             address, reinterpret_cast<void*>(static_cast<uintptr_t>(source.physical_address)),
             writable(permissions), executable(permissions), source.device,
-            attributes.share == shareability::inner_shareable);
+            attributes.share == shareability::inner_shareable, &allocate_physical_page);
         if (result != error_t::success) {
             unlock_mappings();
             return result;

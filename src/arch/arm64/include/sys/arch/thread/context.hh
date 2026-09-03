@@ -32,7 +32,7 @@ namespace sys::arch::thread
         constexpr vaddr_t user_code_begin = arch::space::user_code;
         const vaddr_t user_code_end = arch::space::user_image_end();
         constexpr vaddr_t user_stack_begin = arch::space::user_stack_base;
-        constexpr vaddr_t user_stack_end = arch::space::user_stack_base + 0x1000ULL;
+        constexpr vaddr_t user_stack_end = arch::space::stack_top();
 
         return value.instruction_pointer >= user_code_begin &&
                value.instruction_pointer < user_code_end &&

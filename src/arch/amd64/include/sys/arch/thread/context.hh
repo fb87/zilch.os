@@ -62,7 +62,7 @@ namespace sys::arch::thread
         constexpr vaddr_t user_code_begin = space::user_code;
         const vaddr_t user_code_end = space::user_image_end();
         constexpr vaddr_t user_stack_begin = space::user_stack_base;
-        constexpr vaddr_t user_stack_end = space::user_stack_base + 0x1000ULL;
+        constexpr vaddr_t user_stack_end = space::stack_top();
 
         /* RIP: must be in user code, 4-byte aligned */
         /* RSP: must be in user stack, 16-byte aligned (ABI requirement) */
