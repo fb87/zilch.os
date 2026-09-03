@@ -43,7 +43,23 @@
 
 namespace sys::kernel::thread
 {
-    inline constexpr u32 user_thread_count = 12U;
+    /*
+     * 12 (the maximum the pinning log's old, now-removed per-CPU-3 assert
+     * ever allowed) left exactly one usable slot of headroom over the
+     * guest+block production graph's actual consumption of 10: memory-
+     * server, serial-driver, virtio-driver, five control_plane_role
+     * launches, console-server's stdin thread, and root's supervision
+     * thread. That assert was never a real scheduling constraint -- see
+     * log_cpu_assignment()'s comment -- so there was no principled reason
+     * to stay that close to the edge. 16 gives room for the service graph
+     * to grow by more than one thread before this needs revisiting; no
+     * other structure in the kernel sizes itself off this constant (only
+     * scheduler.hh, syscall/ipc.hh, syscall/control.hh, and kernel.hh's
+     * boot log consume it, all as a loop bound, not a fixed-size peer
+     * array), and it is a .bss array, not a stack one, so growing it costs
+     * static kernel image size, not stack budget.
+     */
+    inline constexpr u32 user_thread_count = 16U;
     inline constexpr u32 maximum_cpu_count = 4U;
     inline u32 active_user_thread_count = CONFIG_ROOT_ONLY_BOOT ? 1U : user_thread_count;
     inline constexpr u64 fault_timeout_ticks = 500U;
