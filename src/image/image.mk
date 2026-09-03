@@ -7,6 +7,10 @@ ifeq ($(ARCH),arm64)
 BOOTSTRAP_IMAGE_OBJ := $(OBJTREE)/src/user/bootstrap/embedded_images.o
 KERNEL_DATA_OBJECTS += $(BOOTSTRAP_IMAGE_OBJ)
 endif
+ifeq ($(ARCH),amd64)
+BOOTSTRAP_IMAGE_OBJ := $(OBJTREE)/src/user/bootstrap/embedded_images_amd64.o
+KERNEL_DATA_OBJECTS += $(BOOTSTRAP_IMAGE_OBJ)
+endif
 
 .PHONY: image
 image: $(EARLYFS)
@@ -29,6 +33,12 @@ $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$
 
 ifeq ($(ARCH),arm64)
 $(BOOTSTRAP_IMAGE_OBJ): $(SRCTREE)/src/user/bootstrap/embedded_images.S $(EARLYFS)
+	@mkdir -p $(dir $@)
+	@printf '  UDATA   %s\n' '$@'
+	@$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_AFLAGS) -DEARLYFS_IMAGE_PATH=\"$(EARLYFS)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+endif
+ifeq ($(ARCH),amd64)
+$(BOOTSTRAP_IMAGE_OBJ): $(SRCTREE)/src/user/bootstrap/embedded_images_amd64.S $(EARLYFS)
 	@mkdir -p $(dir $@)
 	@printf '  UDATA   %s\n' '$@'
 	@$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_AFLAGS) -DEARLYFS_IMAGE_PATH=\"$(EARLYFS)\" -MMD -MP -MF $(@:.o=.d) -c $< -o $@

@@ -130,14 +130,17 @@ namespace sys::kernel::memory
         for (auto& mapping : value.mappings)
             mapping = {};
     }
-
     extern "C" char __kernel_end[];
-
+#if defined(__aarch64__) // store barrier: visible before page reuse
+#define SYS_KERNEL_MEMORY_STORE_BARRIER() __asm__ volatile("dsb ishst" ::: "memory")
+#else
+#define SYS_KERNEL_MEMORY_STORE_BARRIER() __asm__ volatile("mfence" ::: "memory")
+#endif
     inline void zero_page(paddr_t address) noexcept {
         auto* words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(address));
         for (u32 index = 0U; index < page_size / sizeof(u64); ++index)
             words[index] = 0U;
-        __asm__ volatile("dsb ishst" ::: "memory");
+        SYS_KERNEL_MEMORY_STORE_BARRIER();
     }
 
     [[nodiscard]] inline bool page_is_zero(paddr_t address) noexcept {
@@ -159,7 +162,7 @@ namespace sys::kernel::memory
         auto* words = reinterpret_cast<volatile u64*>(static_cast<uintptr_t>(first));
         for (u32 index = 0U; index < page_size / sizeof(u64); ++index)
             words[index] = 0xa5a55a5adeadbeefULL ^ static_cast<u64>(index);
-        __asm__ volatile("dsb ishst" ::: "memory");
+        SYS_KERNEL_MEMORY_STORE_BARRIER();
         if (release_physical_page(first) != error_t::success)
             return false;
 
@@ -213,7 +216,8 @@ namespace sys::kernel::memory
             paddr_t base{};
             paddr_t end{};
         };
-        segment active[maximum_physical_regions]{{base, base + size}};
+        segment active[maximum_physical_regions]; // uninit past 0: no libc memset, loop-bounded
+        active[0] = {base, base + size};
         u32 active_count = 1U;
         for (u32 reserved_index = 0U; reserved_index < inventory.reserved_count; ++reserved_index) {
             const auto& reserved = inventory.reserved[reserved_index];
@@ -221,7 +225,7 @@ namespace sys::kernel::memory
                 return error_t::invalid_argument;
             const paddr_t reserved_begin = align_down(reserved.base);
             const paddr_t reserved_end = align_up(reserved.base + reserved.size);
-            segment next[maximum_physical_regions]{};
+            segment next[maximum_physical_regions];
             u32 next_count{};
             for (u32 index = 0U; index < active_count; ++index) {
                 const segment current = active[index];
@@ -988,8 +992,8 @@ namespace sys::kernel::memory
          * permitted; the slot frees up again once its owner destroys it.
          */
         for (u32 index = bootstrap_frame_count; index < frame_count; ++index) {
-            if (__atomic_load_n(&frames[index].in_use, __ATOMIC_ACQUIRE) &&
-                frames[index].device && frames[index].physical_address == address)
+            if (__atomic_load_n(&frames[index].in_use, __ATOMIC_ACQUIRE) && frames[index].device &&
+                frames[index].physical_address == address)
                 return error_t::busy;
         }
         frame* target = nullptr;
