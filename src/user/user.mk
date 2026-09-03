@@ -30,8 +30,16 @@ endif
 ifeq ($(CONFIG_TESTS),1)
 USER_PROGRAMS += pager-client memory-client
 endif
+ifeq ($(CONFIG_SELFTEST),1)
+USER_init_SOURCE := src/user/tests/certification/main.cc
+else
 USER_init_SOURCE := src/user/init/main.cc
+endif
+ifeq ($(CONFIG_SELFTEST),1)
+USER_memory-server_SOURCE := src/user/tests/memory_server_certification/main.cc
+else
 USER_memory-server_SOURCE := src/user/servers/memory/main.cc
+endif
 USER_pager-client_SOURCE := src/user/tests/pager_client/main.cc
 USER_memory-client_SOURCE := src/user/tests/memory_client/main.cc
 USER_control-plane_SOURCE := src/user/servers/control_plane/main.cc
