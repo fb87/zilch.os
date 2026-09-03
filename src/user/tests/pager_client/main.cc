@@ -1,3 +1,4 @@
+#include <sys/arch/cpu.hh>
 #include <sys/control.hh>
 #include <sys/ipc.hh>
 #include <sys/syscall.hh>
@@ -118,9 +119,7 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
         sys::thread_exit(0U, notification, 1U << 13U);
     }
     if (role == undefined_instruction_role) {
-#if defined(__aarch64__)
-        asm volatile(".inst 0x00000000");
-#endif
+        sys::arch::cpu::trigger_illegal_instruction();
         return 11;
     }
     const sys::word_t client_index = role - 0x101U;

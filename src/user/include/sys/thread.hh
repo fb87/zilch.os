@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sys/arch/cpu.hh>
 #include <sys/control.hh>
 #include <sys/syscall.hh>
 
@@ -11,11 +12,7 @@ namespace sys
                                          word_t badge = 0U) noexcept {
         (void)control(abi::v1::control_operation::thread_exit, status, notification, badge);
         for (;;) {
-#if defined(__aarch64__)
-            asm volatile("wfe");
-#elif defined(__x86_64__)
-            asm volatile("pause");
-#endif
+            arch::cpu::relax();
         }
     }
 } // namespace sys
