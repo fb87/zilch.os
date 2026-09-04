@@ -720,6 +720,41 @@ branches on at all — it exists purely as descriptive metadata for future
 generic tooling, so there's no analogous coupling risk to guard against
 here.
 
+### Fourth revision: stop hardcoding the boundary-symbol names too
+
+`run_stage()`'s loop wrote `__sys_drivers_start`/`__sys_drivers_end`
+directly, and the `extern` declarations right above it did too — three
+places (declarations ×2, loop ×1) that would all need editing by hand on
+a rename, plus the two `kernel.ld` files. Fixed the C++-side half:
+
+```cpp
+#define SYS_DRIVER_SECTION_NAME ".sys_driver"
+#define SYS_OPS_SECTION_NAME ".sys_ops"
+#define SYS_DRIVER_TABLE_BEGIN __sys_drivers_start
+#define SYS_DRIVER_TABLE_END __sys_drivers_end
+```
+
+defined once at the top of `init.hh`, with every other use in the file —
+the `extern` declarations, `run_stage()`'s loop, and the `section()`
+attributes in `SYS_INIT`/`SYS_OPS`/`SYS_OPS_DECL` — referencing the macro
+instead of the literal. A rename now touches these four lines and
+nothing else in C++.
+
+**What this does not close the loop on, honestly:** `kernel.ld` is plain
+text in this build, not preprocessed, so it cannot expand a C macro — it
+still has to contain the literal tokens `.sys_driver`, `.sys_ops`,
+`__sys_drivers_start`, `__sys_drivers_end` written out by hand, in both
+`src/arch/arm64/kernel.ld` and `src/arch/amd64/kernel.ld`. A rename still
+means touching those two files to match. Added an explicit cross-
+reference comment in both pointing back at the exact macro names in
+`init.hh`, so that remaining manual sync point is at least discoverable
+rather than silently assumed. If it ever becomes a real pain point, the
+fix is converting the linker scripts to a preprocessed `kernel.ld.S` that
+can `#include` this header directly (mentioned as a possible future step
+earlier in this document) — not done here, since the two-file manual
+sync is still small and explicit enough not to justify that build-system
+change yet.
+
 ### What was verified, and how
 
 - `make arm64` and `make amd64` both build clean, `make format-check`

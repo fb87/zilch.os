@@ -25,6 +25,14 @@ SECTIONS
      * these two fixed section names, regardless of which driver or
      * stage. Adding or removing a driver never requires touching this
      * file again -- only these two rules, added once, are needed.
+     *
+     * The four literal tokens below (.sys_driver, .sys_ops,
+     * __sys_drivers_start, __sys_drivers_end) must match
+     * SYS_DRIVER_SECTION_NAME/SYS_OPS_SECTION_NAME/SYS_DRIVER_TABLE_BEGIN/
+     * SYS_DRIVER_TABLE_END in src/kernel/include/sys/kernel/init/init.hh
+     * exactly. This linker script is not preprocessed, so it cannot
+     * expand those macros -- renaming any of them means updating this
+     * file (and src/arch/amd64/kernel.ld) to match by hand.
      */
     __sys_drivers_start = .;
     KEEP(*(.sys_driver))

@@ -4,16 +4,38 @@
 #include <sys/types.hh>
 
 /*
+ * Section names and boundary-symbol names, defined once and referenced
+ * everywhere else in this file by macro rather than by writing the bare
+ * name a second (or third) time -- so a rename touches these four lines
+ * and nothing else *in C++*.
+ *
+ * The one thing a macro can't reach: `src/arch/{arm64,amd64}/kernel.ld`.
+ * Those linker scripts are plain text here, not preprocessed, so they
+ * cannot expand a C macro -- they must contain these exact literal
+ * tokens (`.sys_driver`, `.sys_ops`, `__sys_drivers_start`,
+ * `__sys_drivers_end`) written out by hand, and a rename here still
+ * means updating both kernel.ld files to match. If that manual sync
+ * point becomes a real problem, the fix is to preprocess the linker
+ * scripts (kernel.ld.S, run through $(CC) -E) so they can `#include`
+ * this same header instead of duplicating the literals -- not attempted
+ * here, since the two-file manual sync is still small and explicit.
+ */
+#define SYS_DRIVER_SECTION_NAME ".sys_driver"
+#define SYS_OPS_SECTION_NAME ".sys_ops"
+#define SYS_DRIVER_TABLE_BEGIN __sys_drivers_start
+#define SYS_DRIVER_TABLE_END __sys_drivers_end
+
+/*
  * Driver-section registration described in
  * docs/architecture/KERNEL_ARCH_PLATFORM_DECOUPLING.md.
  *
  * Every registrant, regardless of which driver it is, lands in one
- * fixed, literally-named section (".sys_driver" for init entries,
- * ".sys_ops" for ops-vtable singletons). The linker script KEEP()s those
- * two section names exactly once, permanently -- adding or removing a
- * driver (another PLAT_INIT/ARCH_INIT registration, or another
- * SYS_OPS-tagged ops struct) only ever touches that driver's own .cc
- * file. No kernel.ld edit is needed to add or remove a driver.
+ * fixed section (SYS_DRIVER_SECTION_NAME for init entries,
+ * SYS_OPS_SECTION_NAME for ops-vtable singletons). The linker script
+ * KEEP()s those two section names exactly once, permanently -- adding or
+ * removing a driver (another PLAT_INIT/ARCH_INIT registration, or
+ * another SYS_OPS-tagged ops struct) only ever touches that driver's own
+ * .cc file. No kernel.ld edit is needed to add or remove a driver.
  *
  * `stage_t` is deliberately *not* named after specific drivers (it used
  * to have `smmu`/`timer` enumerators, which meant kernel.hh had to name
@@ -83,8 +105,8 @@ namespace sys::kernel::init
         stage_t stage;
     };
 
-    extern "C" const entry_t __sys_drivers_start[];
-    extern "C" const entry_t __sys_drivers_end[];
+    extern "C" const entry_t SYS_DRIVER_TABLE_BEGIN[];
+    extern "C" const entry_t SYS_DRIVER_TABLE_END[];
 
     /*
      * Iterates the *entire* combined driver table and runs only the
@@ -95,7 +117,7 @@ namespace sys::kernel::init
      * not currently rely on more than one registrant per stage.
      */
     inline void run_stage(stage_t stage, const boot_context_t& context) noexcept {
-        for (const entry_t* it = __sys_drivers_start; it != __sys_drivers_end; ++it) {
+        for (const entry_t* it = SYS_DRIVER_TABLE_BEGIN; it != SYS_DRIVER_TABLE_END; ++it) {
             if (it->stage != stage)
                 continue;
             pr_info("init: driver=%s\n", it->device.name);
@@ -106,7 +128,7 @@ namespace sys::kernel::init
 
 #define SYS_INIT(stage, kind, fn)                                                                  \
     static const ::sys::kernel::init::entry_t __sys_init_##fn __attribute__((                      \
-        used, section(".sys_driver"))) = {                                                         \
+        used, section(SYS_DRIVER_SECTION_NAME))) = {                                               \
         &fn, {#fn, ::sys::kernel::init::device_kind_t::kind}, ::sys::kernel::init::stage_t::stage}
 
 #define ARCH_INIT(stage, kind, fn) SYS_INIT(stage, kind, fn)
@@ -122,5 +144,5 @@ namespace sys::kernel::init
  * (section() + used, since that instance is the one that actually needs
  * to survive --gc-sections with no current reader).
  */
-#define SYS_OPS_DECL __attribute__((section(".sys_ops")))
-#define SYS_OPS __attribute__((used, section(".sys_ops")))
+#define SYS_OPS_DECL __attribute__((section(SYS_OPS_SECTION_NAME)))
+#define SYS_OPS __attribute__((used, section(SYS_OPS_SECTION_NAME)))
