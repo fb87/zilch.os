@@ -119,4 +119,16 @@ namespace sys::abi::v1
          */
         process_reap = 51U,
     };
+
+    /*
+     * The exit status process_wait reports for a thread the kernel
+     * terminated because of a fault, rather than one that reached
+     * thread_exit on its own. 139 is deliberately the conventional
+     * 128+SIGSEGV value a real Unix shell would show for a segfaulted
+     * child -- there is no real signal-number concept behind a fault here,
+     * but the number is recognizable to anyone who has used one, which
+     * matters more than inventing a value nothing else would ever
+     * associate meaning with.
+     */
+    inline constexpr word_t process_fault_exit_status = 139U;
 } // namespace sys::abi::v1

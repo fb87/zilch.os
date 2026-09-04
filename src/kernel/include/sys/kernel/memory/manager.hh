@@ -1594,9 +1594,31 @@ namespace sys::kernel::memory
      */
     inline constexpr u32 maximum_cloned_mappings = 64U;
 
+    /*
+     * `tracked_address`/`tracked_frame` let a caller learn which freshly
+     * cloned frame ended up at one specific address, defaulted to "don't
+     * care" for every caller but fork's own bundle setup.
+     *
+     * This exists because a capability naming a page is not the same
+     * question as which frame is actually mapped there, and fork is where
+     * that stops being an academic distinction: every mapping this
+     * function creates is a fresh, selector-less frame (see the "zero
+     * authorities" comment below) -- but a capability the child INHERITED
+     * for that same address (native::args_frame, most notably) still
+     * names whatever frame the PARENT's identical selector pointed at,
+     * which is a completely different object owned by a different task.
+     * The capability and the mapping silently diverge the moment fork
+     * clones anything, and nothing about holding a "valid" capability
+     * afterward reveals that it now names the wrong frame. A caller that
+     * needs the two to agree -- fork_user_bundle(), for the args frame --
+     * has to ask this function directly, at the one point it actually
+     * knows the answer.
+     */
     [[nodiscard]] inline error_t clone_mappings(space::address_space& destination,
                                                 const space::address_space& source,
-                                                task::task& owner) noexcept {
+                                                task::task& owner,
+                                                vaddr_t tracked_address = 0U,
+                                                object::reference_t* tracked_frame = nullptr) noexcept {
         struct snapshot_entry {
             paddr_t physical;
             vaddr_t address;
@@ -1653,6 +1675,9 @@ namespace sys::kernel::memory
                          0U, 0U, snapshot[index].attributes);
             if (status != error_t::success)
                 return status;
+            if (tracked_frame != nullptr && tracked_address != 0U &&
+                snapshot[index].address == tracked_address)
+                *tracked_frame = object::reference(copy->object);
         }
         return error_t::success;
     }

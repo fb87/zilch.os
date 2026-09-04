@@ -2,6 +2,7 @@
 
 #include <sys/console_client.hh>
 #include <sys/control.hh>
+#include <sys/coreutils.hh>
 #include <sys/control_plane.hh>
 #include <sys/guest_manifest.hh>
 #include <sys/ipc.hh>
@@ -781,6 +782,22 @@ namespace sys::root_graph
                         static_cast<word_t>(found.size)) != success)
                 return false;
         }
+        /*
+         * Every coreutil execv() can reach by name, bound once here so no
+         * caller ever needs role_image_bind's root gate itself -- see
+         * coreutils.hh for why binding in advance, rather than loading
+         * whatever a path resolves to, is this pass's whole answer to
+         * "can a forked child run a different program".
+         */
+        for (const auto& entry : coreutils::table) {
+            const auto found = platform::v1::earlyfs::find_span(page, directory_bound, entry.image);
+            if (!found.found)
+                return false;
+            if (control(abi::v1::control_operation::role_image_bind, entry.role,
+                        static_cast<word_t>(found.offset),
+                        static_cast<word_t>(found.size)) != success)
+                return false;
+        }
         return true;
     }
 
@@ -970,53 +987,17 @@ namespace sys::root_graph
                                   static_cast<word_t>(abi::v1::CapabilityRight::write);
         const word_t attrs = abi::v1::encode_mapping_attributes(
             abi::v1::memory_type::normal, abi::v1::memory_shareability::inner_shareable);
-        if (argc + envc > abi::v1::process_args_max_entries)
-            return false;
         if (control(abi::v1::control_operation::map_frame, self_space_selector, frame_selector,
                     args_build_address, read_write, attrs) != success)
             return false;
 
-        auto* const header =
-            reinterpret_cast<abi::v1::process_args_header*>(static_cast<uintptr_t>(args_build_address));
-        auto* const base = reinterpret_cast<char*>(static_cast<uintptr_t>(args_build_address));
-        for (usize_t index = 0U; index < abi::v1::process_args_size; ++index)
-            base[index] = '\0';
-
-        header->magic = abi::v1::process_args_magic;
-        header->version = abi::v1::process_args_version;
-        header->argc = static_cast<u32>(argc);
-        header->envc = static_cast<u32>(envc);
-        header->bytes_offset = static_cast<u32>(sizeof(abi::v1::process_args_header));
-        header->bytes_size = 0U;
-
-        char* const bytes = base + header->bytes_offset;
-        const u32 capacity = static_cast<u32>(abi::v1::process_args_size) - header->bytes_offset;
-        u32 cursor = 0U;
-        bool overflowed = false;
-        const auto append = [&](const char* text, u32 slot) noexcept {
-            header->entries[slot] = cursor;
-            for (const char* character = text; *character != '\0'; ++character) {
-                if (cursor >= capacity) {
-                    overflowed = true;
-                    return;
-                }
-                bytes[cursor++] = *character;
-            }
-            if (cursor >= capacity) {
-                overflowed = true;
-                return;
-            }
-            bytes[cursor++] = '\0';
-        };
-        for (word_t index = 0U; index < argc && !overflowed; ++index)
-            append(argv[index], static_cast<u32>(index));
-        for (word_t index = 0U; index < envc && !overflowed; ++index)
-            append(envp[index], static_cast<u32>(argc + index));
-        header->bytes_size = cursor;
+        const bool encoded = abi::v1::encode_process_args(
+            reinterpret_cast<void*>(static_cast<uintptr_t>(args_build_address)), argv, argc, envp,
+            envc);
 
         const bool unmapped = control(abi::v1::control_operation::unmap_frame, self_space_selector,
                                       frame_selector, args_build_address) == success;
-        return !overflowed && unmapped;
+        return encoded && unmapped;
     }
 
     /*
@@ -1580,6 +1561,17 @@ namespace sys::root_graph
         word_t ready = 0U;
         bool console_verified = false;
         bool supervisor_spawned = false;
+        /* Only the non-guest build launches a shell (see the spawn below,
+         * which is compiled out when a guest owns the console), so this is
+         * genuinely unused there rather than merely appearing so.
+         *
+         * `#if !CONFIG_...`, matching the use site's own `#if
+         * CONFIG_GUEST_EMBEDDED_IMAGE`/`#else` exactly: these macros are
+         * always DEFINED, as 0 or 1, so `#ifdef`/`#ifndef` on them is
+         * always-true/always-false regardless of the setting. */
+#if !CONFIG_GUEST_EMBEDDED_IMAGE
+        bool shell_spawned = false;
+#endif
         for (;;) {
             // Once the supervision thread exists, it owns fault draining
             // (and thus restart) exclusively -- see the comment above
@@ -1660,6 +1652,23 @@ namespace sys::root_graph
 #if CONFIG_GUEST_EMBEDDED_IMAGE
                 report("guest: starting\n");
                 return run_embedded_guest_loop(state) ? 0 : 5;
+#else
+                /*
+                 * The interactive entry point: launched once, on the
+                 * dynamic pool's slot 4 (0-3 belong to the boot-time
+                 * verification probes above, already spawned and reaped by
+                 * this point) and deliberately never reaped -- unlike a
+                 * probe, the shell is meant to run for as long as the
+                 * system does. Skipped when a guest is embedded, since
+                 * that configuration's one root thread is committed to
+                 * run_embedded_guest_loop() instead; an interactive shell
+                 * needs a console that is not also serving a guest.
+                 */
+                if (!shell_spawned) {
+                    const char* const argv[] = {"sh"};
+                    shell_spawned = spawn(4U, "bin/sh", argv, 1U, nullptr, 0U, 3U);
+                    report(shell_spawned ? "shell ready\n" : "shell FAILED\n");
+                }
 #endif
             }
         }

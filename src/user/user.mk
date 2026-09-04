@@ -28,7 +28,7 @@ USER_COMMON_SOURCES := \
     src/user/lib/libc/strtol.cc \
     src/user/lib/libc/env.cc \
     src/user/lib/libc/io.cc
-USER_PROGRAMS := init memory-server control-plane console-server serial-driver vfs-server argv-probe exec-probe fork-probe libc-probe vfs-probe
+USER_PROGRAMS := init memory-server control-plane console-server serial-driver vfs-server argv-probe exec-probe fork-probe libc-probe vfs-probe sh echo true false cat wc head ls
 ifeq ($(ARCH),arm64)
 USER_PROGRAMS += virtio-driver
 endif
@@ -61,6 +61,14 @@ USER_fork-probe_SOURCE := src/user/programs/fork-probe/main.cc
 USER_libc-probe_SOURCE := src/user/programs/libc-probe/main.cc
 USER_vfs-server_SOURCE := src/user/servers/vfs/main.cc
 USER_vfs-probe_SOURCE := src/user/programs/vfs-probe/main.cc
+USER_sh_SOURCE := src/user/programs/sh/main.cc
+USER_echo_SOURCE := src/user/programs/echo/main.cc
+USER_true_SOURCE := src/user/programs/true/main.cc
+USER_false_SOURCE := src/user/programs/false/main.cc
+USER_cat_SOURCE := src/user/programs/cat/main.cc
+USER_wc_SOURCE := src/user/programs/wc/main.cc
+USER_head_SOURCE := src/user/programs/head/main.cc
+USER_ls_SOURCE := src/user/programs/ls/main.cc
 USER_ELF := $(USER_OBJDIR)/init.elf
 USER_BIN := $(USER_OBJDIR)/init.bin
 MEMORY_SERVER_BIN := $(USER_OBJDIR)/memory-server.bin
@@ -153,6 +161,38 @@ $(USER_OBJDIR)/vfs-server/%.o: $(SRCTREE)/%.cc
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 $(USER_OBJDIR)/vfs-probe/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/sh/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/echo/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/true/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/false/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/cat/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/wc/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/head/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/ls/%.o: $(SRCTREE)/%.cc
 	@mkdir -p $(dir $@)
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

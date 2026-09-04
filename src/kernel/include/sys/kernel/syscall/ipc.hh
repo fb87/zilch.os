@@ -228,6 +228,20 @@ namespace sys::kernel::syscall
                 (void)thread::wake(caller);
                 ipc::remote_reschedule(caller.pinned_cpu, arch::cpu::current_id());
             } else {
+                /*
+                 * A pager terminating a faulted thread is a real exit, the
+                 * same as one that reached thread_exit on its own -- but
+                 * this path never went through thread_exit's handler, so
+                 * exit_status/exited were never being published here at
+                 * all. Nothing waiting in process_wait could ever learn a
+                 * fault-killed child had exited; it would poll forever.
+                 * process_fault_exit_status is the caller-visible signal
+                 * that this thread's end was a fault, not a controlled
+                 * exit, the same distinction thread_exit's own caller-
+                 * supplied status would otherwise carry.
+                 */
+                caller.exit_status = static_cast<word_t>(abi::v1::process_fault_exit_status);
+                __atomic_store_n(&caller.exited, true, __ATOMIC_RELEASE);
                 thread::store_state(caller, thread::state::terminated);
             }
             thread::unlock_ipc_lifecycle();

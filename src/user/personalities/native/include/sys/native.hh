@@ -5,6 +5,7 @@
 #include <sys/types.hh>
 
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/process.hh>
 #include <abi/sys/v1/serial.hh>
 
 /*
@@ -64,13 +65,17 @@ namespace sys::native
      * Absence is the signal for "no arguments": nothing is minted, the
      * lookup fails, and the program falls back to the two-word entry.
      */
-    inline constexpr capability_id_t args_frame = 16U;
+    inline constexpr capability_id_t args_frame =
+        static_cast<capability_id_t>(abi::v1::process_args_frame_selector);
     /*
      * Immediately above the four scratch pages, all of which sit above the
      * stack. See root_graph.hh for why that region and not the image
-     * window.
+     * window. Aliases abi::v1::process_args_address rather than repeating
+     * it: the kernel's own exec_user_image() needs this exact address too,
+     * to snapshot the argument block across exec's address-space teardown,
+     * so it lives in the one header both sides already share.
      */
-    inline constexpr word_t args_address = 0x20054000U;
+    inline constexpr word_t args_address = abi::v1::process_args_address;
 
     /*
      * Where a process's heap begins, one page above the argument block.

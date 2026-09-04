@@ -4,6 +4,7 @@
 
 #include <sys/console_client.hh>
 #include <sys/control.hh>
+#include <sys/coreutils.hh>
 #include <sys/ipc.hh>
 #include <sys/native.hh>
 #include <sys/types.hh>
@@ -11,6 +12,7 @@
 #include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
 #include <abi/sys/v1/memory.hh>
+#include <abi/sys/v1/process.hh>
 #include <abi/sys/v1/vfs.hh>
 
 /*
@@ -82,6 +84,36 @@ namespace
      * the runtime's entry path would fault every server that has no such
      * capability to map.
      */
+    /*
+     * "<prefix><handle>" into `out`, by hand rather than through
+     * snprintf. This file is linked into every program, servers and
+     * drivers included, so calling into stdio from execv() drags the whole
+     * vsnprintf formatter along with it -- into binaries that never print
+     * a byte. That is not a hypothetical cost: doing this with snprintf
+     * grew init's image by a page, far enough that its BSS landed on
+     * 0x20007000 and collided with a hardcoded scratch address the
+     * certification harness maps, turning a two-integer format into a
+     * failing acceptance run. Two unsigned decimals do not justify any of
+     * that.
+     *
+     * `out` must have room for the prefix, 20 digits and a NUL; both call
+     * sites size their buffers from this bound.
+     */
+    void encode_handle_var(char* out, const char* prefix, sys::word_t handle) noexcept {
+        size_t at = 0U;
+        for (const char* cursor = prefix; *cursor != '\0'; ++cursor)
+            out[at++] = *cursor;
+        char digits[20];
+        size_t count = 0U;
+        do {
+            digits[count++] = static_cast<char>('0' + static_cast<unsigned>(handle % 10U));
+            handle /= 10U;
+        } while (handle != 0U);
+        while (count > 0U)
+            out[at++] = digits[--count];
+        out[at] = '\0';
+    }
+
     [[nodiscard]] bool ensure_vfs_mapped() noexcept {
         static bool mapped = false;
         static bool attempted = false;
@@ -250,16 +282,92 @@ int fork() noexcept {
 }
 
 int execv(const char* path, char* const argv[]) noexcept {
-    (void)path;
-    (void)argv;
+    sys::word_t role = 0U;
+    if (path == nullptr || !sys::coreutils::resolve(path, role))
+        return -1; // not one of the fixed roles execv can resolve by name
+
+    int argc = 0;
+    if (argv != nullptr) {
+        while (argv[argc] != nullptr)
+            ++argc;
+    }
+    int envc = 0;
+    if (environ != nullptr) {
+        while (environ[envc] != nullptr)
+            ++envc;
+    }
+
     /*
-     * Needs a role bound to the named image, and role_image_bind is
-     * root-gated, so a program cannot resolve a path for itself. This
-     * becomes a request to the VFS/spawn service once that exists; until
-     * then exec is reachable only through the raw process_exec operation
-     * with an already-bound role.
+     * fd 0/1 redirection lives in this process's own `table[]`, which is
+     * ordinary process memory -- process_exec discards it along with
+     * everything else in the old image, the new image's `table[]` starts
+     * back at its static initializer (console in/out). A shell that
+     * dup2()'d a pipe file onto stdout before calling execv() would
+     * therefore see the redirection silently vanish the moment the new
+     * image took over.
+     *
+     * The argument block survives exec (that is the whole point of
+     * execv() writing through native::args_address rather than remapping
+     * it), so a redirected VFS handle rides across the same way: as two
+     * internal, double-underscore-prefixed environment entries the new
+     * image's runtime looks for and consumes before main runs (see
+     * process_entry.cc's restore_redirected_fds()). VFS handles are
+     * server-side state, not tied to which image is running, so the
+     * number alone is enough to reinstall the descriptor -- no reopen by
+     * path needed.
      */
-    return -1;
+    /* 12 for the longest prefix, 20 for a 64-bit decimal, 1 for the NUL. */
+    char fd0_var[36];
+    char fd1_var[36];
+    const char* extra[2];
+    int extra_count = 0;
+    if (table[STDIN_FILENO].role == kind::file) {
+        encode_handle_var(fd0_var, "__ZILCH_FD0=", table[STDIN_FILENO].handle);
+        extra[extra_count++] = fd0_var;
+    }
+    if (table[STDOUT_FILENO].role == kind::file) {
+        encode_handle_var(fd1_var, "__ZILCH_FD1=", table[STDOUT_FILENO].handle);
+        extra[extra_count++] = fd1_var;
+    }
+    if (envc + extra_count > static_cast<int>(sys::abi::v1::process_args_max_entries))
+        return -1;
+    const char* combined[sys::abi::v1::process_args_max_entries];
+    int combined_envc = envc;
+    for (int index = 0; index < envc; ++index)
+        combined[index] = environ[index];
+    for (int index = 0; index < extra_count; ++index)
+        combined[combined_envc++] = extra[index];
+
+    /*
+     * native::args_address is already mapped read|write: every program
+     * that reaches execv() got here either via spawn() (whose child maps
+     * its own args frame read|write at startup -- see process_entry.cc's
+     * map_args()) or via fork() (which inherits that mapping as a private
+     * copy, since clone_mappings() duplicates every frame-backed mapping
+     * the parent held). Writing the new argv is therefore a plain memory
+     * write, not a remap: attempting to remap here would fail in exactly
+     * the fork case that matters most, because clone_mappings() gives a
+     * forked child a fresh, privately-copied frame at this address while
+     * capability slot 16 still names the PARENT's original frame object --
+     * neither unmapping nor remapping through that capability can reach
+     * what is actually mapped here. Writing through the address sidesteps
+     * the mismatch entirely, since the mapping itself is already correct;
+     * only the capability's bookkeeping is stale.
+     */
+    if (!sys::abi::v1::encode_process_args(
+            reinterpret_cast<void*>(static_cast<sys::uintptr_t>(sys::native::args_address)),
+            const_cast<const char* const*>(argv), static_cast<sys::word_t>(argc), combined,
+            static_cast<sys::word_t>(combined_envc)))
+        return -1;
+
+    (void)sys::control(abi::control_operation::process_exec, role);
+    return -1; // reached only if process_exec itself failed
+}
+
+void __zilch_restore_redirected_fd(int descriptor_number, sys::word_t handle) noexcept {
+    if (!valid(descriptor_number))
+        return;
+    table[descriptor_number] = {kind::file, handle};
 }
 
 int waitpid(int pid, int* status, int) noexcept {
@@ -286,6 +394,27 @@ int waitpid(int pid, int* status, int) noexcept {
         children[slot].live = false;
         return pid;
     }
+}
+
+int vfs_readdir(int descriptor_number, int index, char* name, size_t name_capacity,
+                bool* is_directory) noexcept {
+    if (!valid(descriptor_number) || table[descriptor_number].role != kind::file || name == nullptr ||
+        name_capacity == 0U || !ensure_vfs_mapped())
+        return -1;
+    const auto reply = sys::ipc_call(sys::native::vfs_endpoint,
+                                     static_cast<sys::word_t>(abi::vfs_operation::readdir),
+                                     table[descriptor_number].handle,
+                                     static_cast<sys::word_t>(index));
+    if (!sys::native::ok(reply.message0))
+        return sys::native::status(reply.message0) == sys::error_t::not_found ? 0 : -1;
+    size_t length = static_cast<size_t>(reply.message1);
+    if (length >= name_capacity)
+        length = name_capacity - 1U;
+    (void)memcpy(name, vfs_buffer(), length);
+    name[length] = '\0';
+    if (is_directory != nullptr)
+        *is_directory = reply.message2 == static_cast<sys::word_t>(abi::vfs_file_type::directory);
+    return 1;
 }
 
 [[noreturn]] void _exit(int status) noexcept {

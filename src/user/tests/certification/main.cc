@@ -793,8 +793,24 @@ namespace
         constexpr sys::word_t device_selector = 16U;
         constexpr sys::word_t frame_selector = 17U;
         constexpr sys::word_t root_space_selector = 3U;
-        constexpr sys::word_t device_address = 0x20007000U;
-        constexpr sys::word_t normal_address = 0x20008000U;
+        /*
+         * Above the stack and heap, not in the image window, and adjacent
+         * so both share one on-demand L3.
+         *
+         * These were 0x20007000/0x20008000, which are only unmapped for as
+         * long as init's own ELF segments stop short of them -- the exact
+         * fragility root_graph.hh's scratch mappings were moved out of the
+         * image window to escape. It is not theoretical: adding execv()'s
+         * role table to libc grew init by one page, its BSS landed on
+         * 0x20007000, and this test began reporting the resulting `busy`
+         * as an attribute-validation failure -- a real regression signal
+         * pointing at entirely the wrong thing. What the test actually
+         * asserts (device/normal attribute rules and that a denied
+         * mapping leaks no pages) does not depend on WHICH free address
+         * it uses, only that the address is genuinely free.
+         */
+        constexpr sys::word_t device_address = 0x21000000U;
+        constexpr sys::word_t normal_address = 0x21001000U;
         constexpr sys::word_t read_write = 3U;
         constexpr sys::word_t read_execute = 5U;
         constexpr sys::word_t device_outer = 0x201U;

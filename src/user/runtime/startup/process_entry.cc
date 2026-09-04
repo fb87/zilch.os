@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include <sys/control.hh>
 #include <sys/native.hh>
 #include <sys/types.hh>
@@ -19,6 +21,9 @@
  */
 extern "C" [[gnu::weak]] int main(sys::word_t argument0, sys::word_t argument1) noexcept;
 extern "C" [[noreturn]] void sys_user_exit(sys::s32 status) noexcept;
+/* Defined in io.cc; reinstalls a descriptor execv() could not carry across
+ * image replacement any other way. See restore_redirected_fds() below. */
+extern "C" void __zilch_restore_redirected_fd(int descriptor_number, sys::word_t handle) noexcept;
 
 namespace
 {
@@ -58,11 +63,29 @@ namespace
     [[nodiscard]] bool map_args() noexcept {
         const sys::word_t attrs = sys::abi::v1::encode_mapping_attributes(
             sys::abi::v1::memory_type::normal, sys::abi::v1::memory_shareability::inner_shareable);
+        /*
+         * Mapped read|write, not read-only: the capability root mints here
+         * already carries write (see spawn()'s mint), so a read-only
+         * mapping was never a real privilege boundary, only a narrower
+         * choice than the capability allowed. It stopped being even that
+         * once execv() needed to overwrite this same block with a new
+         * argv before replacing its image -- and by then a read-only
+         * mapping was actively wrong, not just conservative: after fork,
+         * clone_mappings() gives the child a fresh, privately-copied frame
+         * at this address, but capability slot 16 still names the
+         * PARENT's original frame object, so neither unmapping nor
+         * remapping through that capability can ever reach what is
+         * actually mapped here in the child. Mapping read|write from the
+         * first call is what sidesteps the whole mismatch: nothing after
+         * fork ever needs to touch this mapping's permissions again.
+         */
         return sys::native::retry([&]() noexcept {
             return sys::native::ok(sys::control(
                 sys::abi::v1::control_operation::map_frame, sys::native::own_space,
                 sys::native::args_frame, sys::native::args_address,
-                static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read), attrs));
+                static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
+                    static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write),
+                attrs));
         });
     }
 
@@ -84,6 +107,37 @@ namespace
         envp_storage[header->envc] = nullptr;
         argc = static_cast<int>(header->argc);
         return true;
+    }
+
+    [[nodiscard]] bool parse_word(const char* text, sys::word_t& out) noexcept {
+        if (text == nullptr || *text == '\0')
+            return false;
+        sys::word_t value = 0U;
+        for (const char* cursor = text; *cursor != '\0'; ++cursor) {
+            if (*cursor < '0' || *cursor > '9')
+                return false;
+            value = value * 10U + static_cast<sys::word_t>(*cursor - '0');
+        }
+        out = value;
+        return true;
+    }
+
+    /*
+     * A dup2()'d redirection is process-local memory execv() cannot carry
+     * across image replacement (see io.cc's execv() for why); the VFS
+     * handle rides across instead as two internal environment entries.
+     * Reinstalling it here, before sys_user_main runs, is what makes a
+     * pipeline stage's stdin/stdout actually reach the file the shell
+     * redirected it to rather than silently reverting to the console.
+     */
+    void restore_redirected_fds() noexcept {
+        for (char** cursor = envp_storage; *cursor != nullptr; ++cursor) {
+            sys::word_t handle = 0U;
+            if (strncmp(*cursor, "__ZILCH_FD0=", 12) == 0 && parse_word(*cursor + 12, handle))
+                __zilch_restore_redirected_fd(0, handle);
+            else if (strncmp(*cursor, "__ZILCH_FD1=", 12) == 0 && parse_word(*cursor + 12, handle))
+                __zilch_restore_redirected_fd(1, handle);
+        }
     }
 } // namespace
 
@@ -115,6 +169,7 @@ extern "C" [[noreturn]] void sys_user_entry(sys::word_t argument0, sys::word_t a
              */
             sys_user_exit(127);
         }
+        restore_redirected_fds();
         if (&environ != nullptr)
             environ = envp_storage;
         sys_user_exit(static_cast<sys::s32>(sys_user_main(argc, argv_storage, envp_storage)));

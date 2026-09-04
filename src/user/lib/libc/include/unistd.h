@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+extern "C" char** environ;
+
 inline constexpr int STDIN_FILENO = 0;
 inline constexpr int STDOUT_FILENO = 1;
 inline constexpr int STDERR_FILENO = 2;
@@ -32,5 +34,18 @@ int fork() noexcept;
 int execv(const char* path, char* const argv[]) noexcept;
 int waitpid(int pid, int* status, int options) noexcept;
 [[noreturn]] void _exit(int status) noexcept;
+
+/*
+ * Not POSIX: a minimal, VFS-specific directory iterator over an fd opened
+ * on a directory path, one entry per call. Named distinctly from
+ * opendir/readdir rather than approximating their usual DIR-handle and
+ * dirent-struct shape for a single caller (ls) that does not need it.
+ *
+ * Returns 1 with `name`/`is_directory` filled for entry `index`, 0 once
+ * index is past the last entry, -1 on error (including: fd is not a
+ * directory).
+ */
+int vfs_readdir(int descriptor, int index, char* name, size_t name_capacity,
+                bool* is_directory) noexcept;
 
 } // extern "C"

@@ -21,6 +21,9 @@
 #include <sys/platform/timer.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/process.hh>
+
 namespace sys::kernel::thread
 {
     /*
@@ -693,8 +696,31 @@ namespace sys::kernel::thread
                                                     endpoint_badge(target));
             }
         }
+        object::reference_t cloned_args_frame{};
         if (result == error_t::success)
-            result = memory::clone_mappings(target.address_space, parent.address_space, owner);
+            result = memory::clone_mappings(target.address_space, parent.address_space, owner,
+                                            abi::v1::process_args_address, &cloned_args_frame);
+        /*
+         * The child's slot 16 was just inherited from capability::inherit()
+         * above, unchanged -- so it still names the PARENT's own args
+         * frame object, not the fresh one clone_mappings() just cloned at
+         * that same address. Holding a "valid" capability there is not
+         * the same as holding the RIGHT one: nothing about the child's
+         * cspace reveals that its own args_frame selector has silently
+         * stopped matching what is actually mapped at args_address the
+         * moment fork clones anything mapped there. Replacing it here,
+         * once, is what execv() later depends on -- it writes a new argv
+         * through the mapping (always correct) and, after exec, needs
+         * process_entry.cc's map_args() to resolve the SAME frame through
+         * the capability, which only holds if this is fixed up now.
+         */
+        if (result == error_t::success && memory::valid_reference(cloned_args_frame)) {
+            (void)capability::delete_capability(
+                owner.cspace, static_cast<capability_id_t>(abi::v1::process_args_frame_selector));
+            (void)capability::install(
+                owner.cspace, static_cast<capability_id_t>(abi::v1::process_args_frame_selector),
+                cloned_args_frame, control_rights);
+        }
         /*
          * Installed into the PARENT, after the child's cspace was copied, so
          * the child does not also receive a capability to itself here -- it
@@ -778,6 +804,30 @@ namespace sys::kernel::thread
             return error_t::not_found;
 
         /*
+         * Snapshot the argument block BEFORE the old address space is torn
+         * down, if one is mapped. reclaim_task_memory() just below frees
+         * every frame this task owns -- correctly, for a heap or anything
+         * else the old image allocated -- but it operates purely on
+         * ownership bookkeeping, with no way to know a live capability
+         * still names one of those frames. The args frame execv() just
+         * filled with the NEW argv is exactly that frame: still validly
+         * capability-16, but reclaimed anyway, because reclaim has no
+         * concept of "still referenced" beyond task ownership. Restoring
+         * it into a fresh frame after the new image loads is what keeps
+         * process_entry.cc's existing map_args()/build_vectors() path
+         * working unchanged on the far side of exec -- this is the one
+         * piece of that contract only the kernel can honor, since only
+         * the kernel sees both sides of the address-space swap.
+         */
+        u8 args_snapshot[abi::v1::process_args_size];
+        const bool has_args = user_access::valid_range(
+            current.address_space.native, abi::v1::process_args_address,
+            abi::v1::process_args_size, false) &&
+            user_access::copy_from_user(current.address_space.native, args_snapshot,
+                                        abi::v1::process_args_address,
+                                        abi::v1::process_args_size) == error_t::success;
+
+        /*
          * Drop the old address space's frame-backed mappings and pages
          * before the space itself is reinitialised. reclaim_task_memory()
          * is what returns the frames a heap was built from; without it an
@@ -808,6 +858,36 @@ namespace sys::kernel::thread
             return result;
         }
         current.address_space.activate();
+
+        /*
+         * Restores what the snapshot above captured, into a fresh frame at
+         * the same capability selector the caller's argv already lived at
+         * -- so from process_entry.cc's perspective in the new image,
+         * nothing about how it discovers its arguments has changed at all.
+         * A capability already occupying slot 16 here would mean reclaim
+         * above did not actually clear it, which should not happen; if it
+         * somehow did, install() below simply fails and the new image
+         * starts with no argv, the same as a program that never had one.
+         */
+        if (has_args) {
+            memory::frame* args_target = nullptr;
+            if (memory::allocate_owned_frame(*current.owner, args_target) == error_t::success) {
+                auto* backing =
+                    reinterpret_cast<u8*>(static_cast<uintptr_t>(args_target->physical_address));
+                for (usize_t index = 0U; index < abi::v1::process_args_size; ++index)
+                    backing[index] = args_snapshot[index];
+                const capability::rights_t control_rights{
+                    static_cast<u32>(capability::right_t::read) |
+                    static_cast<u32>(capability::right_t::write) |
+                    static_cast<u32>(capability::right_t::grant) |
+                    static_cast<u32>(capability::right_t::control)};
+                (void)capability::install(
+                    current.owner->cspace,
+                    static_cast<capability_id_t>(abi::v1::process_args_frame_selector),
+                    object::reference(args_target->object), control_rights);
+            }
+        }
+
         arch::thread::initialize_user(frame, arch::space::entry(current.address_space.native),
                                       arch::space::stack_top(), role, 0U);
         return error_t::success;
@@ -1232,9 +1312,33 @@ namespace sys::kernel::thread
 
         if (capability::slot_at(owner->cspace, 15U).object.type ==
             object::type_t::memory_resource) {
-            result = memory::destroy_resource(*owner, 15U);
+            object::header_t* resource_header = nullptr;
+            result = capability::lookup(owner->cspace, 15U, object::type_t::memory_resource,
+                                        capability::right_t::control, resource_header);
             if (result != error_t::success)
                 return result;
+            auto& quota = *reinterpret_cast<memory::resource*>(resource_header);
+            /*
+             * A forked child's slot 15 names the PARENT's own memory
+             * resource -- fork_user_bundle() deliberately shares it rather
+             * than delegating a fresh one (see that function's comment),
+             * so the quota is not this task's to destroy. destroy_resource()
+             * would fail closed here regardless (it requires owner_task to
+             * match the caller), but failing closed on a routine reap is
+             * wrong: the task/thread/space objects below never get
+             * reclaimed, permanently leaking a pool slot on every single
+             * fork+reap. Only a task that actually owns its resource --
+             * the process_create/spawn path, which delegates a fresh one --
+             * needs destroy_resource() to give its quota back; a forked
+             * child just drops its capability to the shared one.
+             */
+            if (memory::same_reference(quota.owner_task, object::reference(owner->object))) {
+                result = memory::destroy_resource(*owner, 15U);
+                if (result != error_t::success)
+                    return result;
+            } else {
+                (void)capability::delete_capability(owner->cspace, 15U);
+            }
         }
 
         const object::reference_t scheduling_reference =
@@ -1259,8 +1363,14 @@ namespace sys::kernel::thread
             // root's equivalent slots are covered by the revoke above --
             // but this selector lives in the caller's cspace, a different
             // cspace from owner->cspace, so the revoke above never reaches
-            // it.
-            (void)capability::delete_capability(current.owner->cspace, thread_selector);
+            // it. The _locked variant, not delete_capability(): this whole
+            // block already holds authority_transaction's lock, and
+            // delete_capability() takes that same non-reentrant lock
+            // itself -- calling it here self-deadlocks the caller against
+            // its own lock. Never observed until reap_user_bundle actually
+            // reached this far: every prior reap failed earlier, at the
+            // slot-15 memory-resource check.
+            (void)capability::delete_capability_locked(current.owner->cspace, thread_selector);
         }
         memory::reclaim_task_memory(task_reference);
         result = object::unregister_object(scheduling_reference);
@@ -1424,6 +1534,13 @@ namespace sys::kernel::thread
             if (current_state == state::blocked_fault) {
                 value.fault_disposition = fault::disposition::terminate;
                 value.waiting_endpoint = 0U;
+                // Same reasoning as ipc.hh's terminate-disposition reply:
+                // an orphaned fault hitting its safety deadline is a real
+                // exit, and process_wait has no way to learn that one
+                // happened unless exited/exit_status are published here
+                // too.
+                value.exit_status = static_cast<word_t>(abi::v1::process_fault_exit_status);
+                __atomic_store_n(&value.exited, true, __ATOMIC_RELEASE);
                 store_state(value, state::terminated);
             } else if (load_state(value) != state::faulted &&
                        load_state(value) != state::terminated) {

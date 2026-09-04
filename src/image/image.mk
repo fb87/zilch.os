@@ -44,6 +44,14 @@ $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$
 		--entry bin/libc-probe=$(USER_OBJDIR)/libc-probe.elf \
 		--entry bin/vfs-server=$(USER_OBJDIR)/vfs-server.elf \
 		--entry bin/vfs-probe=$(USER_OBJDIR)/vfs-probe.elf \
+		--entry bin/sh=$(USER_OBJDIR)/sh.elf \
+		--entry bin/echo=$(USER_OBJDIR)/echo.elf \
+		--entry bin/true=$(USER_OBJDIR)/true.elf \
+		--entry bin/false=$(USER_OBJDIR)/false.elf \
+		--entry bin/cat=$(USER_OBJDIR)/cat.elf \
+		--entry bin/wc=$(USER_OBJDIR)/wc.elf \
+		--entry bin/head=$(USER_OBJDIR)/head.elf \
+		--entry bin/ls=$(USER_OBJDIR)/ls.elf \
 		$(if $(filter arm64,$(ARCH)),--entry bin/virtio-driver=$(USER_OBJDIR)/virtio-driver.elf) \
 		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
 		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \
