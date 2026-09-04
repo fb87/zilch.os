@@ -12,8 +12,21 @@ BOOTSTRAP_IMAGE_OBJ := $(OBJTREE)/src/user/bootstrap/embedded_images_amd64.o
 KERNEL_DATA_OBJECTS += $(BOOTSTRAP_IMAGE_OBJ)
 endif
 
-.PHONY: image
+DISK_IMAGE := $(OBJTREE)/image/disk.img
+DISK_ROOTFS := $(SRCTREE)/tools/image/rootfs
+
+.PHONY: image disk-image
 image: $(EARLYFS)
+disk-image: $(DISK_IMAGE)
+
+# Rebuilds whenever anything under rootfs/ changes, found the same way
+# EARLYFS's userspace-program dependency list is enumerated elsewhere in
+# this tree -- a plain $(wildcard) over the fixture directory, since it is
+# small and checked in rather than generated.
+$(DISK_IMAGE): $(shell find $(DISK_ROOTFS) -type f 2>/dev/null)
+	@mkdir -p $(dir $@)
+	@printf '  DISKIMG %s\n' '$@'
+	@$(SRCTREE)/tools/image/make_disk_image.sh $(DISK_ROOTFS) $@
 
 $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$(CONFIG_GUEST_TEST_ARM64))),$(GUEST_TEST_ELF),)
 	@mkdir -p $(dir $@)
@@ -29,6 +42,8 @@ $(EARLYFS): $(USER_PROGRAM_ELFS) $(if $(and $(filter arm64,$(ARCH)),$(filter 1,$
 		--entry bin/exec-probe=$(USER_OBJDIR)/exec-probe.elf \
 		--entry bin/fork-probe=$(USER_OBJDIR)/fork-probe.elf \
 		--entry bin/libc-probe=$(USER_OBJDIR)/libc-probe.elf \
+		--entry bin/vfs-server=$(USER_OBJDIR)/vfs-server.elf \
+		--entry bin/vfs-probe=$(USER_OBJDIR)/vfs-probe.elf \
 		$(if $(filter arm64,$(ARCH)),--entry bin/virtio-driver=$(USER_OBJDIR)/virtio-driver.elf) \
 		--entry bin/pager-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/pager-client.elf,-) \
 		--entry bin/memory-client=$(if $(filter 1,$(CONFIG_TESTS)),$(USER_OBJDIR)/memory-client.elf,-) \

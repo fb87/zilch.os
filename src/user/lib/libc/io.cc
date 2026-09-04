@@ -4,10 +4,14 @@
 
 #include <sys/console_client.hh>
 #include <sys/control.hh>
+#include <sys/ipc.hh>
 #include <sys/native.hh>
 #include <sys/types.hh>
 
+#include <abi/sys/v1/capability.hh>
 #include <abi/sys/v1/control.hh>
+#include <abi/sys/v1/memory.hh>
+#include <abi/sys/v1/vfs.hh>
 
 /*
  * File descriptors, and the process-control calls a shell needs.
@@ -64,6 +68,35 @@ namespace
     [[nodiscard]] bool valid(int descriptor_number) noexcept {
         return descriptor_number >= 0 && descriptor_number < descriptor_capacity;
     }
+
+    inline constexpr sys::word_t vfs_scratch_address = 0x20056000U;
+
+    [[nodiscard]] sys::u8* vfs_buffer() noexcept {
+        return reinterpret_cast<sys::u8*>(static_cast<sys::uintptr_t>(vfs_scratch_address));
+    }
+
+    /*
+     * Maps native::vfs_frame on first use rather than at process start: a
+     * server never opens a file, and the capability is only present at all
+     * for programs spawn() minted it into, so mapping it unconditionally in
+     * the runtime's entry path would fault every server that has no such
+     * capability to map.
+     */
+    [[nodiscard]] bool ensure_vfs_mapped() noexcept {
+        static bool mapped = false;
+        static bool attempted = false;
+        if (attempted)
+            return mapped;
+        attempted = true;
+        const sys::word_t read_write = static_cast<sys::word_t>(abi::CapabilityRight::read) |
+                                       static_cast<sys::word_t>(abi::CapabilityRight::write);
+        const sys::word_t attrs = abi::encode_mapping_attributes(
+            abi::memory_type::normal, abi::memory_shareability::inner_shareable);
+        mapped = sys::native::ok(sys::control(abi::control_operation::map_frame,
+                                              sys::native::own_space, sys::native::vfs_frame,
+                                              vfs_scratch_address, read_write, attrs));
+        return mapped;
+    }
 } // namespace
 
 extern "C" {
@@ -72,44 +105,94 @@ ssize_t write(int descriptor_number, const void* buffer, size_t count) noexcept 
     if (!valid(descriptor_number) || buffer == nullptr)
         return -1;
     const descriptor entry = table[descriptor_number];
-    if (entry.role != kind::console_out)
-        return -1;
     const auto* bytes = static_cast<const char*>(buffer);
-    for (size_t index = 0U; index < count; ++index) {
-        /* Byte at a time: the console protocol's string form is capped at a
-         * couple of dozen bytes, and a partial write would be worse than a
-         * slow one. */
-        if (!sys::native::ok(sys::console::write_byte(
-                sys::native::stdout_endpoint, static_cast<sys::u8>(bytes[index]))))
-            return index == 0U ? -1 : static_cast<ssize_t>(index);
+
+    if (entry.role == kind::console_out) {
+        for (size_t index = 0U; index < count; ++index) {
+            /* Byte at a time: the console protocol's string form is capped
+             * at a couple of dozen bytes, and a partial write would be
+             * worse than a slow one. */
+            if (!sys::native::ok(sys::console::write_byte(
+                    sys::native::stdout_endpoint, static_cast<sys::u8>(bytes[index]))))
+                return index == 0U ? -1 : static_cast<ssize_t>(index);
+        }
+        return static_cast<ssize_t>(count);
     }
-    return static_cast<ssize_t>(count);
+
+    if (entry.role == kind::file) {
+        if (!ensure_vfs_mapped())
+            return -1;
+        size_t produced = 0U;
+        while (produced < count) {
+            size_t chunk = count - produced;
+            if (chunk > abi::vfs_buffer_size)
+                chunk = abi::vfs_buffer_size;
+            (void)memcpy(vfs_buffer(), bytes + produced, chunk);
+            const auto reply = sys::ipc_call(sys::native::vfs_endpoint,
+                                             static_cast<sys::word_t>(abi::vfs_operation::write),
+                                             table[descriptor_number].handle,
+                                             static_cast<sys::word_t>(chunk));
+            if (!sys::native::ok(reply.message0) || reply.message1 == 0U)
+                return produced == 0U ? -1 : static_cast<ssize_t>(produced);
+            produced += reply.message1;
+            if (reply.message1 < chunk)
+                break; // short write; do not spin trying to force the rest
+        }
+        return static_cast<ssize_t>(produced);
+    }
+
+    return -1;
 }
 
 ssize_t read(int descriptor_number, void* buffer, size_t count) noexcept {
     if (!valid(descriptor_number) || buffer == nullptr || count == 0U)
         return -1;
     const descriptor entry = table[descriptor_number];
-    if (entry.role != kind::console_in)
-        return -1;
     auto* bytes = static_cast<char*>(buffer);
-    /*
-     * Blocks until at least one byte arrives, then returns what is already
-     * available rather than filling the buffer -- a line-oriented reader
-     * would otherwise wait for bytes the user has not typed yet.
-     */
-    for (;;) {
-        const auto reply = sys::console::read_byte(sys::native::stdin_endpoint);
-        if (!reply.available)
-            continue; // nothing typed yet
-        bytes[0] = static_cast<char>(reply.value);
-        return 1;
+
+    if (entry.role == kind::console_in) {
+        /*
+         * Blocks until at least one byte arrives, then returns what is
+         * already available rather than filling the buffer -- a
+         * line-oriented reader would otherwise wait for bytes the user has
+         * not typed yet.
+         */
+        for (;;) {
+            const auto reply = sys::console::read_byte(sys::native::stdin_endpoint);
+            if (!reply.available)
+                continue;
+            bytes[0] = static_cast<char>(reply.value);
+            return 1;
+        }
     }
+
+    if (entry.role == kind::file) {
+        if (!ensure_vfs_mapped())
+            return -1;
+        size_t requested = count;
+        if (requested > abi::vfs_buffer_size)
+            requested = abi::vfs_buffer_size;
+        const auto reply = sys::ipc_call(sys::native::vfs_endpoint,
+                                         static_cast<sys::word_t>(abi::vfs_operation::read),
+                                         table[descriptor_number].handle,
+                                         static_cast<sys::word_t>(requested));
+        if (!sys::native::ok(reply.message0))
+            return -1;
+        (void)memcpy(bytes, vfs_buffer(), reply.message1);
+        return static_cast<ssize_t>(reply.message1);
+    }
+
+    return -1;
 }
 
 int close(int descriptor_number) noexcept {
     if (!valid(descriptor_number))
         return -1;
+    if (table[descriptor_number].role == kind::file) {
+        (void)sys::ipc_call(sys::native::vfs_endpoint,
+                            static_cast<sys::word_t>(abi::vfs_operation::close),
+                            table[descriptor_number].handle);
+    }
     table[descriptor_number].role = kind::closed;
     return 0;
 }
@@ -121,9 +204,30 @@ int dup2(int from, int to) noexcept {
     return to;
 }
 
-int open(const char*, int) noexcept {
-    /* Filled in once the VFS server exists; reported as "no such file"
-     * rather than a spurious success so callers take their error path. */
+int open(const char* path, int flags) noexcept {
+    if (path == nullptr || !ensure_vfs_mapped())
+        return -1;
+    const size_t length = strlen(path);
+    if (length == 0U || length >= abi::vfs_max_path)
+        return -1;
+    (void)memcpy(vfs_buffer(), path, length);
+    const auto reply = sys::ipc_call(sys::native::vfs_endpoint,
+                                     static_cast<sys::word_t>(abi::vfs_operation::open),
+                                     static_cast<sys::word_t>(length),
+                                     static_cast<sys::word_t>(flags));
+    if (!sys::native::ok(reply.message0))
+        return -1;
+
+    for (int slot = 0; slot < descriptor_capacity; ++slot) {
+        if (table[slot].role != kind::closed)
+            continue;
+        table[slot] = {kind::file, reply.message1};
+        return slot;
+    }
+    /* No local descriptor slot free: close the handle VFS already opened
+     * for us rather than leaking it. */
+    (void)sys::ipc_call(sys::native::vfs_endpoint, static_cast<sys::word_t>(abi::vfs_operation::close),
+                        reply.message1);
     return -1;
 }
 
@@ -174,7 +278,11 @@ int waitpid(int pid, int* status, int) noexcept {
             return -1;
         if (status != nullptr)
             *status = static_cast<int>(value);
-        (void)sys::control(abi::control_operation::process_destroy, selector);
+        // process_reap, not process_destroy: destroy is root-gated and
+        // needs task/space selectors this process was never given -- fork
+        // only installs the thread capability into the parent. reap works
+        // from that one capability alone (see its ABI comment).
+        (void)sys::control(abi::control_operation::process_reap, selector);
         children[slot].live = false;
         return pid;
     }

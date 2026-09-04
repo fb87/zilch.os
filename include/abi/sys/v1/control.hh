@@ -99,5 +99,24 @@ namespace sys::abi::v1
          * arrange its capabilities and then exec.
          */
         process_exec = 50U,
+        /*
+         * Tears down a bundle process_fork created, using only the one
+         * thread capability fork() installed into the parent -- unlike
+         * process_destroy, which needs thread, task, AND space selectors
+         * and is root-gated besides. Neither fits a forking parent: fork
+         * only ever installs the thread capability (see
+         * fork_user_bundle()), and requiring root would mean an ordinary
+         * process could fork children it can never clean up.
+         *
+         * Authorization is capability possession alone, the same rule
+         * every other operation here follows: holding a control capability
+         * to the thread is what proves the right to destroy its bundle,
+         * with no additional owner check, since fork() never lets that
+         * capability escape to anyone but the parent that receives it.
+         * Requires the thread to already be in the terminated state --
+         * i.e. process_wait must observe it exited first -- so a bundle is
+         * never torn down out from under a thread still running.
+         */
+        process_reap = 51U,
     };
 } // namespace sys::abi::v1

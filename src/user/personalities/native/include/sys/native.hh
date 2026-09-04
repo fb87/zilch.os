@@ -91,6 +91,16 @@ namespace sys::native
     inline constexpr capability_id_t stdin_endpoint = 18U;
 
     /*
+     * The VFS server's service endpoint and its client-shared payload
+     * frame, minted alongside the standard streams so a spawned program can
+     * open/read/write/stat files without asking root for anything more.
+     * Absent for servers root never spawns through spawn() -- the fixed
+     * boot-time service graph has no need to open files.
+     */
+    inline constexpr capability_id_t vfs_endpoint = 19U;
+    inline constexpr capability_id_t vfs_frame = 20U;
+
+    /*
      * Signalled to root_notification when bring-up fails. Distinct from the
      * per-service ready badges in abi::v1 (bits 0..7), which root sums into
      * its expected mask.

@@ -98,6 +98,36 @@ namespace sys::root_graph
      * not enough to ask where it physically lives.
      */
     inline constexpr capability_id_t block_shared_root_frame_selector = 91U;
+    /*
+     * VFS server, wired like the block and serial drivers: not a
+     * control_plane_role, direct process_create, own selectors and service
+     * endpoint. Launched after the block driver, which it depends on to
+     * mount ext2 at all.
+     */
+    inline constexpr word_t vfs_role = 0x10aU;
+    inline constexpr word_t vfs_selector = 110U;
+    inline constexpr capability_id_t vfs_service_endpoint = 113U;
+    /*
+     * VFS's own capability to the block driver's shared payload frame --
+     * the SAME frame block_shared_root_frame_selector already names, minted
+     * a second time. VFS becomes a third client of it alongside root's own
+     * verify_block_service() and the driver itself, safe for the reason
+     * every shared-frame client here is safe: one synchronous call at a
+     * time, so there is never more than one request's bytes in the buffer.
+     */
+    inline constexpr capability_id_t vfs_block_service_child_selector = 20U;
+    inline constexpr capability_id_t vfs_block_frame_child_selector = 21U;
+    /*
+     * A second, fresh frame -- root creates this one, unlike the block
+     * frame above -- shared between VFS and each of ITS clients, minted
+     * into every spawned program alongside its standard streams (see
+     * spawn()). Distinct from the block frame because VFS clients and the
+     * block driver must never alias the same buffer: a client filling this
+     * frame for a write() must not have it clobbered by an unrelated block
+     * transfer landing in the same bytes.
+     */
+    inline constexpr capability_id_t vfs_client_root_frame_selector = 97U;
+    inline constexpr capability_id_t vfs_client_frame_child_selector = 22U;
     inline constexpr capability_id_t block_shared_child_frame_selector = 25U;
     /*
      * INTID 79 = GIC SPI 47 = virtio-mmio transport 31, the transport QEMU
@@ -378,6 +408,39 @@ namespace sys::root_graph
         // to, so a bring-up scan is actually observable on the console.
         return control(abi::v1::control_operation::capability_mint, block_task,
                        block_serial_endpoint_selector, serial_service_endpoint,
+                       read_write) == success;
+    }
+
+    /*
+     * Creates the one frame VFS does not share with anything else: the
+     * client-shared payload buffer. Kept alive in root's own cspace at
+     * vfs_client_root_frame_selector afterward, not just minted onward and
+     * forgotten, because spawn() re-mints this same frame into every
+     * client VFS will later serve -- root needs its own live capability to
+     * mint FROM for as long as the system runs, not just at boot.
+     */
+    [[nodiscard]] inline bool create_vfs_resources() noexcept {
+        return control(abi::v1::control_operation::frame_create, 0U,
+                       vfs_client_root_frame_selector) == static_cast<word_t>(error_t::success);
+    }
+
+    [[nodiscard]] inline bool mint_vfs_resources() noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        const capability_id_t vfs_task = vfs_selector + 1U;
+        // Write-only: VFS only calls into the block driver, it never
+        // receives on this endpoint.
+        if (control(abi::v1::control_operation::capability_mint, vfs_task,
+                    vfs_block_service_child_selector, block_service_endpoint,
+                    static_cast<word_t>(abi::v1::CapabilityRight::write)) != success)
+            return false;
+        if (control(abi::v1::control_operation::capability_mint, vfs_task,
+                    vfs_block_frame_child_selector, block_shared_root_frame_selector,
+                    read_write) != success)
+            return false;
+        return control(abi::v1::control_operation::capability_mint, vfs_task,
+                       vfs_client_frame_child_selector, vfs_client_root_frame_selector,
                        read_write) == success;
     }
 
@@ -696,6 +759,7 @@ namespace sys::root_graph
             {memory_role, "bin/memory-server"},
             {serial_role, "bin/serial-driver"},
             {block_role, "bin/virtio-driver"},
+            {vfs_role, "bin/vfs-server"},
             {static_cast<word_t>(abi::v1::control_plane_role::process), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::device), "bin/control-plane"},
             {static_cast<word_t>(abi::v1::control_plane_role::console), "bin/console-server"},
@@ -1025,8 +1089,19 @@ namespace sys::root_graph
                     native::stdout_endpoint, endpoint_base + console_index,
                     write_only) != success)
             return false;
-        return control(abi::v1::control_operation::capability_mint, slot.task,
-                       native::stdin_endpoint, console_stdin_endpoint, read_write) == success;
+        if (control(abi::v1::control_operation::capability_mint, slot.task, native::stdin_endpoint,
+                    console_stdin_endpoint, read_write) != success)
+            return false;
+
+        /*
+         * VFS access, the same way: without these a spawned program's libc
+         * has open()/read()/write() defined but nothing to call into.
+         */
+        if (control(abi::v1::control_operation::capability_mint, slot.task, native::vfs_endpoint,
+                    vfs_service_endpoint, write_only) != success)
+            return false;
+        return control(abi::v1::control_operation::capability_mint, slot.task, native::vfs_frame,
+                       vfs_client_root_frame_selector, read_write) == success;
     }
 
     /*
@@ -1154,6 +1229,43 @@ namespace sys::root_graph
     }
 
     /*
+     * Runs bin/vfs-probe, which checks the VFS server from inside a real
+     * process: a real ext2 read against the disk-image fixture, and a /tmp
+     * round trip through ramfs. 77 is its success code; every other value
+     * names a specific check (see programs/vfs-probe/main.cc).
+     */
+    /*
+     * Absent is not a failure, the same principle block_check::absent
+     * establishes: a machine booted with no disk attached
+     * (tools/run/run.sh's BLOCK_IMAGE=-) correctly finds nothing to mount,
+     * and the probe's very first check -- opening the fixture ext2 always
+     * ships -- fails as code 10 specifically for that reason and no other.
+     * Refusing to boot over a missing optional device would make it
+     * mandatory; only a disk that IS present but answers wrong is a
+     * failure.
+     */
+    enum class vfs_check { absent, verified, failed };
+
+    [[nodiscard]] inline vfs_check verify_vfs() noexcept {
+        if (!spawn(3U, "bin/vfs-probe", nullptr, 0U, nullptr, 0U, 1U))
+            return vfs_check::failed;
+        reaped outcome{};
+        for (word_t attempt = 0U; attempt < 20000U && !outcome.exited; ++attempt) {
+            outcome = reap(3U);
+            if (!outcome.exited)
+                drain_fault_reports(nullptr);
+        }
+        release_child(3U);
+        if (!outcome.exited)
+            return vfs_check::failed;
+        if (outcome.status == 77U)
+            return vfs_check::verified;
+        if (outcome.status == 10U)
+            return vfs_check::absent;
+        return vfs_check::failed;
+    }
+
+    /*
      * Releases a reaped child's slot so the next spawn can reuse it. Must
      * follow reap(), not replace it: destroying the bundle discards the
      * status along with the thread.
@@ -1162,7 +1274,21 @@ namespace sys::root_graph
         if (index >= dynamic_role_count)
             return;
         const child_slot slot = slot_for(index);
-        (void)control(abi::v1::control_operation::process_destroy, slot.thread);
+        /*
+         * process_destroy needs all three selectors -- thread, task,
+         * space -- to actually tear the bundle down; passing only the
+         * thread selector (with task/space silently defaulting to 0) made
+         * every call here fail its capability lookup and return without
+         * freeing anything. The kernel's global thread pool is only 16
+         * slots, so each verify_*() call that spawned and "released" a
+         * probe was actually leaking one permanently -- invisible while
+         * probes were still few, and only surfaced once enough of them ran
+         * in one boot to exhaust the pool outright (verify_vfs() failed to
+         * spawn at all; the supervision thread failed right behind it for
+         * the same reason).
+         */
+        (void)control(abi::v1::control_operation::process_destroy, slot.thread, slot.task,
+                      slot.space);
         (void)control(abi::v1::control_operation::frame_destroy, slot.args_frame);
     }
 
@@ -1404,6 +1530,29 @@ namespace sys::root_graph
             if (!create_block_resources() || !mint_block_resources())
                 return 1;
         }
+        /*
+         * VFS server, launched after the block driver: mounting ext2 means
+         * calling into it, so its service endpoint must already be minted
+         * and answering, the same dependency ordering the block driver has
+         * on serial-driver above.
+         */
+        if (control(abi::v1::control_operation::process_create, 0U, vfs_role, vfs_selector,
+                    vfs_selector + 1U,
+                    vfs_selector + 2U) != static_cast<word_t>(error_t::success))
+            return 1;
+        {
+            const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                      static_cast<word_t>(abi::v1::CapabilityRight::write);
+            if (control(abi::v1::control_operation::endpoint_create, vfs_service_endpoint) !=
+                static_cast<word_t>(error_t::success))
+                return 1;
+            if (control(abi::v1::control_operation::capability_mint, vfs_selector + 1U,
+                        service_endpoint, vfs_service_endpoint,
+                        read_write) != static_cast<word_t>(error_t::success))
+                return 1;
+            if (!create_vfs_resources() || !mint_vfs_resources())
+                return 1;
+        }
         for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
             if (!launch(index, state))
                 return 1;
@@ -1426,7 +1575,8 @@ namespace sys::root_graph
 
         const word_t expected =
             ((1U << abi::v1::control_plane_role_count) - 1U) | abi::v1::memory_service_ready_badge |
-            abi::v1::serial_service_ready_badge | abi::v1::block_service_ready_badge;
+            abi::v1::serial_service_ready_badge | abi::v1::block_service_ready_badge |
+            abi::v1::vfs_service_ready_badge;
         word_t ready = 0U;
         bool console_verified = false;
         bool supervisor_spawned = false;
@@ -1480,6 +1630,12 @@ namespace sys::root_graph
                     report(verify_spawn_argv() ? "spawn-argv verified\n" : "spawn-argv FAILED\n");
                     report(verify_fork_exec() ? "fork-exec verified\n" : "fork-exec FAILED\n");
                     report(verify_libc() ? "libc verified\n" : "libc FAILED\n");
+                    {
+                        const vfs_check vfs_state = verify_vfs();
+                        report(vfs_state == vfs_check::verified ? "vfs verified\n"
+                              : vfs_state == vfs_check::absent  ? "vfs absent\n"
+                                                                : "vfs FAILED\n");
+                    }
                     console_verified = true;
                 }
                 if (!supervisor_spawned) {

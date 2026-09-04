@@ -22,6 +22,17 @@ platform=${PLATFORM:-qemu-arm64-virt}
 timeout_seconds=${SMOKE_TIMEOUT:-45}
 failures=0
 
+# Built once, ahead of any profile: content is architecture-independent, so
+# rebuilding it per profile would just repeat identical work. Only the
+# release profile below actually points BLOCK_IMAGE at it -- the guest
+# profile has never depended on VFS and stays exactly as it was.
+disk_image="$repo_root/out/image/disk.img"
+if ! "$repo_root/tools/image/make_disk_image.sh" "$repo_root/tools/image/rootfs" "$disk_image" \
+    >/dev/null 2>&1; then
+    echo "error: failed to build the ext2 disk image (is e2fsprogs installed?)" >&2
+    exit 1
+fi
+
 # Any of these appearing means a service reported its own failure. Listed
 # explicitly rather than grepping for "FAIL" so that unrelated text
 # containing that substring cannot silently make this vacuous.
@@ -34,6 +45,7 @@ failure_markers=(
     "spawn-argv FAILED"
     "fork-exec FAILED"
     "libc FAILED"
+    "vfs FAILED"
     "sup: spawn failed"
     "sup: no thread"
     "sup: bind failed"
@@ -106,12 +118,13 @@ run_profile() {
 
 # Production graph: every service up, and critically the supervision thread
 # started -- "graph ready" is printed only after that succeeds.
-run_profile "release (service graph)" "configs/release_defconfig" release \
+BLOCK_IMAGE="$disk_image" run_profile "release (service graph)" "configs/release_defconfig" release \
     "console-server alive" \
     "block-service verified" \
     "spawn-argv verified" \
     "fork-exec verified" \
     "libc verified" \
+    "vfs verified" \
     "graph ready"
 
 # Guest hosting: proves stage-2 trap-and-emulate through the domain manager's

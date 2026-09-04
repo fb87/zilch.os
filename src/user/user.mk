@@ -8,6 +8,7 @@ USER_CPPFLAGS := $(TARGET_FLAGS) $(ARCH_FLAGS) $(USER_TEST_INCLUDES) \
     -I$(SRCTREE)/src/user/lib/libsys/arch/$(ARCH)/include \
     -I$(SRCTREE)/src/user/personalities/native/include \
     -I$(SRCTREE)/src/user/lib/libc/include \
+    -I$(SRCTREE)/src/user/lib/ext2/include \
     -I$(SRCTREE)/src/user/domains/vmm/include \
     -I$(SRCTREE)/include -I$(SRCTREE)/include/abi \
     -include $(KCONFIG_AUTOCONF_H) \
@@ -27,7 +28,7 @@ USER_COMMON_SOURCES := \
     src/user/lib/libc/strtol.cc \
     src/user/lib/libc/env.cc \
     src/user/lib/libc/io.cc
-USER_PROGRAMS := init memory-server control-plane console-server serial-driver argv-probe exec-probe fork-probe libc-probe
+USER_PROGRAMS := init memory-server control-plane console-server serial-driver vfs-server argv-probe exec-probe fork-probe libc-probe vfs-probe
 ifeq ($(ARCH),arm64)
 USER_PROGRAMS += virtio-driver
 endif
@@ -58,6 +59,8 @@ USER_argv-probe_SOURCE := src/user/programs/argv-probe/main.cc
 USER_exec-probe_SOURCE := src/user/programs/exec-probe/main.cc
 USER_fork-probe_SOURCE := src/user/programs/fork-probe/main.cc
 USER_libc-probe_SOURCE := src/user/programs/libc-probe/main.cc
+USER_vfs-server_SOURCE := src/user/servers/vfs/main.cc
+USER_vfs-probe_SOURCE := src/user/programs/vfs-probe/main.cc
 USER_ELF := $(USER_OBJDIR)/init.elf
 USER_BIN := $(USER_OBJDIR)/init.bin
 MEMORY_SERVER_BIN := $(USER_OBJDIR)/memory-server.bin
@@ -142,6 +145,14 @@ $(USER_OBJDIR)/fork-probe/%.o: $(SRCTREE)/%.cc
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 $(USER_OBJDIR)/libc-probe/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/vfs-server/%.o: $(SRCTREE)/%.cc
+	@mkdir -p $(dir $@)
+	@printf '  UCXX    %s\n' '$@'
+	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
+$(USER_OBJDIR)/vfs-probe/%.o: $(SRCTREE)/%.cc
 	@mkdir -p $(dir $@)
 	@printf '  UCXX    %s\n' '$@'
 	@$(CXX) $(USER_CPPFLAGS) $(USER_CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@

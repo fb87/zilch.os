@@ -79,7 +79,7 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         return 23;
     if (witness != 0x5a5aU)
         return 24; // the child's write leaked into the parent
-    (void)sys::control(abi::control_operation::process_destroy, first_child);
+    (void)sys::control(abi::control_operation::process_reap, first_child);
 
     sys::word_t second = 0U;
     if (sys::control_result1(second, abi::control_operation::process_fork, second_child) != success)
@@ -96,6 +96,6 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         return 27;
     if (status != 55U)
         return 28; // exec did not reach bin/exec-probe
-    (void)sys::control(abi::control_operation::process_destroy, second_child);
+    (void)sys::control(abi::control_operation::process_reap, second_child);
     return 44;
 }

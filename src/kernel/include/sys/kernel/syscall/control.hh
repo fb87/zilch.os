@@ -745,6 +745,9 @@ namespace sys::kernel::syscall
                     return true; // frame now holds the new image's entry state
                 break;
             }
+            case abi::v1::control_operation::process_reap:
+                result = thread::reap_user_bundle(current, static_cast<capability_id_t>(a1));
+                break;
             case abi::v1::control_operation::process_wait: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, static_cast<capability_id_t>(a1),

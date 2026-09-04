@@ -1150,6 +1150,132 @@ namespace sys::kernel::thread
         return error_t::success;
     }
 
+    /*
+     * Tears down a bundle process_fork created, using only the thread
+     * capability the parent already holds. Structurally the same teardown
+     * as destroy_user_bundle() -- sibling threads first, then the
+     * memory-resource slot, then revoke/unregister/reclaim -- but reached
+     * differently: destroy_user_bundle() re-validates thread/task/space
+     * selectors against root's OWN cspace, because root can independently
+     * hold three separate capabilities into the same bundle. A forking
+     * parent never receives task or space capabilities at all (see
+     * fork_user_bundle()), only the thread's, so there is nothing to
+     * re-validate them against -- the thread object's own owner/
+     * address_space/scheduling_context links are the only path to the rest
+     * of the bundle, the same links the sibling-teardown loop already uses
+     * without a cspace lookup.
+     *
+     * Requiring state::terminated (process_wait's "exited") rather than
+     * quiescing a running thread here is deliberate: a parent that has not
+     * waited yet has no proof the child is done touching its own memory,
+     * and tearing down a live thread's address space out from under it is
+     * a different, more dangerous operation than reaping one that already
+     * reported its exit status.
+     */
+    [[nodiscard]] inline error_t reap_user_bundle(thread& current,
+                                                  capability_id_t thread_selector) noexcept {
+        if (current.owner == nullptr)
+            return error_t::denied;
+        object::header_t* header = nullptr;
+        error_t result = capability::lookup(current.owner->cspace, thread_selector,
+                                            object::type_t::thread, capability::right_t::control,
+                                            header);
+        if (result != error_t::success)
+            return result;
+        auto& target = *reinterpret_cast<thread*>(header);
+        if (target.id == 0U || target.id >= user_thread_count)
+            return error_t::denied;
+        if (load_state(target) != state::terminated)
+            return error_t::busy;
+        task::task* owner = target.owner;
+        if (owner == nullptr)
+            return error_t::denied;
+
+        for (u32 sibling = 0U; sibling < active_user_thread_count; ++sibling) {
+            thread& other = user_threads[sibling];
+            if (&other == &target || other.owner != owner ||
+                other.object.type != object::type_t::thread)
+                continue;
+            result = quiesce_user_thread(other);
+            if (result != error_t::success)
+                return result;
+            release_pending_reply(other);
+            const object::reference_t other_scheduling =
+                object::reference(other.scheduling_context.object);
+            const object::reference_t other_space = object::reference(other.address_space.object);
+            const object::reference_t other_thread = object::reference(other.object);
+            {
+                const capability::authority_guard authority_transaction{};
+                store_state(other, state::terminated);
+                memory::unmap_all(other.address_space);
+                capability::revoke_reference_locked(other_thread);
+                capability::revoke_reference_locked(other_space);
+                capability::revoke_reference_locked(other_scheduling);
+            }
+            (void)object::unregister_object(other_scheduling);
+            (void)object::unregister_object(other_space);
+            (void)object::unregister_object(other_thread);
+            other.address_space.release(&memory::release_physical_page);
+            arch::thread::clear(other.context);
+            other.owner = nullptr;
+            other.object = {};
+            other.address_space.object = {};
+            other.scheduling_context.object = {};
+            other.waiting_endpoint = 0U;
+            other.reply = {};
+            clear_transfer(other.transfer);
+            other.ipc_timeout_active = false;
+            other.last_fault = {};
+            other.fault_disposition = fault::disposition::pending;
+            store_state(other, state::inactive);
+        }
+
+        if (capability::slot_at(owner->cspace, 15U).object.type ==
+            object::type_t::memory_resource) {
+            result = memory::destroy_resource(*owner, 15U);
+            if (result != error_t::success)
+                return result;
+        }
+
+        const object::reference_t scheduling_reference =
+            object::reference(target.scheduling_context.object);
+        const object::reference_t space_reference = object::reference(target.address_space.object);
+        const object::reference_t thread_reference = object::reference(target.object);
+        const object::reference_t task_reference = object::reference(owner->object);
+        {
+            const capability::authority_guard authority_transaction{};
+            store_state(target, state::terminated);
+            memory::unmap_all(target.address_space);
+            (void)capability::revoke_all_locked(
+                owner->cspace, [](capability::derivation_id_t derivation) noexcept {
+                    (void)memory::unmap_authority(derivation, false);
+                });
+            capability::revoke_reference_locked(thread_reference);
+            capability::revoke_reference_locked(task_reference);
+            capability::revoke_reference_locked(space_reference);
+            capability::revoke_reference_locked(scheduling_reference);
+            // Removes the CALLER's own capability at thread_selector, the
+            // one thing destroy_user_bundle() does not need to do since
+            // root's equivalent slots are covered by the revoke above --
+            // but this selector lives in the caller's cspace, a different
+            // cspace from owner->cspace, so the revoke above never reaches
+            // it.
+            (void)capability::delete_capability(current.owner->cspace, thread_selector);
+        }
+        memory::reclaim_task_memory(task_reference);
+        result = object::unregister_object(scheduling_reference);
+        if (result == error_t::success)
+            result = object::unregister_object(space_reference);
+        if (result == error_t::success)
+            result = object::unregister_object(thread_reference);
+        if (result == error_t::success)
+            result = object::unregister_object(task_reference);
+        if (result != error_t::success)
+            return result;
+        clear_user_bundle(target, *owner);
+        return error_t::success;
+    }
+
     inline void log_cpu_assignment(cpu_id_t cpu) noexcept {
         // Every thread could in principle pin to the same CPU, so this is
         // sized for the whole pool rather than an arbitrary small constant

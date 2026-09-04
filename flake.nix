@@ -16,6 +16,7 @@
           default = pkgs.mkShell {
             packages = [
               pkgs.coreutils
+              pkgs.e2fsprogs
               pkgs.findutils
               pkgs.gawk
               pkgs.git
