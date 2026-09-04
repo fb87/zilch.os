@@ -4,6 +4,7 @@
 #include <sys/kernel/address_space.hh>
 #include <sys/kernel/capability.hh>
 #include <sys/kernel/hypervisor.hh>
+#include <sys/kernel/init/init.hh>
 #include <sys/kernel/interrupt.hh>
 #include <sys/kernel/ipc.hh>
 #include <sys/kernel/printk.hh>
@@ -11,10 +12,14 @@
 #include <sys/kernel/thread.hh>
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/platform.hh>
+#include <sys/platform/v1/timer_ops.hh>
 
 #if CONFIG_SELFTEST
 #include <sys/kernel/tests/bootstrap/validate.hh>
 #endif
+
+extern "C" const sys::kernel::init::entry_t __sys_init_timer_start[];
+extern "C" const sys::kernel::init::entry_t __sys_init_timer_end[];
 
 namespace sys::kernel
 {
@@ -46,7 +51,10 @@ namespace sys::kernel
         if (interrupt_result != error_t::success) {
             arch::cpu::halt();
         }
-        platform::timer::initialize();
+        init::run_stage(__sys_init_timer_start, __sys_init_timer_end,
+                        {.firmware_data = memory::firmware_data,
+                         .cpu_id = arch::cpu::current_id(),
+                         .boot_cpu = false});
         arch::memory::initialize_cpu();
         arch::hardening::initialize_cpu();
         scheduler::initialize_cpu();
@@ -90,7 +98,9 @@ namespace sys::kernel
         }
         pr_info("gic: initialized\n");
         pr_info("timer: initializing\n");
-        platform::timer::initialize();
+        init::run_stage(
+            __sys_init_timer_start, __sys_init_timer_end,
+            {.firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true});
         pr_info("timer: initialized\n");
         arch::smp::mark_online();
         pr_info("smp: boot CPU online\n");
@@ -161,13 +171,13 @@ namespace sys::kernel
         }
         if constexpr (arch::hypervisor::active) {
             pr_info("exceptions=EL1 hypervisor=EL2 gic=GICv3 timer=virtual@%uHz\n",
-                    static_cast<unsigned int>(platform::timer::ticks_per_second));
+                    static_cast<unsigned int>(sys_platform_timer_ops.ticks_per_second));
             pr_info("hypervisor cpus=%u/%u hvc=verified\n",
                     static_cast<unsigned int>(arch::hypervisor::verified_count()),
                     static_cast<unsigned int>(expected));
         } else {
             pr_info("exceptions=kernel hypervisor=inactive timer=%uHz\n",
-                    static_cast<unsigned int>(platform::timer::ticks_per_second));
+                    static_cast<unsigned int>(sys_platform_timer_ops.ticks_per_second));
         }
 
         arch::irq::enable();
@@ -197,7 +207,7 @@ namespace sys::kernel
         for (u64 spins = 1000000U; spins != 0U; --spins) {
             timers_online = true;
             for (u32 cpu_id = 0U; cpu_id < expected; ++cpu_id) {
-                if (platform::timer::ticks(cpu_id) == 0U) {
+                if (sys_platform_timer_ops.ticks(cpu_id) == 0U) {
                     timers_online = false;
                     break;
                 }
@@ -210,7 +220,7 @@ namespace sys::kernel
 
         pr_info("timer per-cpu=%s cpus=%u\n", timers_online ? "verified" : "timeout",
                 static_cast<unsigned int>(expected));
-        if (!timers_online || !platform::timer::certification_valid())
+        if (!timers_online || !sys_platform_timer_ops.certification_valid())
             arch::cpu::halt();
 #if CONFIG_SELFTEST
         pr_info("[TEST] name=timer_deadline_timebase result=PASS mode=per-cpu-tickless\n");

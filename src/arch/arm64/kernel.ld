@@ -18,6 +18,9 @@ SECTIONS
   }
   .rodata : ALIGN(4096) {
     *(.rodata .rodata.*)
+    __sys_init_timer_start = .;
+    KEEP(*(.sys_init_timer))
+    __sys_init_timer_end = .;
     . = ALIGN(4096);
     __kernel_rodata_end = .;
   }

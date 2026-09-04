@@ -1,8 +1,12 @@
 # Kernel/arch/platform decoupling
 
-Status: **proposed**. This document is a design draft; no code changes have
-been made yet. It captures the target architecture, the open issues found
-while designing it, and the resolutions chosen for each.
+Status: **pilot landed**. Mechanism 1 (init-stage linker sections) and
+mechanism 2 (steady-state ops-vtable contracts) are implemented and
+building for both `timer` on arm64 and amd64, per the "Recommended next
+step" below. The platform registry (DTB-matched multi-platform selection)
+remains a design only -- no code for it exists yet. See "Pilot status" at
+the end of this document for exactly what landed, what was verified, and
+what remains.
 
 ## Problem statement
 
@@ -396,3 +400,106 @@ Prototype mechanism 1 + mechanism 2 against a single subsystem (`timer`)
 on `qemu_arm64_virt` only, without introducing the platform registry yet,
 to validate the linker mechanics (section placement, `KEEP()`, boundary
 symbols, `.rodata` placement) before extending to multi-platform selection.
+
+## Pilot status
+
+The step above has landed, for both `qemu_arm64_virt` and `qemu_amd64_q35`
+(not arm64-only, since `kernel.hh` is shared between both and both needed
+matching linker-script/`platform.cc` changes to keep building).
+
+### What changed
+
+- `src/kernel/include/sys/kernel/init/init.hh` (new): `boot_context_t`,
+  `entry_t`, `run_stage()`, and the `SYS_INIT`/`ARCH_INIT`/`PLAT_INIT`
+  macros described under "Mechanism 1" above. Only the `timer` stage
+  exists; the full `stages.def` X-macro list is not built yet.
+- `include/sys/platform/v1/timer_ops.hh` (new): `timer_ops_t` contract
+  type and the `extern "C" sys_platform_timer_ops` declaration, per
+  "Mechanism 2".
+- `src/arch/arm64/kernel.ld` and `src/arch/amd64/kernel.ld`: added the
+  `.sys_init_timer` section (`KEEP()`'d, with `__sys_init_timer_start`/
+  `_end` boundary symbols) inside the existing `.rodata` output section.
+- `src/platform/qemu_arm64_virt/platform.cc` and
+  `src/platform/qemu_amd64_q35/platform.cc`: each now defines a
+  `timer_percpu_init` wrapper registered via `PLAT_INIT(timer, ...)`, and
+  populates `sys_platform_timer_ops` pointing at the existing
+  `sys::platform::timer::*` free functions — no timer logic changed on
+  either platform, only exposed through the new contract type in addition
+  to the existing one.
+- `src/kernel/include/sys/kernel/kernel.hh`: the two
+  `platform::timer::initialize()` call sites (`start()`,
+  `start_secondary()`) now go through `init::run_stage()`; the boot-path
+  reads of `ticks_per_second`, `ticks()`, and `certification_valid()` now
+  go through `sys_platform_timer_ops` instead of the direct
+  `platform::timer::` calls.
+
+### What was deliberately left out of scope
+
+- **Every other `platform::timer::` call site** — `scheduler.hh`,
+  `ipc.hh`, `control.hh`, `interrupt.hh`, and both `arch.cc` files still
+  call the free functions directly. These are IPC/scheduler hot paths;
+  converting them to indirect ops-pointer calls is a separate, more
+  carefully reviewed change, not part of validating the linker mechanics.
+  Practically, this means `kernel.hh` still `#include`s
+  `<sys/platform/platform.hh>` and is not yet free of per-platform header
+  dependencies — that end-state goal needs the remaining subsystems
+  (console, interrupt, memory, firmware) migrated too, plus these
+  remaining timer call sites.
+- **The platform registry** (`.plat_registry`, DTB root-`compatible`
+  matching, `platform::select()`) — design only, no code.
+- **The full `stages.def` stage list** (`cpu_early`, `hypervisor`,
+  `memory`, `hardening`, `scheduler`, `interrupt`, `smp`, …) — only
+  `timer` exists as a stage; `kernel.hh`'s other boot-sequence calls are
+  unchanged.
+- **`check_elf.sh` assertions** for section presence/size/`.rodata`
+  placement — verified manually for this pilot (see below), not yet
+  encoded as an automated build gate.
+- **`src/arch/host`** — not touched; the design doc's concern about the
+  host build's default linker script not knowing about `.sys_init_timer`
+  is real but unexercised here, since nothing under `tests/host/` includes
+  `kernel.hh` today (confirmed by grep before treating this as out of
+  scope).
+
+### What was verified, and how
+
+- `make arm64` and `make amd64` both build clean (`BUILD_VARIANT=debug`,
+  the default), including `make format-check` reporting no violations in
+  any file touched by this pilot (pre-existing violations in untouched
+  files remain, unrelated to this change).
+- `nm`/`readelf` against both resulting `zilch.elf` binaries confirm:
+  - Exactly one `.sys_init_timer` entry on each (`__sys_init_timer_end -
+    __sys_init_timer_start == 16` bytes == one `entry_t`), i.e. the
+    "singleton stage" assumption from the design actually holds today and
+    the entry survived `--gc-sections` because of `KEEP()`.
+  - Both `__sys_init_timer_start`/`_end` and `sys_platform_timer_ops` fall
+    inside the `.rodata` output section on both arm64 and amd64 — the
+    read-only-placement requirement from the "Security / hardening" table
+    above holds, checked directly against section addresses rather than
+    assumed.
+
+### What was **not** verified
+
+- **No boot test.** This environment has no `qemu-system-aarch64` or
+  `qemu-system-x86_64` available (package install failed on missing
+  mirror files), so `make run` / `make smoke` were not exercised. The
+  build and static-layout checks above give real confidence in the
+  linker mechanics specifically, but not that the kernel still boots to
+  the same state it did before this change. Run `make smoke` (or `make
+  run`) on a machine with QEMU before trusting this beyond the linker
+  mechanics.
+- `tools/verification/run_host_kernel_logic.sh` was attempted but fails in
+  this environment for an unrelated, pre-existing reason (missing
+  `libclang_rt.asan*` static libraries for the installed clang); confirmed
+  it doesn't touch `kernel.hh`/`init.hh` either way, so it wasn't
+  informative for this change even where it does run.
+
+### Suggested next slice
+
+Pick one of: (a) migrate the remaining `platform::timer::` call sites in
+`scheduler.hh`/`ipc.hh`/`control.hh`/`interrupt.hh`/`arch.cc` through
+`sys_platform_timer_ops` (the hot-path conversion this pilot explicitly
+deferred), or (b) migrate `console` next (smallest remaining ops surface:
+`initialize()` + `putc()`, two call sites) to make progress on removing
+`<sys/platform/platform.hh>` from `kernel.hh` entirely. Either way, get a
+real boot test (`make smoke`) running first — that gap matters more than
+which subsystem comes next.
