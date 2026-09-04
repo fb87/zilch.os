@@ -21,6 +21,11 @@ SECTIONS
     __sys_init_timer_start = .;
     KEEP(*(.sys_init_timer))
     __sys_init_timer_end = .;
+    __sys_init_smmu_start = .;
+    KEEP(*(.sys_init_smmu))
+    __sys_init_smmu_end = .;
+    KEEP(*(.sys_ops_timer))
+    KEEP(*(.sys_ops_smmu))
     . = ALIGN(4096);
     __kernel_rodata_end = .;
   }

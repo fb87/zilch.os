@@ -12,6 +12,7 @@
 #include <sys/kernel/thread.hh>
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/platform.hh>
+#include <sys/platform/v1/smmu_ops.hh>
 #include <sys/platform/v1/timer_ops.hh>
 
 #if CONFIG_SELFTEST
@@ -20,6 +21,8 @@
 
 extern "C" const sys::kernel::init::entry_t __sys_init_timer_start[];
 extern "C" const sys::kernel::init::entry_t __sys_init_timer_end[];
+extern "C" const sys::kernel::init::entry_t __sys_init_smmu_start[];
+extern "C" const sys::kernel::init::entry_t __sys_init_smmu_end[];
 
 namespace sys::kernel
 {
@@ -97,6 +100,9 @@ namespace sys::kernel
             arch::cpu::halt();
         }
         pr_info("gic: initialized\n");
+        init::run_stage(
+            __sys_init_smmu_start, __sys_init_smmu_end,
+            {.firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true});
         pr_info("timer: initializing\n");
         init::run_stage(
             __sys_init_timer_start, __sys_init_timer_end,

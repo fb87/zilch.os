@@ -46,6 +46,15 @@ run_arm64_qemu() {
     fi
     exec qemu-system-aarch64 "$@"
 }
+# Opt-in only: the kernel's SMMU driver (docs/architecture/
+# KERNEL_ARCH_PLATFORM_DECOUPLING.md) is discovery-only and never enables
+# translation, but whether enabling QEMU's virt SMMUv3 model at all
+# affects other emulated devices' DMA paths (virtio-blk, virtio-net) has
+# not been validated here. Default stays off so existing behavior is
+# unchanged; set QEMU_SMMU=1 to add `iommu=smmuv3` for testing the driver.
+smmu_opt=""
+[ "${QEMU_SMMU:-}" = "1" ] && smmu_opt=",iommu=smmuv3"
+
 case "$machine" in
     AArch64)
         dtb=$(mktemp)
@@ -62,7 +71,7 @@ case "$machine" in
             blockdev="1"
         fi
         trap 'rm -f "$dtb"; [ -n "${BLOCK_IMAGE:-}" ] || rm -f "$disk"' EXIT HUP INT TERM
-        qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on,dumpdtb=$dtb" \
+        qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on,dumpdtb=$dtb$smmu_opt" \
             -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -display none
         # force-legacy=false selects the modern (VIRTIO 1.x, MMIO version 2)
         # transport. QEMU's virt board otherwise presents these as legacy
@@ -74,7 +83,7 @@ case "$machine" in
             set -- -drive "if=none,file=$disk,format=raw,id=blk0" \
                 -device virtio-blk-device,drive=blk0 "$@"
         fi
-        run_arm64_qemu -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 \
+        run_arm64_qemu -machine "virt,gic-version=3,virtualization=on$smmu_opt" -cpu cortex-a57 \
             -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" \
             -global virtio-mmio.force-legacy=false \
             -device "loader,file=$dtb,addr=0x48000000,force-raw=on" "$@"

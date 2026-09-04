@@ -1,12 +1,17 @@
 # Kernel/arch/platform decoupling
 
-Status: **pilot landed**. Mechanism 1 (init-stage linker sections) and
-mechanism 2 (steady-state ops-vtable contracts) are implemented and
-building for both `timer` on arm64 and amd64, per the "Recommended next
-step" below. The platform registry (DTB-matched multi-platform selection)
-remains a design only -- no code for it exists yet. See "Pilot status" at
-the end of this document for exactly what landed, what was verified, and
-what remains.
+Status: **pilot landed, unboot-tested**. Mechanism 1 (init-stage linker
+sections) and mechanism 2 (steady-state ops-vtable contracts) are
+implemented and building on both arm64 and amd64 for a driver section
+holding `timer` (both platforms, real) and `smmu` (arm64: real discovery
+only, DEV-006; amd64: honest stub, no IOMMU). The platform registry
+(DTB-matched multi-platform selection) remains a design only -- no code
+for it exists yet. See "Pilot status" and "Driver section: UART, SMMU,
+timer" below for exactly what landed, what was verified, and what
+remains -- most importantly, **no QEMU boot test has been possible in
+this environment**, so nothing here should be treated as confirmed
+working beyond static build/layout checks until `make smoke` actually
+runs.
 
 ## Problem statement
 
@@ -493,13 +498,137 @@ matching linker-script/`platform.cc` changes to keep building).
   it doesn't touch `kernel.hh`/`init.hh` either way, so it wasn't
   informative for this change even where it does run.
 
-### Suggested next slice
+## Driver section: UART, SMMU, timer
+
+A "driver" in this codebase is not a new mechanism — it's mechanism 1
+(init-stage registration) plus mechanism 2 (ops-vtable contract) applied
+to a platform subsystem, with a name. This section covers extending the
+timer pilot to a second, structurally different slot: SMMU/IOMMU.
+
+### Why SMMU is not the same shape as timer or console
+
+UART and timer have real, working implementations to point the pattern
+at. SMMU/IOMMU did not, at the time this was proposed: zero code existed,
+and `docs/readiness/KERNEL_SECURITY_MODEL.md` explicitly states DMA
+isolation before this subsystem exists is outside the certified boundary,
+with 18 unchecked items (`DEV-001`..`DEV-018`) in
+`docs/readiness/PRODUCTION_READINESS_CHECKLIST.md` §9. Full SMMUv3 support
+(stream tables, per-domain translation contexts, command/event queues,
+invalidation, DMA-to-capability binding) is a multi-week undertaking this
+pass does not attempt. What it does implement, for real:
+
+**`DEV-006` ("ARM SMMU discovery implemented"), and only that.**
+
+### What changed
+
+- `include/sys/platform/v1/smmu_ops.hh` (new): `smmu_ops_t` contract —
+  `present()`, `idr0()`, `idr1()`, `stage1_supported()`,
+  `stage2_supported()`, `stream_id_bits()`. All-scalar returns, matching
+  `timer_ops_t`'s style rather than returning an aggregate struct by value
+  across the `extern "C"` boundary.
+- `src/platform/qemu_arm64_virt/include/sys/platform/smmu.hh` (new): the
+  real driver. Read-only MMIO probe of QEMU virt's fixed `VIRT_SMMU`
+  address (`0x09050000`, size `0x20000`, from QEMU's `hw/arm/virt.c`
+  `base_memmap`, confirmed against QEMU's own source rather than assumed)
+  and IDR0/IDR1/IIDR/AIDR register decode (offsets and bitfields from ARM
+  IHI 0070, cross-checked against Linux's
+  `drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.h` rather than relied on from
+  memory alone). `CR0` (translation enable) is never written. Presence
+  detection relies on QEMU's virt platform bus returning `0xffffffff` for
+  unassigned MMIO reads — a QEMU-specific heuristic, documented as such in
+  the file, acceptable because this driver only ever targets that one
+  board.
+- `src/platform/qemu_arm64_virt/platform.cc`: registers `smmu_init` via
+  `PLAT_INIT(smmu, ...)` (a **once** stage — SMMU is one shared platform
+  device, not per-CPU state, unlike timer's **percpu** stage) and
+  populates `sys_platform_smmu_ops` pointing at the real driver.
+- `src/platform/qemu_amd64_q35/platform.cc`: registers a stub `smmu_init`
+  that logs "not present" and populates `sys_platform_smmu_ops` with
+  functions that always report absence. This is not a placeholder for
+  missing work — Intel VT-d is a distinct spec/register model from ARM
+  SMMUv3 and is genuinely out of scope; reporting "no IOMMU on this
+  platform" is a complete, honest implementation of the contract for a
+  platform that doesn't have one.
+- `src/arch/arm64/kernel.ld` / `src/arch/amd64/kernel.ld`: added
+  `.sys_init_smmu` (mirroring `.sys_init_timer`) plus two more sections,
+  `.sys_ops_timer` and `.sys_ops_smmu` (see below for why those were
+  needed).
+- `src/kernel/include/sys/kernel/kernel.hh`: runs the `smmu` stage once,
+  from `start()` only (never `start_secondary()`), right after GIC
+  initialization and before the timer stage.
+- `tools/run/run.sh`: added `QEMU_SMMU=1` (default off) to append
+  `iommu=smmuv3` to both `-machine` invocations. Default behavior is
+  unchanged — this was **not** turned on unconditionally, because this
+  session had no QEMU available to verify that enabling QEMU's SMMUv3
+  model doesn't affect other emulated devices' DMA paths (virtio-blk,
+  virtio-net). That verification is still outstanding.
+
+### A real finding from this pass: `used` alone doesn't survive `--gc-sections`
+
+Building `sys_platform_smmu_ops` first without a dedicated section (just
+`extern "C" __attribute__((used)) const ...`) — reasoning that `used`
+should be enough since nothing else in this codebase needed more — the
+symbol **vanished from the linked binary's symbol table entirely** on
+both arches. `sys_platform_timer_ops` survived only because `kernel.hh`
+actually reads its fields at boot; `sys_platform_smmu_ops` has no reader
+yet, so nothing kept its auto-generated `-fdata-sections` subsection alive
+under `--gc-sections`. `__attribute__((used))` only tells the *compiler*
+not to treat something as dead code — it does not tell the *linker* to
+retain an unreferenced section. The fix is the same mechanism already
+proven for `.sys_init_timer`: a named section (`.sys_ops_timer`/
+`.sys_ops_smmu`) plus `KEEP()` in the linker script — with the added
+wrinkle that clang requires the `section()` attribute to match on
+*every* declaration of the symbol, not just the defining one, so the
+`extern` declarations in `smmu_ops.hh`/`timer_ops.hh` needed the
+attribute too (`-Werror -Wsection` otherwise). This is a genuinely useful
+correction to the "Linker/toolchain mechanics" table above: **any ops
+singleton without a guaranteed reader needs the named-section+`KEEP()`
+treatment, not just multi-registrant init-stage sections.**
+
+### What was verified, and how
+
+- `make arm64` and `make amd64` both build clean, `make format-check`
+  clean on every touched file.
+- `nm`/`readelf` confirm, on both arches: exactly one entry each in
+  `.sys_init_timer` and `.sys_init_smmu` (16 bytes, surviving
+  `--gc-sections` via `KEEP()`), and — after the section-naming fix above
+  — both `sys_platform_timer_ops` and `sys_platform_smmu_ops` present and
+  falling entirely inside the `.rodata` output section on both targets.
+- The QEMU `VIRT_SMMU` base address/size and the `iommu=smmuv3` machine
+  property name were confirmed against QEMU's own `hw/arm/virt.c` source
+  (via web fetch), not assumed from memory. The IDR0/IDR1 register offsets
+  and bitfields were confirmed against Linux's
+  `arm-smmu-v3.h` the same way.
+
+### What was **not** verified
+
+- **No boot test, same as the timer pilot** — this environment has no
+  QEMU. The discovery code has never actually run against real (emulated)
+  SMMUv3 hardware. Static review and cross-referenced register offsets
+  are not a substitute for that, especially for a security-relevant
+  subsystem — run `QEMU_SMMU=1 make smoke` (or `run`) before trusting the
+  discovery output, and plain `make smoke` to confirm `QEMU_SMMU`-unset
+  behavior is unaffected.
+- **Whether enabling QEMU's SMMUv3 model affects other devices** — not
+  established, which is exactly why `QEMU_SMMU` defaults off in `run.sh`
+  rather than being folded into the default machine string.
+- `docs/readiness/PRODUCTION_READINESS_CHECKLIST.md`'s `DEV-006` checkbox
+  was **deliberately left unchecked** — this is a certification tracking
+  document, and marking a security-relevant item complete without a real
+  boot test would be a false claim, not a conservative one. Check it off
+  only after the boot test above actually confirms discovery works
+  end-to-end against QEMU's real SMMUv3 model.
+
+## Suggested next slice
 
 Pick one of: (a) migrate the remaining `platform::timer::` call sites in
 `scheduler.hh`/`ipc.hh`/`control.hh`/`interrupt.hh`/`arch.cc` through
-`sys_platform_timer_ops` (the hot-path conversion this pilot explicitly
-deferred), or (b) migrate `console` next (smallest remaining ops surface:
-`initialize()` + `putc()`, two call sites) to make progress on removing
-`<sys/platform/platform.hh>` from `kernel.hh` entirely. Either way, get a
-real boot test (`make smoke`) running first — that gap matters more than
-which subsystem comes next.
+`sys_platform_timer_ops` (the hot-path conversion the timer pilot
+explicitly deferred), (b) migrate `console` next (smallest remaining ops
+surface: `initialize()` + `putc()`, two call sites) to make progress on
+removing `<sys/platform/platform.hh>` from `kernel.hh` entirely, or (c)
+get the SMMU discovery driver boot-tested (`QEMU_SMMU=1 make smoke`) on a
+machine with QEMU, which nothing above has been able to do. (c) is the
+highest-value next step given SMMU is the one piece of this pass that
+touches a documented security boundary and has had zero dynamic
+verification so far.
