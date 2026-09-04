@@ -31,8 +31,8 @@ namespace
     }
 } // namespace
 
-PLAT_INIT(percpu, timer_percpu_init);
-PLAT_INIT(once, smmu_init);
+PLAT_INIT(percpu, timer, timer_percpu_init);
+PLAT_INIT(once, smmu, smmu_init);
 
 extern "C" SYS_OPS const sys::platform::v1::timer_ops_t sys_platform_timer_ops = {
     .ticks_per_second = sys::platform::timer::ticks_per_second,

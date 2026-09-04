@@ -38,6 +38,37 @@ namespace sys::kernel::init
 {
     enum class stage_t : u16 { once, percpu };
 
+    /*
+     * A device *class*, not a specific board's instance -- borrowed from
+     * Linux's driver-core split (struct device / struct device_driver /
+     * struct bus_type), scoped down to just the piece that's actually
+     * useful with one board and one driver per role: a common, generic
+     * descriptor every driver's registration carries, independent of its
+     * subsystem-specific ops struct (timer_ops_t, smmu_ops_t, ...). This
+     * is what lets kernel-level code (a boot-time device listing, and
+     * later the device-ownership capability model tracked as DEV-001 in
+     * docs/readiness/PRODUCTION_READINESS_CHECKLIST.md) enumerate "what
+     * devices exist" without knowing about any specific subsystem.
+     *
+     * Linux's dynamic device<->driver matching (of_match_table and
+     * friends) is deliberately *not* built here -- there's no second
+     * candidate to match against yet. That piece belongs to the deferred
+     * DTB-matched platform registry ("Multiple platforms selected via
+     * DTB" in the design doc), which is the first place this codebase
+     * will have genuine N-candidate matching to justify it.
+     *
+     * Adding a second *instance* of an existing class (a different UART
+     * IP on another board, say) reuses the existing enumerator -- only a
+     * genuinely new device *class* needs one added here, same rarity and
+     * same non-linker-touching nature as adding a stage_t enumerator.
+     */
+    enum class device_kind_t : u16 { uart, smmu, timer };
+
+    struct device_t {
+        const char* name;
+        device_kind_t kind;
+    };
+
     struct boot_context_t {
         uintptr_t firmware_data;
         cpu_id_t cpu_id;
@@ -48,7 +79,7 @@ namespace sys::kernel::init
 
     struct entry_t {
         init_fn_t fn;
-        const char* name;
+        device_t device;
         stage_t stage;
     };
 
@@ -67,19 +98,19 @@ namespace sys::kernel::init
         for (const entry_t* it = __sys_drivers_start; it != __sys_drivers_end; ++it) {
             if (it->stage != stage)
                 continue;
-            pr_info("init: driver=%s\n", it->name);
+            pr_info("init: driver=%s\n", it->device.name);
             (void)it->fn(&context);
         }
     }
 } // namespace sys::kernel::init
 
-#define SYS_INIT(stage, fn)                                                                        \
-    static const ::sys::kernel::init::entry_t __sys_init_##fn                                      \
-        __attribute__((used, section(".sys_driver"))) = {&fn, #fn,                                 \
-                                                         ::sys::kernel::init::stage_t::stage}
+#define SYS_INIT(stage, kind, fn)                                                                  \
+    static const ::sys::kernel::init::entry_t __sys_init_##fn __attribute__((                      \
+        used, section(".sys_driver"))) = {                                                         \
+        &fn, {#fn, ::sys::kernel::init::device_kind_t::kind}, ::sys::kernel::init::stage_t::stage}
 
-#define ARCH_INIT(stage, fn) SYS_INIT(stage, fn)
-#define PLAT_INIT(stage, fn) SYS_INIT(stage, fn)
+#define ARCH_INIT(stage, kind, fn) SYS_INIT(stage, kind, fn)
+#define PLAT_INIT(stage, kind, fn) SYS_INIT(stage, kind, fn)
 
 /*
  * Steady-state ops-vtable singletons (timer_ops_t, smmu_ops_t, ...) share

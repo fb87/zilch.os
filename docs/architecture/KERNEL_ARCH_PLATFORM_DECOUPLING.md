@@ -668,6 +668,58 @@ legitimately owns — the earlier design doc language "kernel decides
 here was that policy leaking driver *identity* (specific names) into the
 kernel, not the existence of orchestration itself.
 
+### Third revision: a minimal Linux-style device descriptor
+
+Prompted by a direct comparison to Linux's driver core (`struct device` /
+`struct device_driver` / `struct bus_type`). Mapped precisely, not just
+by analogy:
+
+| Linux concept | Zilch equivalent |
+|---|---|
+| Subsystem ops struct (`net_device_ops`, `tty_operations`) | `timer_ops_t`, `smmu_ops_t` |
+| `device_driver::probe()` | `PLAT_INIT`/`ARCH_INIT` → `.sys_driver`, run via `run_stage()` |
+| `bus_type` matching device↔driver dynamically | **Not built** — see below |
+| `struct device` (generic identity, independent of subsystem) | **Was missing** — added this revision |
+
+The `bus_type` piece — Linux's dynamic device↔driver matching
+(`of_match_table` and friends) — was deliberately *not* built: there is
+no second candidate to match against with one board and one driver per
+role. That piece already has a home: the deferred DTB-matched platform
+registry ("Multiple platforms selected via DTB" above) *is* this same
+matching model, scoped to board selection, and is the first place this
+codebase will have genuine N-candidate matching to justify building it.
+Building a full bus/device/driver triad now, for two statically-known
+drivers, would be exactly the kind of structure-with-no-second-case this
+project's own conventions warn against.
+
+The `struct device` piece — a small, generic identity independent of any
+subsystem-specific ops struct — was a real, proportionate gap: nothing
+let kernel-level code enumerate "what devices exist" without knowing
+about a specific subsystem, and the already-tracked device-ownership
+capability work (`DEV-001` in the readiness checklist) will need exactly
+that once it starts. Added minimally:
+
+```cpp
+enum class device_kind_t : u16 { uart, smmu, timer };
+struct device_t { const char* name; device_kind_t kind; };
+```
+
+`entry_t`'s standalone `name` field was replaced by a nested `device_t
+device` (removing the duplication a separate top-level name would have
+caused). `SYS_INIT`/`ARCH_INIT`/`PLAT_INIT` gained a `kind` parameter:
+`PLAT_INIT(once, smmu, smmu_init)`, `PLAT_INIT(percpu, timer,
+timer_percpu_init)`. `uart` is reserved for when console gets migrated to
+this mechanism (see "Suggested next slice") — nothing registers it yet.
+
+`device_kind_t` enumerators name device *classes*, not board instances —
+adding a second UART IP on a different board reuses `device_kind_t::uart`
+with no header or linker change; only a genuinely new device *class*
+needs a new enumerator, same rarity and non-linker-touching nature as a
+new `stage_t` value. Unlike `stage_t`, `kind` isn't something `kernel.hh`
+branches on at all — it exists purely as descriptive metadata for future
+generic tooling, so there's no analogous coupling risk to guard against
+here.
+
 ### What was verified, and how
 
 - `make arm64` and `make amd64` both build clean, `make format-check`
