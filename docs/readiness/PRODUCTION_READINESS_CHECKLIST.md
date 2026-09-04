@@ -338,10 +338,15 @@ Every completed requirement must link to:
 
 - [-] **USR-013** Bootstrap loader resolves binaries by earlyfs pathname at runtime (`role_image_bind`/`bind_role_image`, dynamically allocated per-segment frames via `elf64::load_dynamic()`) and a userspace `launch_path()` API can resolve and launch an arbitrary earlyfs-resident path at any point after boot, not just the six roles bound at startup; still bounded to a fixed 256 KiB/64-page image window and a single concurrently-resolvable dynamic role (`root_graph.hh::dynamic_launch_role`) -- lifting either is explicitly deferred, no current binary or use case needs it.
 - [x] **USR-014** Per-segment W^X rejection, present-page overlap rejection, alignment validation, and explicit `ET_EXEC`-only acceptance (non-`ET_EXEC` types, e.g. PIE/`ET_DYN`, are now rejected by name in `valid_header()` rather than only incidentally via address-range math) are enforced by both `elf64::load()` and `elf64::load_dynamic()`. A permanent one-page unmapped guard gap is now reserved between an image's highest loadable page and the user stack (`elf64::loadable_pages`), closing a prior gap where a maximal-size image left zero gap before the stack.
-- [ ] **USR-015** TLS, argv/envp, and auxiliary-vector construction remain explicitly deferred: zero current consumer (every PL3 server is a small freestanding binary using file-scope statics, no thread-locals or command-line parsing), so building this now would be speculative and unverifiable. The stack-guard-gap half of this item is done (see USR-014). Revisit when a real consumer needs it.
+- [-] **USR-015** argv/envp construction is now real, not deferred: `abi::v1::encode_process_args()`/`process_args_header` (`include/abi/sys/v1/process.hh`) encode a flat argv+envp block into a spawner-minted frame at a fixed address, and `process_entry.cc`'s `build_vectors()` decodes it into `sys_user_main(argc, argv, envp)` before a program's own code runs. The real consumer this item was explicitly waiting on now exists -- see USR-039's shell and coreutils, which parse real argv and read/write a real `environ`. TLS and a true ELF auxiliary vector remain explicitly deferred: still zero consumer needing thread-locals, and argc/argv/envp cover everything every current program actually does with its arguments. The stack-guard-gap half of this item is done (see USR-014).
 - [ ] **USR-016** Dynamic linker: explicitly deferred, no current consumer, per this item's own "implemented or explicitly deferred" allowance.
 - [x] **USR-017** `sys::root_graph::launch_path()` resolves an arbitrary earlyfs-resident path at runtime and launches it via the existing `role_image_bind` + `process_create` operations, with zero kernel/ABI changes -- verified end to end against a real release boot (dynamically bound `bin/control-plane` under a fresh role, process created and ran without disrupting the rest of boot). Scoped to earlyfs-resident paths only, and to one concurrently-resolvable dynamic role (see USR-013 note).
 - [-] **USR-018** Root now drains its own fault endpoint each supervision-loop iteration (bounded 1-tick `ipc_receive`, previously never called by anything in userspace) and replies `terminate` immediately, so a crashing child is reaped promptly instead of silently sitting `blocked_fault` for the kernel's full 500-tick fault timeout. Visibility (an actual crash *report*, as opposed to prompt termination) remains open: production userspace has no logging syscall today, and OBS-010 forbids raw fault address/PC/syndrome in release logs even if one existed, so a redaction-compliant reporting mechanism needs its own design pass. Restart-on-crash now builds on this and is complete (USR-034); note that fault draining is owned exclusively by root's supervision thread once that thread exists, rather than by the readiness loop, so the two never race to reap or restart the same role. USR-034 also fixed a real defect in this item's own baseline: memory-server's production loop was receiving on the same endpoint object as root's fault endpoint and won most fault-delivery races, meaning "root reaps a crashing child promptly" did not reliably hold in a release build before that fix.
+- [x] **USR-039** A real POSIX-style shell and seven coreutils run as ordinary forked, exec'd processes against a real VFS. `bin/sh` (`src/user/programs/sh/main.cc`) supports pipelines, input/output redirection (`<`, `>`, `>>`), `$VAR`/`$?` expansion, quoting, and in-process builtins (`cd`, `pwd`, `exit`, `export`, `echo`); `cat`, `echo`, `head`, `wc`, `ls`, `true`, `false` run as separate binaries resolved through `execv()` against a fixed, boot-bound role table (`src/user/include/sys/coreutils.hh`) rather than by loading arbitrary ELF bytes off disk at exec time -- binding a fixed set in advance is what lets a forked child run a *different* program without every process needing root's own image-binding authority; loading an arbitrary path at exec time remains open, the same explicit-deferral shape as USR-013/USR-016. Pipelines run sequentially through numbered ramfs temp files, not concurrently, because this kernel has no pipe object -- documented as a real limitation in `sh/main.cc`, not hidden behind the interface.
+
+  Making fork+exec survive real use, rather than just the certification harness's own narrow fork/exec self-checks, required fixing four kernel defects, each only reachable once a process both forks and execs: a fault-terminated thread never published `exited`/`exit_status`, so `process_wait` spun forever on a child that had crashed; capability slot 16 silently kept naming the parent's args frame after fork while `clone_mappings()` had already mapped a fresh private copy at that same address; `exec_user_image()`'s `reclaim_task_memory()` freed the args frame `execv()` had just written the new argv into, because reclaim tracks ownership, not liveness; and `reap_user_bundle()` both failed closed on a forked child's slot 15 (which names the *parent's* shared memory resource, not the child's to destroy, leaking a task slot on every fork+reap until the fixed 16-task pool ran dry) and self-deadlocked on the authority lock by calling the locking `delete_capability()` from a scope that already held it -- a defect only reachable once the slot-15 failure stopped masking it first.
+
+  Verified against a real `configs/release_defconfig` boot: `cat /etc/motd | wc` reads a real ext2 file through two forked, exec'd `cat`/`wc` processes chained via a ramfs pipe file and reports correct line/word/byte counts; redirection (`>`, `<`), directory listing (`ls`), and builtin/external interleaving all produce correct output. Covered automatically going forward by `make smoke`'s shell profile (TST-011) and by kernel certification (`[ACCEPTANCE] result=PASS`). Explicitly still open: loading an arbitrary path at exec time (USR-013), a real kernel pipe object, and job control.
 
 ## 7.4 Device and IRQ management
 
@@ -564,6 +569,8 @@ Every completed requirement must link to:
 - [x] **TST-009** QEMU ARM64 smoke and bounded acceptance tests exist.
 - [x] **TST-010** Production configuration boots with self-tests disabled.
 - [x] **TST-011** Real userspace service graph integration test exists: `tools/verification/smoke.sh` (`make smoke`) boots the two profiles the certification suite structurally cannot reach, because `CONFIG_SELFTEST=y` replaces init's `main()` and therefore never runs `root_graph.hh`'s `supervise()` -- the service graph that actually ships. It builds and boots `configs/release_defconfig` and `configs/guest_defconfig` under bounded QEMU and asserts on end state, not exit code (these profiles run forever by design): `graph ready`, `console-server alive`, `block-service verified` for the release graph, and `graph ready`, `restart ok`, `guest: loaded, serving`, `guest alive via vpl011` for the guest profile, with an explicit failure-marker list so unrelated output cannot make the assertions vacuous. This is a production-profile boot test, not a self-test, so the "no self-test counts as completion" rule does not apply. It exists because the release profile once booted for some time with its supervision thread failing to spawn -- and therefore no restart-on-fault -- while the console log looked healthy.
+
+  A third profile now scripts a real shell session and asserts on its transcript (USR-039), the one thing no boot-marker check above can prove: that a command typed at the console actually forks, execs, and produces correct output through a real pipeline and a real redirection, not just that root's own boot-time probes ran. It boots with no disk attached (`BLOCK_IMAGE=-`) so it never depends on virtio's completion wait -- a fixed-iteration poll with no blocking primitive that times out under host contention on its own schedule, unrelated to anything this profile exercises -- and pipes three commands into the console over a FIFO, paced with short sleeps between them: writing the whole script as one burst overran the console's byte-at-a-time IPC read path and silently stalled the shell's own `read_line()`, confirmed by direct reproduction. Asserts the redirected/piped marker string appears exactly the expected number of times (once in the console's own echo of the `echo ... >` command line, once from a direct read, once from a piped read), not just that it appears at all.
 - [x] **TST-012** Fault IPC and two-client pager integration test exists.
 - [ ] **TST-013** Real multi-vCPU guest integration test exists.
 - [ ] **TST-014** Concurrent two-VM execution test exists.
@@ -704,9 +711,10 @@ in sections 2 through 8, not asserted independently.
 
 - [-] C1. Root resource manager launches and supervises the production service graph (USR-001, USR-003, USR-034, USR-035); explicit delegation of all allocatable RAM, a unified external management endpoint, and exit-status monitoring remain open (USR-002, USR-004, USR-005, USR-033).
 - [-] C2. Independent memory-server/pager test service exists; production service API and policies remain open.
-- [-] C3. Earlyfs paths resolve at runtime and `launch_path()` can launch an arbitrary earlyfs-resident image (USR-013, USR-017); a general loader is still bounded to a 256 KiB image window and one concurrently-resolvable dynamic role, and TLS/argv/auxv remain deferred (USR-015).
+- [-] C3. Earlyfs paths resolve at runtime and `launch_path()` can launch an arbitrary earlyfs-resident image (USR-013, USR-017); a general loader is still bounded to a 256 KiB image window and one concurrently-resolvable dynamic role, and TLS/auxv remain deferred -- argv/envp construction is now real and has a real consumer (USR-015, USR-039).
 - [-] C4. Console server and two real drivers exist (USR-022, USR-023, USR-038); the device/IRQ *manager* does not -- no device database, no MMIO broker, no IRQ arbitration (USR-019, USR-020, USR-021), and no driver restart policy (USR-024).
 - [-] C5. Domain manager/VMM and supervisor run in production with bounded restart admission (USR-032, USR-034); production guest deployment, device-assignment policy, and the production management protocol remain open (USR-025, USR-028, USR-029).
+- [-] C6. A shell and seven coreutils run as real forked, exec'd userspace processes against a real ext2/ramfs VFS, scripted end to end by `make smoke`'s shell profile (USR-039, TST-011); loading an arbitrary path at exec time, a real kernel pipe object, and job control remain open (USR-013).
 
 ## Phase D — complete real hypervisor execution
 
@@ -874,3 +882,33 @@ flake devShell (`nix develop`); an ambient shell without it lacks kconfiglib
 -- leaving autoconf.h stale, which surfaces as a -Wundef error on
 CONFIG_FAULT_INJECTION -- and injects -fstack-clash-protection, which clang
 does not implement for aarch64. -->
+
+<!-- 0132 evidence: added USR-039 for a real POSIX shell and seven coreutils
+running as forked, exec'd userspace processes against a real VFS -- like
+USR-038, live in the production service graph and gated by `make smoke`
+while having no requirement ID anywhere in this checklist until now. Fixed
+four kernel defects to get there, all only reachable once a process both
+forks and execs (a fault-terminated thread never publishing exited/
+exit_status; capability slot 16 silently naming the parent's args frame
+after fork while a private copy was mapped there; exec's
+reclaim_task_memory() freeing the args frame execv() had just written into;
+reap_user_bundle() failing closed on a forked child's shared slot-15
+memory resource, which leaked a task slot on every fork+reap, and then
+self-deadlocking on the authority lock once that failure stopped masking
+it). Completes the argv/envp half of USR-015 -- deferred since batch 0124
+for "zero current consumer"; the shell is that consumer, TLS/auxv remain
+correctly deferred with none. Extended TST-011: `make smoke` gained a
+third profile that scripts a real shell session over a console FIFO and
+asserts on the transcript, rather than on a service reporting its own
+readiness. Getting the profile itself right took two iterations: writing
+the whole script as one burst before qemu started (reasoning that OS pipe
+buffering would hold it) overran the console's byte-at-a-time IPC read
+path and silently stalled the shell's own read_line() -- confirmed by
+direct reproduction, fixed by pacing writes with short sleeps while qemu
+runs in the background; and an initial marker-count assertion assumed the
+marker string appeared in no command line, which was wrong for the `echo`
+command whose own argument is that string. Re-verified while scoring:
+certification `[ACCEPTANCE] result=PASS failures=0`, `make smoke` PASS
+across all three profiles including a run immediately after a full clean
+rebuild of every build tree, and no stray qemu process survives the new
+profile's teardown. -->
