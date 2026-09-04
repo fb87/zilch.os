@@ -19,11 +19,6 @@
 #include <sys/kernel/tests/bootstrap/validate.hh>
 #endif
 
-extern "C" const sys::kernel::init::entry_t __sys_init_timer_start[];
-extern "C" const sys::kernel::init::entry_t __sys_init_timer_end[];
-extern "C" const sys::kernel::init::entry_t __sys_init_smmu_start[];
-extern "C" const sys::kernel::init::entry_t __sys_init_smmu_end[];
-
 namespace sys::kernel
 {
     inline constexpr const char* name = "zilch";
@@ -54,10 +49,9 @@ namespace sys::kernel
         if (interrupt_result != error_t::success) {
             arch::cpu::halt();
         }
-        init::run_stage(__sys_init_timer_start, __sys_init_timer_end,
-                        {.firmware_data = memory::firmware_data,
-                         .cpu_id = arch::cpu::current_id(),
-                         .boot_cpu = false});
+        init::run_stage(init::stage_t::timer, {.firmware_data = memory::firmware_data,
+                                               .cpu_id = arch::cpu::current_id(),
+                                               .boot_cpu = false});
         arch::memory::initialize_cpu();
         arch::hardening::initialize_cpu();
         scheduler::initialize_cpu();
@@ -101,11 +95,11 @@ namespace sys::kernel
         }
         pr_info("gic: initialized\n");
         init::run_stage(
-            __sys_init_smmu_start, __sys_init_smmu_end,
+            init::stage_t::smmu,
             {.firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true});
         pr_info("timer: initializing\n");
         init::run_stage(
-            __sys_init_timer_start, __sys_init_timer_end,
+            init::stage_t::timer,
             {.firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true});
         pr_info("timer: initialized\n");
         arch::smp::mark_online();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sys/kernel/init/init.hh>
 #include <sys/types.hh>
 
 /*
@@ -31,9 +32,4 @@ namespace sys::platform::v1
     };
 } // namespace sys::platform::v1
 
-// section() must match on every declaration (clang/gcc -Wsection), not
-// just the defining one in each platform.cc -- see the definition site
-// for why this symbol needs a named, KEEP()'d section instead of relying
-// on `used` alone.
-extern "C" __attribute__((section(".sys_ops_smmu")))
-const sys::platform::v1::smmu_ops_t sys_platform_smmu_ops;
+extern "C" SYS_OPS_DECL const sys::platform::v1::smmu_ops_t sys_platform_smmu_ops;

@@ -18,14 +18,18 @@ SECTIONS
   }
   .rodata : ALIGN(4096) {
     *(.rodata .rodata.*)
-    __sys_init_timer_start = .;
-    KEEP(*(.sys_init_timer))
-    __sys_init_timer_end = .;
-    __sys_init_smmu_start = .;
-    KEEP(*(.sys_init_smmu))
-    __sys_init_smmu_end = .;
-    KEEP(*(.sys_ops_timer))
-    KEEP(*(.sys_ops_smmu))
+    /*
+     * Generic driver-section registry (docs/architecture/
+     * KERNEL_ARCH_PLATFORM_DECOUPLING.md): every ARCH_INIT/PLAT_INIT
+     * entry and every SYS_OPS-tagged ops-vtable singleton lands in one of
+     * these two fixed section names, regardless of which driver or
+     * stage. Adding or removing a driver never requires touching this
+     * file again -- only these two rules, added once, are needed.
+     */
+    __sys_drivers_start = .;
+    KEEP(*(.sys_driver))
+    __sys_drivers_end = .;
+    KEEP(*(.sys_ops))
     . = ALIGN(4096);
     __kernel_rodata_end = .;
   }

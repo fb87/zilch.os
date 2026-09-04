@@ -549,10 +549,13 @@ pass does not attempt. What it does implement, for real:
   SMMUv3 and is genuinely out of scope; reporting "no IOMMU on this
   platform" is a complete, honest implementation of the contract for a
   platform that doesn't have one.
-- `src/arch/arm64/kernel.ld` / `src/arch/amd64/kernel.ld`: added
-  `.sys_init_smmu` (mirroring `.sys_init_timer`) plus two more sections,
-  `.sys_ops_timer` and `.sys_ops_smmu` (see below for why those were
-  needed).
+- `src/arch/arm64/kernel.ld` / `src/arch/amd64/kernel.ld`: originally
+  added a fourth and fifth per-driver section (`.sys_init_smmu`,
+  `.sys_ops_timer`, `.sys_ops_smmu`) mirroring `.sys_init_timer` — **since
+  superseded** by the generic, driver-agnostic design in "Revision: one
+  generic section per mechanism, not one per driver" below. The linker
+  scripts now carry exactly two permanent rules total, not one pair per
+  driver.
 - `src/kernel/include/sys/kernel/kernel.hh`: runs the `smmu` stage once,
   from `start()` only (never `start_secondary()`), right after GIC
   initialization and before the timer stage.
@@ -585,15 +588,57 @@ correction to the "Linker/toolchain mechanics" table above: **any ops
 singleton without a guaranteed reader needs the named-section+`KEEP()`
 treatment, not just multi-registrant init-stage sections.**
 
+### Revision: one generic section per mechanism, not one per driver
+
+The design above still needed a linker-script edit for every new driver
+(a fresh `.sys_init_<stage>` and, if it had steady-state ops, a fresh
+`.sys_ops_<name>`) — exactly the maintenance burden the whole point of
+this exercise was to avoid. Reworked so that **adding or removing a
+driver never touches `kernel.ld` again**:
+
+- `sys::kernel::init::entry_t` gained a `stage_t stage` field. Every
+  `SYS_INIT`/`ARCH_INIT`/`PLAT_INIT` registration, regardless of which
+  driver or stage, now lands in the same fixed, literally-named section:
+  `.sys_driver`. `run_stage(stage_t, ctx)` iterates the *entire* combined
+  table and calls only the entries whose `stage` field matches — one
+  shared table instead of a per-stage linker sub-range.
+- Every ops-vtable singleton (`sys_platform_timer_ops`,
+  `sys_platform_smmu_ops`, future ones) similarly shares one fixed section,
+  `.sys_ops`, via a `SYS_OPS`/`SYS_OPS_DECL` macro pair in `init.hh` (split
+  because clang rejects `__attribute__((used))` on a non-defining
+  declaration — the neutral contract header's `extern` uses
+  `SYS_OPS_DECL` (`section()` only), the defining instance in each
+  `platform.cc` uses `SYS_OPS` (`section()` + `used`)).
+- Both `kernel.ld` files now carry exactly **two** permanent rules,
+  written once:
+  ```
+  __sys_drivers_start = .;
+  KEEP(*(.sys_driver))
+  __sys_drivers_end = .;
+  KEEP(*(.sys_ops))
+  ```
+  Adding a new driver, or a new stage for an existing one, is now
+  entirely contained to that driver's own `.cc` file (a `PLAT_INIT(...)`
+  call and/or a `SYS_OPS`-tagged ops struct) and, only for a genuinely new
+  *boot phase* (not a new driver), one enumerator added to `stage_t` in
+  `init.hh` — never the linker script.
+- `kernel.hh` no longer declares any `extern "C" const entry_t
+  __sys_init_<x>_start/_end[]` symbols at all — those were removed
+  entirely. Call sites simplified from `init::run_stage(__sys_init_timer_
+  start, __sys_init_timer_end, ctx)` to `init::run_stage(init::stage_t::
+  timer, ctx)`.
+
 ### What was verified, and how
 
 - `make arm64` and `make amd64` both build clean, `make format-check`
-  clean on every touched file.
-- `nm`/`readelf` confirm, on both arches: exactly one entry each in
-  `.sys_init_timer` and `.sys_init_smmu` (16 bytes, surviving
-  `--gc-sections` via `KEEP()`), and — after the section-naming fix above
-  — both `sys_platform_timer_ops` and `sys_platform_smmu_ops` present and
-  falling entirely inside the `.rodata` output section on both targets.
+  clean on every touched file, after both the original per-driver-section
+  version and the generic revision above.
+- `nm`/`readelf` confirm, on both arches: the combined `.sys_driver` table
+  holds exactly two entries (`__sys_drivers_end - __sys_drivers_start ==
+  48` bytes == 2 × `sizeof(entry_t)`, surviving `--gc-sections` via one
+  `KEEP()` rule), and both `sys_platform_timer_ops` and
+  `sys_platform_smmu_ops` are present and fall entirely inside the
+  `.rodata` output section on both targets.
 - The QEMU `VIRT_SMMU` base address/size and the `iommu=smmuv3` machine
   property name were confirmed against QEMU's own `hw/arm/virt.c` source
   (via web fetch), not assumed from memory. The IDR0/IDR1 register offsets

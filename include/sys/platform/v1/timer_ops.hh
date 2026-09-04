@@ -1,14 +1,17 @@
 #pragma once
 
+#include <sys/kernel/init/init.hh>
 #include <sys/platform/v1/types.hh>
 #include <sys/types.hh>
 
 /*
- * Steady-state ops-vtable pilot described in
+ * Steady-state ops-vtable contract described in
  * docs/architecture/KERNEL_ARCH_PLATFORM_DECOUPLING.md. Exactly one
  * platform is linked into a given image, so this is a single well-known
- * extern symbol (mechanism 2), not a linker-section registry (mechanism 1
- * is for genuine multi-registrant cases, e.g. sys/kernel/init).
+ * extern symbol (mechanism 2), placed via SYS_OPS in the generic
+ * ".sys_ops" section every ops-vtable singleton shares -- not a
+ * linker-section registry (mechanism 1 is for genuine multi-registrant
+ * cases, e.g. sys/kernel/init's driver table).
  *
  * Only the members kernel.hh's boot sequence reads are covered so far:
  * the many steady-state sys::platform::timer::* call sites in
@@ -27,9 +30,4 @@ namespace sys::platform::v1
     };
 } // namespace sys::platform::v1
 
-// section() must match on every declaration (clang/gcc -Wsection), not
-// just the defining one in each platform.cc -- see the definition site
-// for why this symbol needs a named, KEEP()'d section instead of relying
-// on `used` alone.
-extern "C" __attribute__((section(".sys_ops_timer")))
-const sys::platform::v1::timer_ops_t sys_platform_timer_ops;
+extern "C" SYS_OPS_DECL const sys::platform::v1::timer_ops_t sys_platform_timer_ops;
