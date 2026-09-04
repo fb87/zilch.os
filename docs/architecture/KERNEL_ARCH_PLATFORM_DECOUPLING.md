@@ -628,6 +628,46 @@ driver never touches `kernel.ld` again**:
   start, __sys_init_timer_end, ctx)` to `init::run_stage(init::stage_t::
   timer, ctx)`.
 
+### Second revision: `stage_t` must not be named after drivers either
+
+The section-level fix above still left `stage_t` with `smmu`/`timer`
+enumerators — meaning `kernel.hh` still named every specific driver it
+wanted to run, so a third driver needed a matching call site added there
+too. Same class of coupling as the linker-script one, one level up.
+
+The fix: `stage_t` should describe **when** a driver's init function
+needs to run — a structural property kernel.hh legitimately owns as boot
+orchestration policy — not **which driver** it is. Collapsed to the two
+cardinality classes every driver so far actually falls into:
+
+```cpp
+enum class stage_t : u16 { once, percpu };
+```
+
+`once` runs exactly once, boot CPU only, during `start()`. `percpu` runs
+on every CPU, in both `start()` and `start_secondary()`. Both current
+drivers already sorted cleanly into these (SMMU discovery is `once`;
+timer bring-up is `percpu`), so nothing was lost — `kernel.hh` now has
+exactly two `run_stage()` call sites, and adding a third driver that fits
+either category (which is every driver added so far) needs zero
+`kernel.hh` or `init.hh` changes, only a `PLAT_INIT(once, ...)` or
+`PLAT_INIT(percpu, ...)` call in that driver's own `.cc` file.
+
+`run_stage()` also picked up generic per-driver logging
+(`pr_info("init: driver=%s\n", it->name)`), so `kernel.hh`'s hardcoded
+`"timer: initializing"`/`"timer: initialized"` log lines — which named
+the driver in prose even after the mechanism itself went generic — were
+removed; every driver's own registered name is now logged automatically,
+with no kernel.hh involvement, for any driver that exists now or later.
+
+What still can't be (and shouldn't be) eliminated: `kernel.hh` deciding
+that a `once` pass and a `percpu` pass both happen, in that relative
+order, during `start()`. That's boot ordering *policy*, which the kernel
+legitimately owns — the earlier design doc language "kernel decides
+*when*, arch/platform decides *how*" already said this. The bug fixed
+here was that policy leaking driver *identity* (specific names) into the
+kernel, not the existence of orchestration itself.
+
 ### What was verified, and how
 
 - `make arm64` and `make amd64` both build clean, `make format-check`

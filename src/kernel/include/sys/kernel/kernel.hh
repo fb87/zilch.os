@@ -49,9 +49,9 @@ namespace sys::kernel
         if (interrupt_result != error_t::success) {
             arch::cpu::halt();
         }
-        init::run_stage(init::stage_t::timer, {.firmware_data = memory::firmware_data,
-                                               .cpu_id = arch::cpu::current_id(),
-                                               .boot_cpu = false});
+        init::run_stage(init::stage_t::percpu, {.firmware_data = memory::firmware_data,
+                                                .cpu_id = arch::cpu::current_id(),
+                                                .boot_cpu = false});
         arch::memory::initialize_cpu();
         arch::hardening::initialize_cpu();
         scheduler::initialize_cpu();
@@ -94,14 +94,10 @@ namespace sys::kernel
             arch::cpu::halt();
         }
         pr_info("gic: initialized\n");
-        init::run_stage(
-            init::stage_t::smmu,
-            {.firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true});
-        pr_info("timer: initializing\n");
-        init::run_stage(
-            init::stage_t::timer,
-            {.firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true});
-        pr_info("timer: initialized\n");
+        const init::boot_context_t boot_ctx{
+            .firmware_data = firmware_data, .cpu_id = arch::cpu::current_id(), .boot_cpu = true};
+        init::run_stage(init::stage_t::once, boot_ctx);
+        init::run_stage(init::stage_t::percpu, boot_ctx);
         arch::smp::mark_online();
         pr_info("smp: boot CPU online\n");
 
