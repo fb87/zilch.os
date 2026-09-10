@@ -1306,7 +1306,7 @@ The stall threshold is ~30s of loop iterations, far past a healthy boot
 loaded host as stalled -- boot has been measured over 10s here under
 concurrent load.
 
-## `vfs absent` with a working disk (open, NOT fixed)
+## `vfs absent` with a working disk (open here, FIXED in 0140)
 
 Separately intermittent, and unrelated to the stall above: with a disk
 attached and the block driver demonstrably healthy in the same boot
@@ -1324,7 +1324,13 @@ time VFS mounts. That attempt was reverted rather than kept, since keeping
 an unvalidated change would have implied a fix that was not there. The
 remaining candidates -- the shared payload frame being used by more than
 one client at a time, or the probe rather than the mount reporting absent
--- are untested. -->
+-- are untested.
+
+The second of those two was right, and it was the CLIENT, not VFS: see
+0140. Worth noting how close the rejected hypothesis was to the real one
+-- both are the same mint-ordering race, but on opposite sides of the
+call. Testing the server side and finding no change is what eventually
+pointed at the client. -->
 
 
 
@@ -1448,6 +1454,56 @@ now reports its own bring-up failures by writing the PL011 directly rather
 than over IPC, because it is the one process whose failure takes the
 reporting path down with it.
 
-## `vfs absent` (still OPEN, unchanged from 0138)
+## `vfs absent` (still OPEN here, FIXED in 0140)
 
 Not investigated further in this pass. -->
+
+<!-- 0140 evidence: FIXED -- `vfs absent` on a healthy system with a
+mounted disk, the last of 0138's open items.
+
+Defect, in libc's `ensure_vfs_mapped()` (`src/user/lib/libc/io.cc`), the
+client side rather than the server side that 0138 tested and cleared:
+
+root's `spawn()` calls `process_create`, which makes the child runnable
+immediately, and only THEN mints the child's capabilities -- args frame,
+stdout, stdin, vfs endpoint, and `native::vfs_frame` LAST of the five. A
+spawned program therefore reliably reaches its first `open()` before that
+final mint lands. `ensure_vfs_mapped()` was a one-shot `map_frame` that
+set `attempted = true` before trying, so losing that race latched
+`mapped = false` permanently: every subsequent open/read/write in the
+process returned -1 for the rest of its life.
+
+It surfaced as `vfs absent` because `verify_vfs()` maps `bin/vfs-probe`'s
+exit status 10 -- "`open(\"/etc/motd\")` failed" -- onto absent, which is
+the same answer a machine legitimately booted with no disk gives. A
+correct "no disk attached" signal and a lost capability race were
+therefore indistinguishable from outside, which is most of why this took
+two passes to find.
+
+Fixed by making the single attempt a bounded retry over not_found/denied,
+the same convention every server's own bring-up already follows -- this
+was the one client-side copy that did not. `busy` counts as mapped, since
+fork()'s child clears these flags and re-maps (its address-space clone
+does not carry frame-backed mappings) and a second map_frame at the same
+address reports busy rather than success. The latch is still set
+afterwards, so a program with genuinely no VFS capability pays the retry
+once rather than on every call.
+
+One ordering property is load-bearing and worth not breaking: because
+`vfs_frame` is minted LAST, waiting for it also establishes that the
+earlier mints have landed -- including `vfs_endpoint`, whose absence would
+otherwise fail `open()`'s `ipc_call` for exactly the same reason and would
+need its own retry. Reordering spawn()'s mints would silently reintroduce
+that second race.
+
+Measured, fresh disk image per boot, same harness as 0138's measurement:
+19 of 19 completed boots report `vfs verified`, 0 absent -- against 4 of 8
+absent before. `make smoke` PASS on all three profiles, and certification
+`[ACCEPTANCE] result=PASS failures=0 failure_mask=0 transport=PASS` with
+both wall-clock latency gates passing too (`ipc_latency` max_ticks=224124
+against the 620000 limit, on a host at load 2.9).
+
+Still open, and now the only one left from 0138/0139: the silent boot
+stall, which accounts for the 2 non-completing boots in the sample above.
+Its cause is characterised in 0139 and is a kernel SMP defect, not this. -->
+

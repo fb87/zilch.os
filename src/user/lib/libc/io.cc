@@ -117,20 +117,57 @@ namespace
     bool vfs_mapped = false;
     bool vfs_map_attempted = false;
 
+    /*
+     * Bounded retry, NOT a one-shot -- and the retry is the whole point.
+     *
+     * root's spawn() calls process_create, which makes the child runnable
+     * immediately, and only THEN mints this frame, last of the five
+     * capabilities it hands over. A spawned program therefore reliably
+     * reaches its first open() before the mint lands. Latching that
+     * transient failure made it permanent: every later open/read/write in
+     * the process returned -1, which surfaced as `vfs absent` from an
+     * otherwise healthy system with a mounted disk and a working block
+     * driver, on roughly half of boots. Same documented ordering hazard
+     * every server's own bring-up already retries against; this was the
+     * one client-side copy that did not.
+     *
+     * Because this frame is minted LAST, waiting for it also establishes
+     * that the earlier mints have landed -- including vfs_endpoint, whose
+     * absence would otherwise fail open()'s ipc_call for the same reason.
+     * That ordering is load-bearing, not incidental.
+     *
+     * `busy` counts as mapped: the mapping is already installed. fork()'s
+     * child clears these flags and re-maps (its address-space clone does
+     * not carry frame-backed mappings), and a second map_frame at an
+     * address that already has one reports busy rather than success.
+     *
+     * not_found and denied are both retried, since an unpopulated cspace
+     * slot and a slot mid-mint are not worth distinguishing here, and the
+     * same two statuses are what console-server's own endpoint probe waits
+     * out. The latch is still set afterwards either way, so a program with
+     * genuinely no VFS capability pays this once rather than per call.
+     */
     [[nodiscard]] bool ensure_vfs_mapped() noexcept {
-        bool& mapped = vfs_mapped;
-        bool& attempted = vfs_map_attempted;
-        if (attempted)
-            return mapped;
-        attempted = true;
+        if (vfs_map_attempted)
+            return vfs_mapped;
         const sys::word_t read_write = static_cast<sys::word_t>(abi::CapabilityRight::read) |
                                        static_cast<sys::word_t>(abi::CapabilityRight::write);
         const sys::word_t attrs = abi::encode_mapping_attributes(
             abi::memory_type::normal, abi::memory_shareability::inner_shareable);
-        mapped = sys::native::ok(sys::control(abi::control_operation::map_frame,
-                                              sys::native::own_space, sys::native::vfs_frame,
-                                              vfs_scratch_address, read_write, attrs));
-        return mapped;
+        for (sys::word_t attempt = 0U; attempt < sys::native::default_attempts; ++attempt) {
+            const sys::word_t result =
+                sys::control(abi::control_operation::map_frame, sys::native::own_space,
+                             sys::native::vfs_frame, vfs_scratch_address, read_write, attrs);
+            const sys::error_t status = sys::native::status(result);
+            if (sys::native::ok(result) || status == sys::error_t::busy) {
+                vfs_mapped = true;
+                break;
+            }
+            if (status != sys::error_t::not_found && status != sys::error_t::denied)
+                break;
+        }
+        vfs_map_attempted = true;
+        return vfs_mapped;
     }
 } // namespace
 
