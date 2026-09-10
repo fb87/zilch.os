@@ -1970,7 +1970,7 @@ namespace sys::kernel::thread
          * to do that.
          */
         pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu pc=%llx esr=%llx spsr=%llx "
-                "sp=%llx faults=%llu\n",
+                "sp=%llx faults=%llu ttbr=%llx want=%llx l3e=%llx\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U),
@@ -1978,7 +1978,12 @@ namespace sys::kernel::thread
                 static_cast<unsigned long long>(syndrome),
                 static_cast<unsigned long long>(frame.status),
                 static_cast<unsigned long long>(frame.stack_pointer),
-                static_cast<unsigned long long>(value.faults));
+                static_cast<unsigned long long>(value.faults),
+                static_cast<unsigned long long>(arch::space::installed_root()),
+                static_cast<unsigned long long>(
+                    arch::space::expected_root(value.address_space.native)),
+                static_cast<unsigned long long>(
+                    arch::space::entry_descriptor(value.address_space.native)));
 #endif
         if (deliver_fault_ipc(value, frame, syndrome, delivered_address, fault_kind))
             return true;

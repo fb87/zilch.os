@@ -608,10 +608,31 @@ namespace sys::arch::space
         asid::handle identifier{value.asid, value.asid_generation};
         if (asid::refresh(identifier) != error_t::success)
             return;
+        /*
+         * Everything below uses `identifier`, the ASID this call actually
+         * resolved, and never reads value.asid back.
+         *
+         * Reading it back is a real race, not a style point: value.asid is
+         * shared mutable state, and a concurrent activate()/refresh() of
+         * the same space on another CPU can land between the store and the
+         * re-read. The CPU then installs one ASID in TTBR0 while the space
+         * believes it has another, so its TLB lookups are tagged with an
+         * ASID that asid::allocate() is free to hand to a DIFFERENT space
+         * -- two live spaces aliasing one tag.
+         *
+         * This closes the read-back window only. It does NOT fix the boot
+         * stall, and the measurement says so: the installed-vs-expected
+         * ASID mismatch still appears afterwards (ttbr=0x9...  against
+         * want=0xb..., same table root), which means the ASID is also
+         * being RECYCLED while the space is live -- a separate and larger
+         * defect in the ASID lifecycle. Kept because the read-back race is
+         * real on its own terms, not because it explains the symptom. See
+         * the checklist's 0142 entry.
+         */
         value.asid = identifier.value;
         value.asid_generation = identifier.generation;
         const u64 root = reinterpret_cast<u64>(&value.l0) & 0x0000ffffffffffffULL;
-        const u64 ttbr = root | (static_cast<u64>(value.asid) << 48U);
+        const u64 ttbr = root | (static_cast<u64>(identifier.value) << 48U);
         __atomic_fetch_or(&value.active_cpu_mask, 1U << arch::cpu::current_id(), __ATOMIC_RELEASE);
         /*
          * Address-space slots and ASIDs are reused by the bounded bootstrap
@@ -620,7 +641,7 @@ namespace sys::arch::space
          * CPU may execute through a stale translation even though the new
          * page tables and image bytes are globally visible.
          */
-        const u64 asid_operand = static_cast<u64>(value.asid) << 48U;
+        const u64 asid_operand = static_cast<u64>(identifier.value) << 48U;
         __asm__ volatile("dsb ishst\n\t"
                          "tlbi aside1is, %1\n\t"
                          "dsb ish\n\t"
@@ -795,6 +816,35 @@ namespace sys::arch::space
 
     [[nodiscard]] inline vaddr_t entry(const address_space& value) noexcept {
         return value.image_entry;
+    }
+
+    /*
+     * Three reads that together say whether a faulting thread was running
+     * on the translation tables it was supposed to be. All are safe from
+     * inside a fault handler: a system register read, and two loads from
+     * the address_space object itself, which lives in kernel BSS and is
+     * never freed. Deliberately NOT a walk through the process's own
+     * memory -- doing that faults the kernel inside the fault handler when
+     * the space is half-built, which is a lockup rather than a diagnostic.
+     *
+     * installed_root() vs expected_root() disagreeing means the CPU had
+     * some OTHER space installed. They agreeing while entry_descriptor()
+     * is zero means the tables really do lack the entry mapping.
+     */
+    [[nodiscard]] inline u64 installed_root() noexcept {
+        u64 value = 0U;
+        __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(value));
+        return value;
+    }
+
+    [[nodiscard]] inline u64 expected_root(const address_space& value) noexcept {
+        const u64 root = reinterpret_cast<u64>(&value.l0) & 0x0000ffffffffffffULL;
+        return root | (static_cast<u64>(value.asid) << 48U);
+    }
+
+    [[nodiscard]] inline u64 entry_descriptor(const address_space& value) noexcept {
+        const usize_t index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
+        return value.l3.entry[index];
     }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;

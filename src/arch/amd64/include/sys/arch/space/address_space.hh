@@ -394,6 +394,20 @@ namespace sys::arch::space
     [[nodiscard]] inline vaddr_t entry(const address_space& value) noexcept {
         return value.image_entry;
     }
+
+    // Counterparts to arm64's, for the shared fault diagnostic in
+    // thread/scheduler.hh. AMD64 is compile-only (PLT-007), so these report
+    // "nothing to say" rather than growing an untested CR3 path.
+    [[nodiscard]] inline u64 installed_root() noexcept {
+        return 0U;
+    }
+    [[nodiscard]] inline u64 expected_root(const address_space&) noexcept {
+        return 0U;
+    }
+    [[nodiscard]] inline u64 entry_descriptor(const address_space&) noexcept {
+        return 0U;
+    }
+
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;
     }

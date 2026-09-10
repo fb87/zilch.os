@@ -1609,3 +1609,83 @@ Settling it needs either targeted TB-invalidation instrumentation in QEMU,
 or a run on real hardware. Note that KVM is not a shortcut on this host
 despite it being aarch64: the machine is built with virtualization=on and
 the kernel uses EL2, which an A76 cannot nest. -->
+
+<!-- 0142 evidence: the boot stall's mechanism, IDENTIFIED. Still not
+fixed, but no longer a mystery: it is ASID recycling under a live address
+space, and the fix is a bounded piece of work rather than an open question.
+
+## The measurement that found it
+
+0141 ended without a mechanism because every diagnostic so far described
+the corpse. The one that worked reads three things at fault time, all safe
+from inside a fault handler -- a system register and two loads from the
+address_space object in kernel BSS, never a walk through the faulting
+process's own memory (0141 records why that distinction is not optional):
+
+  - `ttbr`  -- TTBR0_EL1 as actually installed on the faulting CPU
+  - `want`  -- the root + ASID the space currently believes it has
+  - `l3e`   -- the L3 descriptor for the image entry page
+
+Captured on a stalled boot:
+
+    pc=20000000 esr=2000000 faults=1
+      ttbr=a00004016e000 want=b00004016e000 l3e=405467c3
+
+Same table root (0x4016e000). Valid L3 descriptor (0x...7c3: valid, page,
+AF set, inner-shareable, EL0-readable) for exactly the page that could not
+be fetched. And the ASID installed in TTBR0 is 0xa while the space claims
+0xb.
+
+So the tables are correct, the mapping is correct, the barriers are
+correct -- which is why every cache and TLB fix in 0141 came back as
+noise. The CPU is running the right page tables under the WRONG ASID.
+
+## Why that is fatal
+
+TLB entries are tagged by ASID. A CPU running a space under a stale tag
+does its lookups against a tag that asid::allocate() is free to have
+handed to a DIFFERENT space, so two live spaces alias one tag and the
+first one's cached translations answer for the second. That produces
+exactly the two fault shapes 0141 catalogued: an undefined instruction
+when the aliased entry resolves to another image's bytes, and a level-3
+translation fault when it resolves to a space that has nothing there.
+
+It also explains the SMP dependency precisely. Under
+`-accel tcg,thread=single` no second CPU is running a space concurrently,
+so no alias can form -- 0 stalls in 16 boots, against 5-7 with MTTCG.
+
+## Fixed here (partial, and it is NOT the fix)
+
+activate() wrote value.asid and then read it BACK to build TTBR0 and the
+TLBI operand. value.asid is shared mutable state, so a concurrent
+activate()/refresh() of the same space could land in between. Both now use
+`identifier`, the ASID the call actually resolved.
+
+That closes the read-back window only. Measurement says plainly that it is
+not the cause: the mismatch still appears afterwards (ttbr=0x9... against
+want=0xb..., same root), so the ASID is ALSO being recycled while its
+space is live. Kept because the read-back race is real on its own terms,
+labelled at the call site as not explaining the symptom.
+
+## What actually needs doing
+
+asid::release() clears a tag's in_use bit, and asid::refresh() reallocates
+whenever the tag's bit is clear or the generation moved -- neither
+consults whether any CPU still has that tag installed in TTBR0.
+rollover_locked() has the same shape at scale: it resets the whole in_use
+mask and bumps the generation, so every live space reallocates on its next
+activate while CPUs keep running the old tags.
+
+A correct ASID allocator must not recycle a tag that is live on any CPU.
+address_space::active_cpu_mask already tracks residency and is already
+maintained by activate() -- it is set there and, as far as this
+investigation found, never consulted. That is the missing half, and it is
+what the kernel's own comment means by "generation-tracked residency and
+targeted cross-CPU synchronization".
+
+Deliberately not attempted in this pass: an ASID allocator change is
+exactly the kind of edit where a wrong guess converts an intermittent
+crash into a silent isolation violation -- two processes quietly sharing
+translations instead of one visibly dying. It wants its own pass, with the
+mismatch check above kept as the regression test, since it detects the
+condition directly rather than waiting for a boot to hang. -->
