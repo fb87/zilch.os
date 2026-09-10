@@ -413,6 +413,12 @@ namespace sys::arch::space
     [[nodiscard]] inline u64 rollover_count() noexcept {
         return 0U;
     }
+    [[nodiscard]] inline u32 mapped_word(const address_space&, vaddr_t) noexcept {
+        return 0U;
+    }
+    [[nodiscard]] inline u64 mapped_physical(const address_space&, vaddr_t) noexcept {
+        return 0U;
+    }
 
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;

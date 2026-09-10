@@ -901,6 +901,57 @@ namespace sys::arch::space
     [[nodiscard]] inline u64 rollover_count() noexcept {
         return asid::rollovers;
     }
+
+    /*
+     * The instruction word the DATA side sees at `address`, or 0 if the
+     * space does not currently map it.
+     *
+     * This is the one question the other fields cannot answer: whether the
+     * bytes at the faulting PC are actually wrong in memory, or whether
+     * memory is fine and only the instruction side disagreed. The first is
+     * a publication bug, the second is instruction-cache coherency, and
+     * they need completely different fixes.
+     *
+     * Safe from a fault handler, unlike an earlier attempt that indexed
+     * image_backing[] directly and could dereference a stale or zero entry
+     * mid-rebuild -- faulting the kernel inside the fault handler. The
+     * physical page here is taken from the live L3 descriptor and only
+     * after checking that it is a valid page mapping, so it is by
+     * construction a page this space currently has mapped.
+     */
+    /*
+     * The physical page `address` currently resolves to in this space, or
+     * 0 if it does not resolve. Same validity check as mapped_word(); the
+     * caller uses it to ask the page allocator whether that page is even
+     * still allocated, which is how a page reused underneath a live
+     * mapping gets caught.
+     */
+    [[nodiscard]] inline u64 mapped_physical(const address_space& value, vaddr_t address) noexcept {
+        if (address < user_code || address >= user_code + user_block_size)
+            return 0U;
+        const usize_t index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
+        const u64 descriptor = value.l3.entry[index];
+        if ((descriptor & 0x3ULL) != 0x3ULL)
+            return 0U;
+        return descriptor & 0x0000fffffffff000ULL;
+    }
+
+    [[nodiscard]] inline u32 mapped_word(const address_space& value, vaddr_t address) noexcept {
+        if (address < user_code || address >= user_code + user_block_size)
+            return 0U;
+        const usize_t index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
+        const u64 descriptor = value.l3.entry[index];
+        // Bits [1:0] == 0b11 is a valid level-3 page descriptor; anything
+        // else is a fault entry or a malformed one, and must not be
+        // followed.
+        if ((descriptor & 0x3ULL) != 0x3ULL)
+            return 0U;
+        const u64 physical = descriptor & 0x0000fffffffff000ULL;
+        if (physical == 0U)
+            return 0U;
+        const auto offset = static_cast<uintptr_t>(address & (memory::page_size - 1U));
+        return *reinterpret_cast<const volatile u32*>(static_cast<uintptr_t>(physical) + offset);
+    }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;
     }

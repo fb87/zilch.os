@@ -181,6 +181,28 @@ namespace sys::kernel::memory
         return release_physical_page(reused) == error_t::success && valid;
     }
 
+    /*
+     * Whether the allocator still considers `address` handed out. A page
+     * that a live address space maps but the allocator believes is FREE is
+     * a use-after-free of physical memory: whoever allocates it next zeroes
+     * it, underneath the mapping that is still pointing at it. Used by the
+     * user-fault diagnostic in thread/scheduler.hh, which is where that
+     * condition was first caught.
+     */
+    [[nodiscard]] inline bool page_used(u32 index) noexcept;
+
+    [[nodiscard]] inline bool physical_page_allocated(paddr_t address) noexcept {
+        for (u32 region_index = 0U; region_index < physical_region_count; ++region_index) {
+            const auto& region = physical_regions[region_index];
+            const paddr_t end = region.base + static_cast<paddr_t>(region.pages) * page_size;
+            if (address < region.base || address >= end)
+                continue;
+            const u32 page = static_cast<u32>((address - region.base) / page_size);
+            return page_used(region.bitmap_offset + page);
+        }
+        return false;
+    }
+
     [[nodiscard]] inline bool page_used(u32 index) noexcept {
         return (allocation_bitmap[index / 64U] & (1ULL << (index % 64U))) != 0U;
     }

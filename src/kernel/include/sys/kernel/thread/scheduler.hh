@@ -999,6 +999,46 @@ namespace sys::kernel::thread
         return error_t::success;
     }
 
+    /*
+     * Waits until no CPU is running `target` any more, WITHOUT changing its
+     * state. That separation matters: quiesce_user_thread() below publishes
+     * `suspended` first, which is right when forcing a live thread to stop,
+     * and wrong for a thread that is already terminated and merely being
+     * reaped -- overwriting `terminated` there loses the very marker the
+     * reaper needs if any later step fails, leaving a child that can never
+     * be reaped again.
+     *
+     * "Terminated" and "not running anywhere" are different facts. A thread
+     * reaches terminated the instant its state is stored, from its own CPU
+     * mid-syscall or from another CPU entirely, and its CPU need not have
+     * switched away yet -- so its address space can still be installed in
+     * that CPU's TTBR0 while a reaper frees the tables and pages out from
+     * under it.
+     */
+    [[nodiscard]] inline error_t await_not_executing(thread& target) noexcept {
+        const u32 target_generation = target.object.generation;
+        constexpr u32 maximum_wait_rounds = 1000000U;
+        for (u32 round = 0U; round < maximum_wait_rounds; ++round) {
+            bool cpu_bound = false;
+            for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
+                if (__atomic_load_n(&current_user_thread[cpu], __ATOMIC_ACQUIRE) == target.id &&
+                    __atomic_load_n(&current_user_generation[cpu], __ATOMIC_ACQUIRE) ==
+                        target_generation) {
+                    cpu_bound = true;
+                    break;
+                }
+            }
+            if (!cpu_bound && !__atomic_load_n(&target.executing, __ATOMIC_ACQUIRE))
+                return error_t::success;
+            if ((round & 0x3ffU) == 0U) {
+                platform::interrupt::send_ipi(target.pinned_cpu,
+                                              platform::interrupt::reschedule_ipi);
+            }
+            arch::cpu::relax();
+        }
+        return error_t::busy;
+    }
+
     [[nodiscard]] inline error_t quiesce_user_thread(thread& target) noexcept {
         const state previous_state = load_state(target);
         if (target.owner != nullptr && target.waiting_endpoint < capability::cspace_slot_count &&
@@ -1035,27 +1075,7 @@ namespace sys::kernel::thread
         unlock_ipc_lifecycle();
         platform::interrupt::send_ipi(target.pinned_cpu, platform::interrupt::reschedule_ipi);
 
-        const u32 target_generation = target.object.generation;
-        constexpr u32 maximum_wait_rounds = 1000000U;
-        for (u32 round = 0U; round < maximum_wait_rounds; ++round) {
-            bool cpu_bound = false;
-            for (u32 cpu = 0U; cpu < maximum_cpu_count; ++cpu) {
-                if (__atomic_load_n(&current_user_thread[cpu], __ATOMIC_ACQUIRE) == target.id &&
-                    __atomic_load_n(&current_user_generation[cpu], __ATOMIC_ACQUIRE) ==
-                        target_generation) {
-                    cpu_bound = true;
-                    break;
-                }
-            }
-            if (!cpu_bound && !__atomic_load_n(&target.executing, __ATOMIC_ACQUIRE))
-                return error_t::success;
-            if ((round & 0x3ffU) == 0U) {
-                platform::interrupt::send_ipi(target.pinned_cpu,
-                                              platform::interrupt::reschedule_ipi);
-            }
-            arch::cpu::relax();
-        }
-        return error_t::busy;
+        return await_not_executing(target);
     }
 
     // Defined below, alongside the rest of the scheduling/blocking helpers.
@@ -1270,6 +1290,44 @@ namespace sys::kernel::thread
         task::task* owner = target.owner;
         if (owner == nullptr)
             return error_t::denied;
+
+        /*
+         * `terminated` is NOT the same as "no longer running anywhere", and
+         * the difference is a live use-after-free.
+         *
+         * A thread reaches terminated the moment its state is stored --
+         * from thread_exit on its own CPU, still inside the syscall, or
+         * from another CPU entirely (ipc.hh's caller termination,
+         * release_pending_reply()). Its CPU has not necessarily switched
+         * away yet, so it can still be executing, with its address space
+         * installed in that CPU's TTBR0. Tearing the bundle down here
+         * releases those page tables and physical pages and marks the slot
+         * inactive, which lets find_free_user_slot() hand it straight to
+         * the next process_create -- which rebuilds the very address_space
+         * object the old thread is still running on.
+         *
+         * That is exactly what the boot stall looked like from the fault
+         * side: a thread faulting at its entry with the OLD asid still in
+         * TTBR0 (ttbr != want), its L3 entry already zeroed by the rebuild
+         * (l3e=0), and the space showing inits=2. See the checklist's 0145
+         * entry.
+         *
+         * destroy_user_bundle() has always quiesced its target first, and
+         * quiesces every sibling below. Reap quiesced the siblings and not
+         * the target, which is the one path where a still-executing thread
+         * could be freed.
+         *
+         * await_not_executing() rather than quiesce_user_thread(): the
+         * target is already terminated, so there is nothing to force, and
+         * quiesce would overwrite that state with `suspended` -- which, if
+         * any later step here returns early, leaves a child no reaper can
+         * ever collect. Measured: doing it the quiesce way made the stall
+         * markedly WORSE, because the failure moved from a rare race to a
+         * permanently unreapable probe.
+         */
+        result = await_not_executing(target);
+        if (result != error_t::success)
+            return result;
 
         for (u32 sibling = 0U; sibling < active_user_thread_count; ++sibling) {
             thread& other = user_threads[sibling];
@@ -1970,7 +2028,8 @@ namespace sys::kernel::thread
          * to do that.
          */
         pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu pc=%llx esr=%llx spsr=%llx "
-                "sp=%llx faults=%llu ttbr=%llx want=%llx l3e=%llx inits=%u rollovers=%llu\n",
+                "sp=%llx faults=%llu ttbr=%llx want=%llx l3e=%llx inits=%u rollovers=%llu "
+                "word=%x phys=%llx held=%u\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U),
@@ -1986,7 +2045,16 @@ namespace sys::kernel::thread
                     arch::space::entry_descriptor(value.address_space.native)),
                 static_cast<unsigned>(
                     arch::space::initialization_count(value.address_space.native)),
-                static_cast<unsigned long long>(arch::space::rollover_count()));
+                static_cast<unsigned long long>(arch::space::rollover_count()),
+                static_cast<unsigned>(arch::space::mapped_word(value.address_space.native,
+                                                               frame.instruction_pointer)),
+                static_cast<unsigned long long>(arch::space::mapped_physical(
+                    value.address_space.native, frame.instruction_pointer)),
+                static_cast<unsigned>(memory::physical_page_allocated(
+                    static_cast<paddr_t>(arch::space::mapped_physical(
+                        value.address_space.native, frame.instruction_pointer)))
+                                          ? 1U
+                                          : 0U));
 #endif
         if (deliver_fault_ipc(value, frame, syndrome, delivered_address, fault_kind))
             return true;

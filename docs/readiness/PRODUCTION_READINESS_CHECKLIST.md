@@ -1816,3 +1816,87 @@ same build measured 7/16 and then 1/16 in consecutive rounds. Any claimed
 fix here needs paired A/B rounds on an idle machine, and `inits`/`ttbr`/
 `want`/`l3e` are better signals than the stall rate anyway, because they
 detect the condition directly instead of waiting for a boot to hang. -->
+
+<!-- 0145 evidence: a use-after-free of physical pages, FIXED on the reap
+path -- and the same condition is now directly detectable, which is what
+the remaining work needs.
+
+## The signature
+
+The user-fault warn now carries, in addition to 0144's fields, the
+physical page the faulting PC resolves to and whether the ALLOCATOR still
+considers that page handed out:
+
+    pc=20000000 esr=2000000 ttbr=8...15d000 want=8...15d000
+      l3e=4051e7c3 inits=1 word=0 phys=4051e000 held=0
+
+Read that carefully: ttbr equals want, so translation is consistent; l3e
+is a valid page descriptor; phys is a real page. And held=0 -- the page a
+LIVE address space currently maps is one the allocator believes is free.
+word=0 follows directly: whoever allocated it next zeroed it, underneath
+the mapping still pointing at it.
+
+That is a use-after-free of physical memory, and it became the dominant
+signature once 0143/0144's ASID work removed the noise on top of it.
+
+## Fixed: reap freed a bundle whose thread was still executing
+
+`terminated` and "not running anywhere" are different facts, and
+reap_user_bundle() conflated them. It checked `load_state(target) ==
+terminated` and quiesced every SIBLING, but never waited on the target
+itself. A thread reaches terminated the instant its state is stored --
+from thread_exit on its own CPU still inside the syscall, or from another
+CPU entirely via ipc.hh's caller termination -- and its CPU need not have
+switched away yet. So reap could release the target's page tables and
+physical pages, and mark its slot inactive, while that thread was still
+running with the space installed in a CPU's TTBR0. The freed pages then go
+to the next allocation and get zeroed.
+
+destroy_user_bundle() has always called quiesce_user_thread() on its
+target first. Reap is the one teardown path that did not.
+
+The wait is now await_not_executing(), extracted from
+quiesce_user_thread()'s tail rather than reusing the whole function, and
+that distinction was measured, not assumed: quiesce_user_thread()
+publishes `suspended` before waiting, which is correct when forcing a live
+thread to stop and WRONG for an already-terminated one being reaped --
+overwriting `terminated` loses the marker the reaper needs if any later
+step returns early, leaving a child nothing can ever collect. Using it
+made the stall markedly worse (9/16 against a 2-4/16 baseline) because the
+failure mode moved from a rare race to a permanently unreapable probe.
+await_not_executing() waits without touching state.
+
+## The rollover test was asserting the bug
+
+`asid_rollover_reuse` allocated and immediately released `capacity + 4`
+times and expected a rollover. That only ever worked because the allocator
+counted LIFETIME allocations (0143): release() cleared the tag's in_use
+bit but left the counter raised, so 68 allocate/release pairs "exhausted"
+a pool that never held more than one tag at once. With the counter now
+tracking live allocations -- which is correct -- that loop rightly never
+rolls over, and the test failed the whole bootstrap self-test.
+
+Rewritten to exhaust the pool genuinely, by HOLDING the handles it takes.
+Only the last one needs releasing afterwards: every tag taken before the
+rollover was freed by the rollover itself, and release() ignores their
+stale generation. It deliberately does not build an array of handles --
+a zero-initialised one compiles to a memset call this freestanding kernel
+does not link, which is its own small lesson about tests in this
+environment.
+
+Certification is green with it: `asid_rollover_reuse result=PASS
+generation=2 rollovers=1`, and `[ACCEPTANCE] result=PASS failures=0
+failure_mask=0 transport=PASS`.
+
+## Still open
+
+The boot stall persists, and `held=0` still appears, so at least one more
+path frees a page that is still mapped. Candidates not yet examined:
+memory::reclaim_task_memory() on the exec path, and the interaction of
+root's release_child(), which calls process_destroy AFTER process_reap has
+already cleared the same bundle.
+
+The useful change is that this no longer needs the stall to reproduce.
+`held=0` on a valid l3e detects the condition directly, at the moment it
+bites, and it is worth turning into an assertion rather than a printout
+once the remaining producer is found. -->
