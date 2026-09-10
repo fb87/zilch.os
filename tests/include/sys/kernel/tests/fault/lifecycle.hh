@@ -15,10 +15,19 @@
 namespace sys::kernel::tests::fault_lifecycle
 {
     [[nodiscard]] inline error_t run(task::task& root) noexcept {
-        constexpr vaddr_t scratch_mapping_address = arch::space::user_code + 0x8000ULL;
-        constexpr vaddr_t dynamic_mapping_address = arch::space::user_code + 0x9000ULL;
-        static_assert(dynamic_mapping_address < arch::space::user_stack_base);
-
+        /*
+         * Deliberately parked in block 5 of the user window, well past the
+         * loaded image/stack (block 0) and past window_mapping.hh's own
+         * probe_block=3 -- a low, image-adjacent offset here has twice now
+         * collided with init.elf's own growing loaded segments as
+         * certification test code was added (see the identical fix for
+         * test_memory_attributes_pressure).
+         */
+        constexpr vaddr_t scratch_mapping_address =
+            arch::space::user_window_base + 5U * arch::space::user_block_size;
+        constexpr vaddr_t dynamic_mapping_address = scratch_mapping_address + 0x1000ULL;
+        static_assert(arch::space::in_user_window(scratch_mapping_address));
+        static_assert(arch::space::in_user_window(dynamic_mapping_address));
         error_t result = memory::map(
             thread::user_threads[0].address_space, memory::frames[0], scratch_mapping_address,
             static_cast<memory::permission>(static_cast<u8>(memory::permission::read) |
@@ -61,7 +70,8 @@ namespace sys::kernel::tests::fault_lifecycle
             0U, 0U);
         if (result != error_t::success)
             return result;
-        if (memory::destroy_frame(root, 18U) != error_t::busy)
+        const error_t busy_check = memory::destroy_frame(root, 18U);
+        if (busy_check != error_t::busy)
             return error_t::invalid_argument;
         result = memory::unmap(thread::user_threads[0].address_space, dynamic_frame);
         if (result != error_t::success)

@@ -43,6 +43,18 @@ namespace sys
         busy = -5,
         not_found = -6,
         timed_out = -7,
+        /*
+         * Not a failure -- a blocking ipc_receive() woke because a bound
+         * notification signaled, not because a real message arrived. Only
+         * ever returned to a thread that called notification_bind first
+         * (see sys::kernel::thread::signal_notification_locked()), so no
+         * existing caller can be affected: the discriminant lives in the
+         * same word ordinary error results use (rather than stealing a bit
+         * out of the badge, which real messages already fill with
+         * caller-controlled values) precisely because nothing before this
+         * ever produced anything but success or a real negative error here.
+         */
+        notification_signal = 1,
     };
 
     inline constexpr usize_t bits_per_byte = 8U;

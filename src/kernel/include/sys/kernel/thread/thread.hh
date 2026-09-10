@@ -63,6 +63,14 @@ namespace sys::kernel::thread
         none,
         incoming_call,
         reply,
+        /* Delivered by thread::signal_notification_locked() (scheduler.hh)
+         * when a bound notification wakes a blocked ipc_receive(). No
+         * reply_capability is installed for this kind -- there is no
+         * sender to reply to -- which consume_pending() below must honor,
+         * and which is also what keeps release_pending_reply()'s existing
+         * teardown handling correct without any change: it only ever acts
+         * on thread::reply, which this kind never touches. */
+        notification_signal,
     };
 
     struct reply_capability {
@@ -115,6 +123,18 @@ namespace sys::kernel::thread
         scheduling::context scheduling_context{};
         capability_id_t waiting_endpoint{};
         reply_capability reply{};
+        /*
+         * Set by notification_bind. Generation-checked like every other
+         * cross-object reference in this kernel -- a notification that was
+         * destroyed and its slot reused simply fails to resolve here
+         * rather than needing to be found and cleared from the
+         * notification side. See notification::notification::bound_thread
+         * for the reverse direction and why neither side needs the other
+         * torn down explicitly. What DOES need explicit clearing is this
+         * field itself, on reuse -- see initialize_user() -- for the same
+         * "don't inherit the previous occupant's binding" reason.
+         */
+        object::reference_t bound_notification{};
         capability_transfer_set transfer{};
         u64 ipc_deadline{};
         bool ipc_timeout_active{};
@@ -156,6 +176,7 @@ namespace sys::kernel::thread
         value.pinned_cpu = cpu;
         value.current_state = state::inactive;
         value.waiting_endpoint = 0U;
+        value.bound_notification = {};
         scheduling::initialize(value.scheduling_context, cpu);
         value.reply = {};
         clear_transfer(value.transfer);
@@ -265,6 +286,11 @@ namespace sys::kernel::thread
                 value.reply.donation_active = false;
                 value.reply.valid = true;
             }
+        } else if (kind == pending_ipc::notification_signal) {
+            // pending_badge, not pending_sender: there is no sender, and no
+            // reply_capability is installed -- see the enum comment.
+            arch::thread::set_ipc_message(value.context, static_cast<word_t>(value.pending_badge),
+                                          value.pending_message);
         } else {
             arch::thread::set_ipc_message(value.context, static_cast<word_t>(value.pending_sender),
                                           value.pending_message);

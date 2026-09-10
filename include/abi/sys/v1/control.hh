@@ -118,6 +118,24 @@ namespace sys::abi::v1
          * never torn down out from under a thread still running.
          */
         process_reap = 51U,
+        /*
+         * Binds a notification to the CALLING thread only -- there is no
+         * thread-selector parameter, deliberately, so a thread can never
+         * bind a notification to any thread but itself. Once bound, a
+         * blocked ipc_receive() also wakes when the notification is
+         * signaled (sys::kernel::thread::signal_notification_locked()),
+         * distinguishable from a real message via a reserved status (see
+         * sys::error_t::notification_signal). Requires write right on the
+         * notification, matching interrupt_bind's own asymmetry. Sticky --
+         * persists across multiple receives, like interrupt_bind's own
+         * bind-once convention -- and fails closed with `busy` if the
+         * calling thread already has a live bind, rather than silently
+         * replacing it.
+         */
+        notification_bind = 52U,
+        /* Clears whatever notification_bind installed, if any. Always a
+         * no-op success if nothing was bound. */
+        notification_unbind = 53U,
     };
 
     /*

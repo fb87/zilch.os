@@ -271,9 +271,11 @@ namespace sys::kernel::syscall
                 current.exit_status = a1;
                 __atomic_store_n(&current.exited, true, __ATOMIC_RELEASE);
                 thread::prepare_block(frame, thread::state::terminated);
+                thread::notification_wake_cleanup cleanup{};
                 if (exit_notification != nullptr)
-                    notification::signal(*exit_notification, a3);
+                    cleanup = thread::signal_notification_locked(*exit_notification, a3);
                 thread::unlock_ipc_lifecycle();
+                thread::finish_notification_wake_cleanup(cleanup);
                 thread::schedule_prepared(frame);
                 return true;
             }
@@ -636,7 +638,7 @@ namespace sys::kernel::syscall
                 if (result == error_t::success) {
                     auto& notification = *reinterpret_cast<notification::notification*>(header);
                     if (operation == abi::v1::control_operation::notification_signal) {
-                        notification::signal(notification, a2);
+                        thread::signal_notification(notification, a2);
                     } else {
                         arch::syscall::set_output(frame, 1U, notification::consume(notification));
                     }
@@ -663,6 +665,48 @@ namespace sys::kernel::syscall
                         *reinterpret_cast<notification::notification*>(notification_header);
                     result = interrupt::bind(interrupt, object::reference(target.object));
                 }
+                break;
+            }
+            case abi::v1::control_operation::notification_bind: {
+                if (current.owner == nullptr) {
+                    result = error_t::denied;
+                    break;
+                }
+                // A thread may only ever have one live bind at a time --
+                // notification::bind() below separately enforces the other
+                // direction, that a notification may only have one bound
+                // thread. Checked here, not inside notification::bind(),
+                // because that invariant is about `current`, which
+                // notification.hh has no business knowing about.
+                if (current.bound_notification.type != object::type_t::none) {
+                    result = error_t::busy;
+                    break;
+                }
+                object::header_t* notification_header = nullptr;
+                result =
+                    capability::lookup(current.owner->cspace, a1, object::type_t::notification,
+                                       capability::right_t::write, notification_header);
+                if (result == error_t::success) {
+                    auto& target =
+                        *reinterpret_cast<notification::notification*>(notification_header);
+                    result = notification::bind(target, object::reference(current.object));
+                    if (result == error_t::success)
+                        current.bound_notification = object::reference(target.object);
+                }
+                break;
+            }
+            case abi::v1::control_operation::notification_unbind: {
+                // No capability lookup: the binding itself, like a held
+                // reply_capability, does not depend on the calling thread
+                // still holding a live capability to the notification --
+                // resolving current's own bound_notification is enough to
+                // find and clear both sides. Always succeeds, a no-op if
+                // nothing was bound.
+                object::header_t* header = object::resolve(current.bound_notification);
+                if (header != nullptr)
+                    notification::unbind(*reinterpret_cast<notification::notification*>(header));
+                current.bound_notification = {};
+                result = error_t::success;
                 break;
             }
             case abi::v1::control_operation::interrupt_ack: {

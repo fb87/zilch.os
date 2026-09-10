@@ -1762,6 +1762,105 @@ namespace sys::kernel::thread
         }
     }
 
+    /*
+     * The wake-aware half of notification::signal(): lives here rather than
+     * in notification.hh because waking a thread needs thread:: facilities
+     * (publish_pending, wake, load_state) that notification.hh deliberately
+     * does not depend on, to keep that header a leaf the way interrupt.hh's
+     * own notification usage already assumes.
+     *
+     * ASSUMES lock_ipc_lifecycle() IS ALREADY HELD -- this is the "_locked"
+     * form syscall/ipc.hh's receive() and control.hh's thread_exit handler
+     * both need, since they already hold that lock when a signal needs to
+     * go out. See signal_notification() below for the self-locking form
+     * everyone else uses.
+     *
+     * Serialization against receive()'s own blocking-commit path (ipc.hh)
+     * is what makes this correct: both sides check-and-act on the same
+     * thread's state under this exact lock, so a signal can never land in
+     * the window between "decided to block" and "recorded as blocked" --
+     * whichever of the two runs first is what the other observes.
+     */
+    /*
+     * A notification wake pulls a thread out of blocked_receive without
+     * going through the normal send()-finds-receiver path, so the endpoint
+     * it was registered on (thread.waiting_endpoint) is left with a stale
+     * `receiver` entry -- exactly what quiesce_user_thread() cleans up when
+     * *it* pulls a thread out of blocked_receive/blocked_send. That cleanup
+     * (ipc::cancel_thread) takes the endpoint's own lock, which by
+     * convention is always acquired *before* lock_ipc_lifecycle(), never
+     * nested inside it (receive()'s blocking-commit path in syscall/ipc.hh
+     * is exactly that: endpoint lock held, then lock_ipc_lifecycle() taken
+     * nested inside). signal_notification_locked() runs the other way
+     * around -- callers already hold lock_ipc_lifecycle() -- so doing the
+     * cancel_thread() call here would acquire the endpoint lock *inside*
+     * lock_ipc_lifecycle(), the reverse order, which is a real AB-BA
+     * deadlock against receive() given lock_ipc_lifecycle() is a single
+     * global lock shared by every endpoint.
+     *
+     * So this only snapshots what a cleanup would need; the actual
+     * ipc::cancel_thread() call happens in finish_notification_wake_cleanup(),
+     * always called by the two real callers *after* they have released
+     * lock_ipc_lifecycle(). The snapshot is safe to act on even if the
+     * woken thread has since moved on to a different endpoint by the time
+     * cleanup runs: cancel_thread_locked() only clears an endpoint's
+     * `receiver` if it still matches this exact (id, generation) pair, so a
+     * stale cleanup against a superseded registration is a harmless no-op.
+     */
+    struct notification_wake_cleanup {
+        bool needed{};
+        task::task* owner{};
+        capability_id_t endpoint_selector{};
+        object::reference_t thread_reference{};
+    };
+
+    inline void finish_notification_wake_cleanup(const notification_wake_cleanup& cleanup) noexcept {
+        if (!cleanup.needed || cleanup.owner == nullptr ||
+            cleanup.endpoint_selector >= capability::cspace_slot_count)
+            return;
+        object::header_t* endpoint_header = nullptr;
+        if (capability::lookup(cleanup.owner->cspace, cleanup.endpoint_selector,
+                               object::type_t::endpoint, capability::right_t::read,
+                               endpoint_header) == error_t::success &&
+            endpoint_header != nullptr) {
+            auto& endpoint = *reinterpret_cast<ipc::endpoint*>(endpoint_header);
+            (void)ipc::cancel_thread(endpoint, cleanup.thread_reference);
+        }
+    }
+
+    [[nodiscard]] inline notification_wake_cleanup
+    signal_notification_locked(notification::notification& target, u64 badge) noexcept {
+        notification::signal(target, badge);
+        object::header_t* header = object::resolve(target.bound_thread);
+        if (header == nullptr)
+            return {};
+        auto& waiter = *reinterpret_cast<thread*>(header);
+        if (load_state(waiter) != state::blocked_receive)
+            return {};
+        const u64 consumed = notification::consume(target);
+        if (consumed == 0U)
+            return {}; // raced with a poll that already drained it; nothing to deliver
+        const notification_wake_cleanup cleanup{true, waiter.owner, waiter.waiting_endpoint,
+                                                object::reference(waiter.object)};
+        const word_t zero_message[4] = {0U, 0U, 0U, 0U};
+        waiter.pending_result = error_t::notification_signal;
+        publish_pending(waiter, pending_ipc::notification_signal, static_cast<thread_id_t>(-1), 0U,
+                        static_cast<capability::badge_t>(consumed), zero_message);
+        (void)wake(waiter);
+        ipc::remote_reschedule(waiter.pinned_cpu, arch::cpu::current_id());
+        return cleanup;
+    }
+
+    /* Self-locking form: acquires lock_ipc_lifecycle() itself, for callers
+     * that do not already hold it (interrupt::dispatch()'s real hardware-IRQ
+     * path, and the notification_signal syscall). */
+    inline void signal_notification(notification::notification& target, u64 badge) noexcept {
+        lock_ipc_lifecycle();
+        const notification_wake_cleanup cleanup = signal_notification_locked(target, badge);
+        unlock_ipc_lifecycle();
+        finish_notification_wake_cleanup(cleanup);
+    }
+
     [[nodiscard]] inline bool deliver_fault_ipc(thread& value, arch::thread::context& frame,
                                                 u64 syndrome, vaddr_t fault_address,
                                                 fault::kind fault_kind) noexcept {

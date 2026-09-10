@@ -187,22 +187,37 @@ namespace sys::kernel::interrupt
         return error_t::success;
     }
 
-    [[nodiscard]] inline bool dispatch(irq_id_t irq) noexcept {
+    /*
+     * `target`/`badge` let the caller do the actual signal, rather than
+     * dispatch() doing it here: waking a thread bound to that notification
+     * needs thread:: facilities (scheduler.hh's signal_notification()),
+     * and this file cannot depend on scheduler.hh without a genuine
+     * circular include -- scheduler.hh already depends on bootstrap.hh,
+     * which depends on this file. dispatch()'s one real caller
+     * (src/arch/arm64/arch.cc) already includes scheduler.hh directly, so
+     * it is the natural place to finish the signal.
+     */
+    struct dispatch_result final {
+        bool delivered{};
+        notification::notification* target{};
+        u64 badge{};
+    };
+
+    [[nodiscard]] inline dispatch_result dispatch(irq_id_t irq) noexcept {
         if (irq >= maximum_irq_count)
-            return false;
+            return {};
         interrupt_t* value = __atomic_load_n(&registry[irq], __ATOMIC_ACQUIRE);
         if (value == nullptr ||
             !record_delivery(*value, platform::timer::ticks(arch::cpu::current_id())))
-            return false;
+            return {};
         object::header_t* header = object::resolve(value->notification);
         if (header == nullptr || header->type != object::type_t::notification) {
             __atomic_store_n(&value->stormed, true, __ATOMIC_RELEASE);
             __atomic_store_n(&value->active, false, __ATOMIC_RELEASE);
-            return false;
+            return {};
         }
-        auto& target = *reinterpret_cast<notification::notification*>(header);
-        notification::signal(target, 1ULL << (irq & 63U));
-        return true;
+        return {true, reinterpret_cast<notification::notification*>(header),
+                1ULL << (irq & 63U)};
     }
 
     [[nodiscard]] inline bool database_valid() noexcept {

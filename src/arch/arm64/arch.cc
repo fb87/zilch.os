@@ -92,7 +92,16 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             sys::arch::smp::record_tlb_shootdown_ipi();
         } else {
             const sys::kernel::object::read_guard object_read_guard{};
-            userspace_deactivate = sys::kernel::interrupt::dispatch(irq);
+            const auto dispatched = sys::kernel::interrupt::dispatch(irq);
+            userspace_deactivate = dispatched.delivered;
+            // Finishing the signal here, not inside dispatch(), is what
+            // keeps interrupt.hh from needing scheduler.hh -- see
+            // dispatch_result's own comment. Still inside the read guard:
+            // resolving bound_thread inside signal_notification() needs
+            // the same protection dispatch() itself already relied on to
+            // resolve the interrupt's own notification reference.
+            if (dispatched.target != nullptr)
+                sys::kernel::thread::signal_notification(*dispatched.target, dispatched.badge);
         }
         if ((irq == sys::platform::interrupt::virtual_timer_irq && level != 2U) ||
             irq == sys::platform::interrupt::reschedule_ipi) {

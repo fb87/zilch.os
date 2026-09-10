@@ -64,6 +64,7 @@ namespace
         domain_guest_load = 46U,
         domain_guest_run = 47U,
         thread_create_lifecycle = 48U,
+        notification_bind_wake = 49U,
     };
 
     inline constexpr sys::word_t worker_threshold = 4096U;
@@ -99,6 +100,39 @@ namespace
     inline constexpr sys::word_t thread_create_test_badge = 1U;
 
     /*
+     * Two more thread_create'd roles, same mechanism as thread_create_test_
+     * above (shared cspace, no separate task, dispatched via the argument0
+     * check in main() below) -- covers notification_bind's core contract:
+     * a signal already pending before bind+receive must be delivered
+     * immediately without blocking (phase 1), and a signal arriving while
+     * genuinely blocked must wake the receive (phase 2). Phase 2's signal
+     * comes from a THIRD thread's thread_exit(a2, a3), not a direct
+     * notification_signal call, specifically to exercise signal_
+     * notification_locked() -- the form thread_exit already holds
+     * lock_ipc_lifecycle() when it calls, which is exactly the call site a
+     * naive single-locking signal() implementation would deadlock on.
+     */
+    inline constexpr sys::word_t notification_wake_worker_role = 0x302U;
+    inline constexpr sys::word_t notification_wake_signaler_role = 0x303U;
+    inline constexpr sys::word_t notification_wake_race_notification_selector = 210U;
+    inline constexpr sys::word_t notification_wake_control_notification_selector = 211U;
+    inline constexpr sys::word_t notification_wake_worker_thread_selector = 212U;
+    inline constexpr sys::word_t notification_wake_worker_space_selector = 213U;
+    inline constexpr sys::word_t notification_wake_signaler_thread_selector = 214U;
+    inline constexpr sys::word_t notification_wake_signaler_space_selector = 215U;
+    inline constexpr sys::word_t notification_wake_race_endpoint_selector = 216U;
+    inline constexpr sys::word_t notification_wake_about_to_block_badge = 1U << 0U;
+    inline constexpr sys::word_t notification_wake_phase2_ready_badge = 1U << 1U;
+    inline constexpr sys::word_t notification_wake_fail_badge = 1U << 2U;
+    // Distinct from the control-notification badges above: these two are
+    // the payload carried on the RACE notification itself, round-tripped
+    // back as ipc_result.sender by a successful notification-driven
+    // receive, so the worker can confirm not just THAT it woke but WHICH
+    // of the two signals woke it.
+    inline constexpr sys::word_t notification_wake_signal_badge_1 = 0x1U;
+    inline constexpr sys::word_t notification_wake_signal_badge_2 = 0x2U;
+
+    /*
      * Proves create_user_thread() (thread_create) actually shares the
      * caller's cspace rather than merely succeeding: this entry point only
      * has a working capability at thread_create_test_notification_selector
@@ -120,6 +154,124 @@ namespace
                            thread_create_test_notification_selector, thread_create_test_badge);
         for (;;)
             (void)sys::ipc_receive(thread_create_test_endpoint_selector);
+    }
+
+    [[noreturn]] void notification_wake_worker_entry(sys::word_t, sys::word_t) noexcept {
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+        const sys::word_t notification_status =
+            static_cast<sys::word_t>(sys::error_t::notification_signal);
+
+        bool ok = sys::control(sys::abi::v1::control_operation::notification_bind,
+                               notification_wake_race_notification_selector) == success;
+
+        // Phase 1: badge_1 was signaled before this thread ever bound or
+        // called receive -- must come back immediately as a notification
+        // result, never block. Exercises receive()'s "already pending"
+        // early-return path deterministically, not by luck of timing.
+        auto reply = sys::ipc_receive(notification_wake_race_endpoint_selector);
+        ok = ok && reply.status == notification_status &&
+             reply.sender == notification_wake_signal_badge_1;
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal,
+                           notification_wake_control_notification_selector,
+                           ok ? notification_wake_about_to_block_badge
+                              : notification_wake_fail_badge);
+
+        // Phase 2: phase 1 consumed the only pending badge, so this
+        // genuinely blocks -- woken by the signaler thread's thread_exit,
+        // not by anything this thread does itself.
+        reply = sys::ipc_receive(notification_wake_race_endpoint_selector);
+        ok = ok && reply.status == notification_status &&
+             reply.sender == notification_wake_signal_badge_2;
+        (void)sys::control(sys::abi::v1::control_operation::notification_signal,
+                           notification_wake_control_notification_selector,
+                           ok ? notification_wake_phase2_ready_badge
+                              : notification_wake_fail_badge);
+        for (;;)
+            (void)sys::ipc_receive(notification_wake_race_endpoint_selector);
+    }
+
+    /*
+     * A disposable thread whose only job is to call thread_exit with a
+     * bound exit-notification, exercising signal_notification_locked()'s
+     * specific call site (control.hh's thread_exit handler, which already
+     * holds lock_ipc_lifecycle() when it signals) rather than the self-
+     * locking notification_signal syscall phase 1 already covers via
+     * notification_bind's own success path.
+     */
+    [[noreturn]] void notification_wake_signaler_entry(sys::word_t, sys::word_t) noexcept {
+        (void)sys::control(sys::abi::v1::control_operation::thread_exit, 0U,
+                           notification_wake_race_notification_selector,
+                           notification_wake_signal_badge_2);
+        __builtin_unreachable();
+    }
+
+    [[nodiscard]] bool test_notification_bind_wake() noexcept {
+        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
+
+        if (sys::control(sys::abi::v1::control_operation::notification_create,
+                         notification_wake_race_notification_selector) != success)
+            return false;
+        if (sys::control(sys::abi::v1::control_operation::notification_create,
+                         notification_wake_control_notification_selector) != success)
+            return false;
+        if (sys::control(sys::abi::v1::control_operation::endpoint_create,
+                         notification_wake_race_endpoint_selector) != success)
+            return false;
+
+        // Signaled before the worker exists at all, let alone binds or
+        // receives -- phase 1's setup.
+        if (sys::control(sys::abi::v1::control_operation::notification_signal,
+                         notification_wake_race_notification_selector,
+                         notification_wake_signal_badge_1) != success)
+            return false;
+
+        if (sys::control(sys::abi::v1::control_operation::thread_create, 1U,
+                         notification_wake_worker_role, notification_wake_worker_thread_selector,
+                         notification_wake_worker_space_selector) != success)
+            return false;
+
+        sys::word_t badges = 0U;
+        bool passed = false;
+        for (sys::word_t spin = 0U; spin < 100000000U; ++spin) {
+            sys::word_t polled = 0U;
+            if (sys::control_result1(polled, sys::abi::v1::control_operation::notification_poll,
+                                     notification_wake_control_notification_selector) == success) {
+                badges |= polled;
+                if ((badges & notification_wake_fail_badge) != 0U)
+                    return false;
+                if ((badges & notification_wake_about_to_block_badge) != 0U) {
+                    passed = true;
+                    break;
+                }
+            }
+        }
+        if (!passed)
+            return false;
+
+        // The worker is now blocked (or extremely close to it) in its
+        // second receive -- spawn the signaler to wake it via thread_exit.
+        if (sys::control(sys::abi::v1::control_operation::thread_create, 2U,
+                         notification_wake_signaler_role,
+                         notification_wake_signaler_thread_selector,
+                         notification_wake_signaler_space_selector) != success)
+            return false;
+
+        badges = 0U;
+        passed = false;
+        for (sys::word_t spin = 0U; spin < 100000000U; ++spin) {
+            sys::word_t polled = 0U;
+            if (sys::control_result1(polled, sys::abi::v1::control_operation::notification_poll,
+                                     notification_wake_control_notification_selector) == success) {
+                badges |= polled;
+                if ((badges & notification_wake_fail_badge) != 0U)
+                    return false;
+                if ((badges & notification_wake_phase2_ready_badge) != 0U) {
+                    passed = true;
+                    break;
+                }
+            }
+        }
+        return passed;
     }
 
     [[nodiscard]] bool test_thread_create_lifecycle() noexcept {
@@ -964,6 +1116,10 @@ namespace
 extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     if (argument0 == thread_create_test_role)
         thread_create_test_entry(argument0, argument1);
+    if (argument0 == notification_wake_worker_role)
+        notification_wake_worker_entry(argument0, argument1);
+    if (argument0 == notification_wake_signaler_role)
+        notification_wake_signaler_entry(argument0, argument1);
     if (argument0 != 0U)
         worker(argument0, argument1);
 
@@ -1003,6 +1159,7 @@ extern "C" int main(sys::word_t argument0, sys::word_t argument1) noexcept {
     }
     record(ledger, test_id::capability_control, capability_pass);
     record(ledger, test_id::thread_create_lifecycle, test_thread_create_lifecycle());
+    record(ledger, test_id::notification_bind_wake, test_notification_bind_wake());
 
     const sys::word_t hv_self_test =
         sys::certification::control(sys::test_abi::v1::control_operation::hypervisor_self_test);

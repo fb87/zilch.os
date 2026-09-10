@@ -13,12 +13,27 @@ namespace sys::kernel::notification
         object::header_t object{};
         volatile u64 pending_badges{};
         volatile u32 allocated{};
+        /*
+         * The thread a blocked ipc_receive() should also wake for, set by
+         * notification_bind (see thread::signal_notification_locked() in
+         * scheduler.hh, which is the wake-aware caller of signal() below --
+         * this file has no thread:: facilities and stays that way).
+         * Generation-checked like every other cross-object reference in
+         * this kernel: a stale bind from a torn-down thread simply fails to
+         * resolve later rather than needing to be found and cleared from
+         * here. What DOES need explicit clearing is this field itself, on
+         * reuse -- see initialize() -- because a fresh notification at a
+         * recycled slot must not inherit whichever thread the previous
+         * occupant happened to have bound.
+         */
+        object::reference_t bound_thread{};
     };
 
     inline notification dynamic_notifications[dynamic_notification_count]{};
 
     inline void initialize(notification& value) noexcept {
         value.pending_badges = 0U;
+        value.bound_thread = {};
     }
 
     inline void signal(notification& value, u64 badge) noexcept {
@@ -27,6 +42,34 @@ namespace sys::kernel::notification
 
     [[nodiscard]] inline u64 consume(notification& value) noexcept {
         return __atomic_exchange_n(&value.pending_badges, 0U, __ATOMIC_ACQ_REL);
+    }
+
+    /*
+     * Binds `thread_reference` (always the calling thread's own object --
+     * callers must never pass another thread's reference; see
+     * notification_bind's dispatch in control.hh) to this notification, so
+     * a future signal() can wake it out of a blocked ipc_receive(). Same
+     * shape as interrupt::bind() in interrupt.hh: resolve, validate type,
+     * store. One waiter per notification -- confirmed sufficient for every
+     * real usage in this codebase (serial-driver, virtio-driver,
+     * domain-manager's IRQ aggregation, root's own readiness notification
+     * are all many-signalers/one-consumer already) -- rebinding an
+     * already-bound notification fails closed rather than silently
+     * replacing the existing waiter.
+     */
+    [[nodiscard]] inline error_t bind(notification& value,
+                                      const object::reference_t& thread_reference) noexcept {
+        object::header_t* header = object::resolve(thread_reference);
+        if (header == nullptr || header->type != object::type_t::thread)
+            return error_t::invalid_argument;
+        if (value.bound_thread.type != object::type_t::none)
+            return error_t::busy;
+        value.bound_thread = thread_reference;
+        return error_t::success;
+    }
+
+    inline void unbind(notification& value) noexcept {
+        value.bound_thread = {};
     }
 
     [[nodiscard]] inline error_t create(task::task& owner, capability_id_t selector) noexcept {
@@ -92,7 +135,8 @@ namespace sys::kernel::notification
                 if (value.object.type != object::type_t::notification)
                     return false;
             } else if (value.object.type != object::type_t::none ||
-                       __atomic_load_n(&value.pending_badges, __ATOMIC_ACQUIRE) != 0U) {
+                       __atomic_load_n(&value.pending_badges, __ATOMIC_ACQUIRE) != 0U ||
+                       value.bound_thread.type != object::type_t::none) {
                 return false;
             }
         }

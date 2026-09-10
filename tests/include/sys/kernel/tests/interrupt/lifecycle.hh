@@ -52,14 +52,28 @@ namespace sys::kernel::tests::interrupt
             return error_t::invalid_argument;
         result =
             kernel::interrupt::bind(irq, object::reference(bootstrap::root_notification.object));
-        if (result != error_t::success || !kernel::interrupt::dispatch(40U) ||
+        // dispatch() itself no longer signals -- see its own comment: doing
+        // so needs thread:: facilities (to wake a bound receiver) that
+        // interrupt.hh cannot depend on without a circular include, so the
+        // real caller (src/arch/arm64/arch.cc) finishes the signal after
+        // dispatch() returns which notification/badge to use. This test
+        // has no thread to wake, so it just finishes the signal itself,
+        // the same plain notification::signal() dispatch() used to call
+        // directly.
+        const auto edge_dispatch = kernel::interrupt::dispatch(40U);
+        if (edge_dispatch.delivered)
+            notification::signal(*edge_dispatch.target, edge_dispatch.badge);
+        if (result != error_t::success || !edge_dispatch.delivered ||
             notification::consume(bootstrap::root_notification) != (1ULL << 40U) ||
             kernel::interrupt::acknowledge(irq) != error_t::success ||
             kernel::interrupt::acknowledge(irq) != error_t::not_found)
             return error_t::invalid_argument;
         result = kernel::interrupt::bind(level_irq,
                                          object::reference(bootstrap::root_notification.object));
-        if (result != error_t::success || !kernel::interrupt::dispatch(41U) ||
+        const auto level_dispatch = kernel::interrupt::dispatch(41U);
+        if (level_dispatch.delivered)
+            notification::signal(*level_dispatch.target, level_dispatch.badge);
+        if (result != error_t::success || !level_dispatch.delivered ||
             notification::consume(bootstrap::root_notification) != (1ULL << 41U) ||
             kernel::interrupt::acknowledge(level_irq) != error_t::success)
             return error_t::invalid_argument;

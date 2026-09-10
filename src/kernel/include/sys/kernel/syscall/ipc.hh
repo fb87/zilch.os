@@ -319,6 +319,36 @@ namespace sys::kernel::syscall
             return true;
         }
         /*
+         * lock_ipc_lifecycle() acquired here, nested inside the endpoint
+         * lock already held (the documented ordering -- thread.hh's own
+         * comment on the lock), and NOT released until this thread has
+         * either taken the immediate notification result below or fully
+         * committed to blocked_receive. This is the only thing that makes
+         * a bound notification's wake safe: thread::signal_notification_
+         * locked() (scheduler.hh) checks "is my bound thread blocked_
+         * receive" under this exact same lock. Without holding it across
+         * both the check here and the state transition, a signal landing
+         * in between "decided to block" and "recorded as blocked" would
+         * OR its badge into pending_badges and find no one blocked yet to
+         * wake -- a real, silent missed wakeup, not a hypothetical one.
+         */
+        thread::lock_ipc_lifecycle();
+        object::header_t* bound_header = object::resolve(current.bound_notification);
+        if (bound_header != nullptr) {
+            auto& bound = *reinterpret_cast<notification::notification*>(bound_header);
+            const u64 pending = __atomic_load_n(&bound.pending_badges, __ATOMIC_ACQUIRE);
+            if (pending != 0U) {
+                const u64 consumed = notification::consume(bound);
+                thread::unlock_ipc_lifecycle();
+                ipc::unlock(*endpoint);
+                set_error(frame, error_t::notification_signal);
+                frame.x[1] = static_cast<word_t>(consumed);
+                for (usize_t i = 0U; i < 4U; ++i)
+                    frame.x[i + 2U] = 0U;
+                return true;
+            }
+        }
+        /*
          * Publish the blocked state and saved context before exposing this
          * thread as the endpoint receiver.  Otherwise a remote caller can
          * wake us and then this CPU can overwrite ready with blocked_receive.
@@ -327,6 +357,7 @@ namespace sys::kernel::syscall
         capture_timeout(current, frame);
         thread::prepare_block(frame, thread::state::blocked_receive);
         endpoint->receiver = object::reference(current.object);
+        thread::unlock_ipc_lifecycle();
         ipc::unlock(*endpoint);
         thread::schedule_prepared(frame);
         return true;
