@@ -5,6 +5,9 @@
 #include <sys/types.hh>
 
 #include <abi/sys/v1/control.hh>
+// console_write_max_bytes: the packed wire shape serial_operation::write
+// shares with control_plane_operation::write -- see text::packed() below.
+#include <abi/sys/v1/control_plane.hh>
 #include <abi/sys/v1/process.hh>
 #include <abi/sys/v1/serial.hh>
 
@@ -181,6 +184,36 @@ namespace sys::native
         inline void line(capability_id_t serial, const char* value) noexcept {
             write(serial, value);
             write(serial, "\r\n");
+        }
+
+        /*
+         * Same destination as write(), but one IPC per chunk instead of one
+         * per character, using serial_operation::write's packed wire shape.
+         * Byte-at-a-time output interleaves with any other process writing
+         * concurrently, which turns a diagnostic printed during a failed
+         * bring-up into two shuffled lines -- observed, and it cost real
+         * time to untangle a root diagnostic from the virtio driver's
+         * simultaneous probe output. Chunking drops the interleaving
+         * granularity from 1 byte to 23 (console_write_max_bytes - 1), which
+         * is enough for these short markers to survive intact in practice.
+         *
+         * Deliberately NOT a change to write(): its callers emit single
+         * characters and hex digits built up piecewise, which this cannot
+         * express.
+         */
+        inline void packed(capability_id_t serial, const char* value) noexcept {
+            constexpr usize_t chunk = abi::v1::console_write_max_bytes - 1U;
+            const char* cursor = value;
+            while (*cursor != '\0') {
+                word_t words[3]{};
+                usize_t index = 0U;
+                for (; index < chunk && cursor[index] != '\0'; ++index)
+                    words[index / 8U] |= static_cast<word_t>(static_cast<u8>(cursor[index]))
+                                         << ((index % 8U) * 8U);
+                (void)ipc_call(serial, static_cast<word_t>(abi::v1::serial_operation::write),
+                               words[0], words[1], words[2]);
+                cursor += index;
+            }
         }
     } // namespace text
 } // namespace sys::native

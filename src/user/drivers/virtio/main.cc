@@ -548,10 +548,16 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
     native::signal_ready(abi::block_service_ready_badge);
 
     for (;;) {
-        // Bounded timeout rather than an indefinite blocking receive, same
-        // idiom as the serial driver's loop and root_graph.hh's
-        // drain_fault_reports().
-        const auto request = sys::ipc_receive(service_endpoint, abi::encode_timeout(1U));
+        // Genuinely blocking, not a bounded poll: unlike submit()'s own
+        // completion-wait loop above (which must keep draining the IRQ
+        // notification to track an in-flight request), this loop only
+        // ever waits for the next client request -- there is nothing else
+        // to interleave with between requests, so there is nothing a
+        // bounded timeout would let it check. Previously bounded to 1
+        // tick "same idiom as the serial driver's loop", which was fixed
+        // for the same reason -- see PRODUCTION_READINESS_CHECKLIST.md's
+        // 0133 evidence entry.
+        const auto request = sys::ipc_receive(service_endpoint);
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             continue;
         const auto operation = static_cast<abi::block_operation>(request.message0);

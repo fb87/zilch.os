@@ -1,6 +1,7 @@
 #include <sys/control.hh>
 #include <sys/ipc.hh>
 #include <sys/native.hh>
+#include <sys/thread.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
@@ -29,6 +30,27 @@ namespace
     inline constexpr sys::capability_id_t irq_notification_selector = 22U;
     inline constexpr sys::capability_id_t self_space_selector = native::own_space;
     inline constexpr sys::word_t uart_scratch_address = 0x20053000U;
+
+    /*
+     * The RX half runs on its own thread receiving on its own endpoint, and
+     * owns everything below that touches the RX ring: the bound interrupt
+     * notification, drain_rx(), and both read operations. The main thread
+     * serves only write/write_byte.
+     *
+     * That split is not about throughput -- it is what makes read_byte_wait's
+     * deferred reply safe. A deferred reply is held in the serving thread's
+     * single reply slot, which the kernel overwrites on the next incoming
+     * call to that thread, so a write arriving while a read was parked used
+     * to strand the reader in blocked_reply for good (and stdin with it).
+     * Must match root_graph.hh's serial_rx_role /
+     * serial_rx_child_endpoint_selector / serial_rx_thread_selector /
+     * serial_rx_space_selector, and see serial_rx_endpoint's comment there
+     * for the capability-graph invariants the deferral relies on.
+     */
+    inline constexpr sys::word_t rx_role = 0x10bU;
+    inline constexpr sys::capability_id_t rx_endpoint = 23U;
+    inline constexpr sys::capability_id_t rx_thread_selector = 30U;
+    inline constexpr sys::capability_id_t rx_space_selector = 31U;
 
     // Same PL011 register layout console-server used to poke directly
     // (src/platform/qemu_arm64_virt/include/sys/platform/console.hh) --
@@ -114,28 +136,65 @@ namespace
      * 33, flags 4 = level-high) -- the PL011 keeps asserting its line
      * while unread data sits at or above its FIFO trigger level, so this
      * must actually empty the FIFO before interrupt_ack re-unmasks/
-     * re-routes it, or the same condition would immediately refire (which
-     * is self-correcting, not unsafe, but pointless work).
+     * re-routes it.
+     *
+     * ORDER IS LOAD-BEARING: clear RXIC *before* each drain pass, and only
+     * stop once a pass ends with the FIFO genuinely empty.
+     *
+     * The obvious order -- drain, then clear -- silently loses the RX
+     * interrupt for the rest of the system's uptime, and did. The PL011
+     * raises RX when the FIFO level *reaches* its trigger, not while it
+     * sits at or above it, so the assertion is an edge on the way up. A
+     * byte landing in the window between the final try_getc() (which saw
+     * RXFE, so returned false) and the ICR write leaves the FIFO
+     * non-empty while ICR wipes the latch that byte had just set. The
+     * level can then never re-cross the trigger from below -- the FIFO
+     * never returns to empty, because nothing will interrupt to drain it
+     * -- so RX is dead permanently, taking every console reader with it:
+     * the interactive shell and, through the same driver, any hosted
+     * guest's console.
+     *
+     * Clearing first inverts that: anything arriving during or after a
+     * drain pass keeps its latch, and the loop re-checks rather than
+     * trusting the pass it just did. Reproduced and fixed against
+     * tools/verification/guest_input_burst.sh, which needs a sustained
+     * burst to hit the window at all -- a short one almost never does,
+     * which is why this survived earlier testing.
      */
     inline void drain_rx() noexcept {
-        sys::u8 value = 0U;
-        while (try_getc(value))
-            rx_push(value);
         auto* icr = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + icr_offset);
-        *icr = icr_rxic;
+        auto* flags = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + flag_offset);
+        sys::u8 value = 0U;
+        do {
+            *icr = icr_rxic;
+            while (try_getc(value))
+                rx_push(value);
+        } while ((*flags & receive_fifo_empty) == 0U);
         (void)sys::control(sys::abi::v1::control_operation::interrupt_ack, irq_selector);
     }
 
-    [[nodiscard]] inline bool map_uart() noexcept {
+    /*
+     * Takes the target address space explicitly because this driver has two
+     * threads and thread_create gives each thread its OWN address space --
+     * only the cspace is shared (see create_user_thread() in
+     * thread/scheduler.hh: "Each sibling owns its own address_space"). The
+     * UART frame therefore has to be mapped once per thread that touches
+     * the device registers, at the same scratch address in both, or the RX
+     * thread faults on its first drain. memory::map() allows that: it keeps
+     * a mapping record per (space, address) pair and only rejects a repeat
+     * of the SAME pair, so the second map is a genuine second mapping of the
+     * one device frame rather than a conflict.
+     */
+    [[nodiscard]] inline bool map_uart(sys::capability_id_t space_selector) noexcept {
         const sys::word_t read_write =
             static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::read) |
             static_cast<sys::word_t>(sys::abi::v1::CapabilityRight::write);
         const sys::word_t attrs = sys::abi::v1::encode_mapping_attributes(
             sys::abi::v1::memory_type::device, sys::abi::v1::memory_shareability::non_shareable);
         return native::retry([&] {
-            return native::ok(sys::control(sys::abi::v1::control_operation::map_frame,
-                                           self_space_selector, uart_frame_selector,
-                                           uart_scratch_address, read_write, attrs));
+            return native::ok(sys::control(sys::abi::v1::control_operation::map_frame, space_selector,
+                                           uart_frame_selector, uart_scratch_address, read_write,
+                                           attrs));
         });
     }
 
@@ -152,31 +211,136 @@ namespace
                                            irq_selector, irq_notification_selector));
         });
     }
+
+    /*
+     * The RX thread (spawned by main() below under rx_role). Binds the
+     * interrupt notification to ITSELF -- notification_bind is per-thread,
+     * so this must run here and not on the main thread -- which is what lets
+     * the ipc_receive() below wake on RX as well as on a request.
+     *
+     * Deferring read_byte_wait's reply is safe on this thread and only on
+     * this thread: root mints rx_endpoint to console-server alone, and
+     * console-server serves it from a single thread that blocks in ipc_call,
+     * so at most one RX request is ever outstanding and the one reply slot
+     * is always enough. Nothing else can reach this thread to overwrite it.
+     */
+    [[noreturn]] inline void rx_main() noexcept {
+        /*
+         * This thread's own view of the UART, and its own binding of the
+         * interrupt notification -- both are per-thread and neither is
+         * inherited from the main thread that created it (see map_uart()'s
+         * comment for the address space, and notification_bind's own
+         * per-thread semantics for the notification).
+         *
+         * A failure here would leave RX permanently dead while TX kept
+         * working, which looks like a hung console rather than a failed
+         * driver. Report it to root and exit the thread rather than falling
+         * into the loop below, which would touch an unmapped UART and fault
+         * -- repeatedly, and against a driver that is deliberately not
+         * restart-covered (see USR-024), so the faults would never resolve.
+         *
+         * rx_space_selector, not native::own_space: slot 3 still names the
+         * MAIN thread's address space, which is where map_uart() already
+         * mapped the device for the write path. create_user_thread()
+         * installs this thread's own space capability at the selector it was
+         * created with, and that is the one to map into here.
+         */
+        if (!map_uart(rx_space_selector) ||
+            !native::ok(sys::control(sys::abi::v1::control_operation::notification_bind,
+                                     irq_notification_selector))) {
+            native::signal_failure();
+            sys::thread_exit(1U, native::root_notification, native::failure_badge);
+        }
+
+        // Set once a read_byte_wait request finds the ring empty: the
+        // caller's reply capability stays implicitly stashed by the kernel
+        // (current.reply) across the next ipc_receive() below, so this only
+        // needs to remember *that* a reply is owed, to answer it once
+        // drain_rx() has bytes. Never set for plain read_byte, which always
+        // replies immediately -- see its own ABI comment.
+        bool reply_pending = false;
+
+        for (;;) {
+            const auto request = sys::ipc_receive(rx_endpoint);
+            if (request.status == static_cast<sys::word_t>(sys::error_t::notification_signal)) {
+                drain_rx();
+                if (reply_pending) {
+                    sys::u8 value = 0U;
+                    if (rx_pop(value)) {
+                        (void)sys::ipc_reply(1U, static_cast<sys::word_t>(value), 0U, 0U);
+                        reply_pending = false;
+                    }
+                }
+                continue;
+            }
+            if (request.status != static_cast<sys::word_t>(sys::error_t::success))
+                continue;
+            const auto operation = static_cast<sys::abi::v1::serial_operation>(request.message0);
+            sys::word_t result0 = static_cast<sys::word_t>(sys::error_t::invalid_argument);
+            sys::word_t result1 = 0U;
+            if (operation == sys::abi::v1::serial_operation::read_byte) {
+                sys::u8 value = 0U;
+                const bool available = rx_pop(value);
+                result0 = available ? 1U : 0U;
+                result1 = available ? value : 0U;
+            } else if (operation == sys::abi::v1::serial_operation::read_byte_wait) {
+                sys::u8 value = 0U;
+                if (rx_pop(value)) {
+                    result0 = 1U;
+                    result1 = value;
+                } else {
+                    reply_pending = true;
+                    continue; // answered from the drain path above
+                }
+            }
+            (void)sys::ipc_reply(result0, result1, 0U, 0U);
+        }
+    }
+
+    /*
+     * Same ordering hazard console-server's own stdin-thread spawn already
+     * documents: root can only mint rx_endpoint into this cspace after
+     * process_create returns, so this process can genuinely reach here
+     * first. Spawning the RX thread before the mint lands would leave it
+     * spinning on failed capability resolution instead of blocking. A
+     * timed-out probe means the endpoint resolves and is merely idle, which
+     * is the success signal; not_found/denied mean the mint has not landed.
+     */
+    [[nodiscard]] inline bool await_rx_endpoint() noexcept {
+        constexpr sys::word_t attempts = 100000U;
+        for (sys::word_t attempt = 0U; attempt < attempts; ++attempt) {
+            const auto probe = sys::ipc_receive(rx_endpoint, sys::abi::v1::encode_timeout(1U));
+            if (probe.status != static_cast<sys::word_t>(sys::error_t::not_found) &&
+                probe.status != static_cast<sys::word_t>(sys::error_t::denied))
+                return true;
+        }
+        return false;
+    }
 } // namespace
 
-extern "C" int main(sys::word_t, sys::word_t) noexcept {
-    if (!map_uart() || !bind_irq()) {
+extern "C" int main(sys::word_t role, sys::word_t) noexcept {
+    if (role == rx_role)
+        rx_main(); // noreturn
+
+    if (!map_uart(self_space_selector) || !bind_irq()) {
         native::signal_failure();
         return 1;
     }
     configure_uart();
 
+    // CPU 3 deliberately: not root's CPU 0, and not this driver's own (root
+    // process_creates serial-driver onto CPU 2).
+    if (!await_rx_endpoint() ||
+        sys::control(sys::abi::v1::control_operation::thread_create, 3U, rx_role, rx_thread_selector,
+                     rx_space_selector) != static_cast<sys::word_t>(sys::error_t::success)) {
+        native::signal_failure();
+        return 1;
+    }
+
     native::signal_ready(sys::abi::v1::serial_service_ready_badge);
 
     for (;;) {
-        sys::word_t signaled = 0U;
-        const sys::word_t polled =
-            sys::control_result1(signaled, sys::abi::v1::control_operation::notification_poll,
-                                 irq_notification_selector);
-        if (polled == static_cast<sys::word_t>(sys::error_t::success) && signaled != 0U)
-            drain_rx();
-
-        // Bounded timeout, not an indefinite blocking receive, so this loop
-        // keeps checking the IRQ notification between requests -- same
-        // idiom as root_graph.hh's drain_fault_reports() and
-        // domain-manager's forward_device_irqs(); this codebase has no
-        // blocking-wait syscall for notifications.
-        const auto request = sys::ipc_receive(service_endpoint, sys::abi::v1::encode_timeout(1U));
+        const auto request = sys::ipc_receive(service_endpoint);
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             continue;
         const auto operation = static_cast<sys::abi::v1::serial_operation>(request.message0);
@@ -198,12 +362,11 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
         } else if (operation == sys::abi::v1::serial_operation::write_byte) {
             putc(static_cast<char>(request.message1 & 0xffU));
             result0 = static_cast<sys::word_t>(sys::error_t::success);
-        } else if (operation == sys::abi::v1::serial_operation::read_byte) {
-            sys::u8 value = 0U;
-            const bool available = rx_pop(value);
-            result0 = available ? 1U : 0U;
-            result1 = available ? value : 0U;
         }
+        // read_byte/read_byte_wait are NOT served here -- they belong to the
+        // RX thread's own endpoint (see rx_main()). Reaching this endpoint
+        // with one means the caller aimed at the wrong capability, which the
+        // invalid_argument default already reports.
         if (sys::ipc_reply(result0, result1, 0U, 0U) !=
             static_cast<sys::word_t>(sys::error_t::success))
             return 3;

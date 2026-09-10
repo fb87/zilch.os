@@ -63,4 +63,21 @@ namespace sys::console
             return {};
         return {true, static_cast<u8>(reply.message1)};
     }
+
+    /*
+     * Blocking counterpart to read_byte(): does not return until a byte is
+     * actually available (or a genuine IPC error occurs). For the
+     * interactive shell's read() (src/user/lib/libc/io.cc) only --
+     * domain-manager's guest-console forwarding needs read_byte()'s
+     * instant "none available" reply to avoid stalling VM idle-exit
+     * handling, so it must keep using that one.
+     */
+    [[nodiscard]] inline read_byte_result read_byte_wait(capability_id_t endpoint) noexcept {
+        const auto reply = ipc_call(
+            endpoint, static_cast<word_t>(abi::v1::control_plane_operation::read_byte_wait), 0U,
+            0U, 0U);
+        if (reply.status != static_cast<word_t>(error_t::success) || reply.message0 == 0U)
+            return {};
+        return {true, static_cast<u8>(reply.message1)};
+    }
 } // namespace sys::console

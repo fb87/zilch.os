@@ -67,7 +67,58 @@ namespace sys::root_graph
     inline constexpr word_t serial_selector = memory_service_endpoint + 1U;
     inline constexpr capability_id_t serial_service_endpoint = serial_selector + 3U;
 
+    /*
+     * serial-driver's SECOND endpoint, carrying only the RX operations
+     * (read_byte / read_byte_wait) -- write/write_byte stay on
+     * serial_service_endpoint above. The split exists because read_byte_wait
+     * defers its reply: when the RX ring is empty, serial-driver leaves the
+     * caller blocked and answers later, out of the interrupt handler.
+     *
+     * A deferred reply lives in the serving THREAD's single reply slot
+     * (thread::reply, installed unconditionally by ipc.hh's install_reply()
+     * on every incoming call). So any other request reaching the same thread
+     * while a reply is owed silently overwrites the stashed reply
+     * capability, and the deferred caller stays blocked_reply forever -- for
+     * stdin that is every console reader in the system, permanently. One
+     * serial-driver thread serving both writes and blocking reads was
+     * exactly that shape: console-server's own write path and the virtio
+     * driver's bring-up diagnostics both call serial-driver, and either
+     * landing during a parked read_byte_wait would have killed stdin.
+     *
+     * Two invariants make the deferral safe, and both are enforced by this
+     * capability graph rather than by driver code:
+     *   1. Writes go to a DIFFERENT endpoint served by a DIFFERENT thread
+     *      (serial_rx_role below), so a write can never clobber a parked
+     *      read's reply slot.
+     *   2. This endpoint is minted to console-server ONLY (see
+     *      mint_console_resources()), whose stdin thread is a single thread
+     *      that blocks in ipc_call -- so at most one RX request can ever be
+     *      outstanding, and the one reply slot is always enough.
+     * Minting this endpoint to a second client would reintroduce the hang;
+     * that is the whole reason it is not simply merged into
+     * serial_service_endpoint.
+     *
+     * Numbered past console_stdin_endpoint, which is defined further down
+     * with the rest of console-server's wiring and static_asserts the
+     * adjacency.
+     */
+    inline constexpr capability_id_t serial_rx_endpoint = serial_service_endpoint + 2U;
+
+    /*
+     * serial-driver's cspace slots for the RX half: the endpoint above, and
+     * the thread/space selectors its second thread is created with. Same
+     * self-service pattern console-server already uses for its stdin thread
+     * (console_stdin_thread_selector below) -- thread_create attaches to the
+     * caller's own task, so these are serial-driver's own slots, shared with
+     * its main thread.
+     */
+    inline constexpr word_t serial_rx_role = 0x10bU;
+    inline constexpr capability_id_t serial_rx_child_endpoint_selector = 23U;
+    inline constexpr capability_id_t serial_rx_thread_selector = 30U;
+    inline constexpr capability_id_t serial_rx_space_selector = 31U;
+
     static_assert(serial_service_endpoint < 64U);
+    static_assert(serial_rx_endpoint < 64U);
 
     /*
      * virtio block driver, wired exactly like serial-driver above: not a
@@ -311,9 +362,15 @@ namespace sys::root_graph
                     serial_uart_child_frame_selector, serial_uart_root_frame_selector,
                     read_write) != success)
             return false;
+        if (control(abi::v1::control_operation::capability_mint, serial_task,
+                    serial_irq_child_selector, serial_irq_root_selector, write_control) != success)
+            return false;
+        // The RX half's own endpoint, received on by the driver's second
+        // thread -- see serial_rx_endpoint's comment for why RX cannot share
+        // the service endpoint the write thread serves.
         return control(abi::v1::control_operation::capability_mint, serial_task,
-                       serial_irq_child_selector, serial_irq_root_selector,
-                       write_control) == success;
+                       serial_rx_child_endpoint_selector, serial_rx_endpoint,
+                       read_write) == success;
     }
 
     /*
@@ -330,10 +387,16 @@ namespace sys::root_graph
      * role-specific extra mint.
      */
     inline constexpr capability_id_t console_serial_endpoint_selector = 20U;
+    // serial-driver's RX endpoint (serial_rx_endpoint below): console-server
+    // forwards read_byte/read_byte_wait here rather than to
+    // console_serial_endpoint_selector, and is its only holder.
+    inline constexpr capability_id_t console_serial_rx_endpoint_selector = 21U;
     inline constexpr capability_id_t console_stdin_endpoint_selector = 12U;
     inline constexpr capability_id_t console_stdin_endpoint = serial_service_endpoint + 1U;
 
-    static_assert(console_stdin_endpoint < 64U);
+    // The two endpoints past serial-driver's own service endpoint are
+    // adjacent by construction; keep them that way.
+    static_assert(serial_rx_endpoint == console_stdin_endpoint + 1U);
 
     /*
      * console-server's second thread: bound to its OWN already-built binary
@@ -538,8 +601,13 @@ namespace sys::root_graph
                     console_serial_endpoint_selector, serial_service_endpoint,
                     read_write) != success)
             return false;
+        if (control(abi::v1::control_operation::capability_mint, console_task,
+                    console_stdin_endpoint_selector, console_stdin_endpoint, read_write) != success)
+            return false;
+        // console-server is deliberately the ONLY holder of this one; see
+        // serial_rx_endpoint's comment for what a second client would break.
         return control(abi::v1::control_operation::capability_mint, console_task,
-                       console_stdin_endpoint_selector, console_stdin_endpoint,
+                       console_serial_rx_endpoint_selector, serial_rx_endpoint,
                        read_write) == success;
     }
 
@@ -759,6 +827,7 @@ namespace sys::root_graph
         const role_image_entry bindings[] = {
             {memory_role, "bin/memory-server"},
             {serial_role, "bin/serial-driver"},
+            {serial_rx_role, "bin/serial-driver"},
             {block_role, "bin/virtio-driver"},
             {vfs_role, "bin/vfs-server"},
             {static_cast<word_t>(abi::v1::control_plane_role::process), "bin/control-plane"},
@@ -894,8 +963,25 @@ namespace sys::root_graph
     inline constexpr word_t root_supervisor_role = 0x301U;
     inline constexpr capability_id_t supervisor_thread_selector = 150U;
 
+    /*
+     * ipc_receive() is a genuinely blocking primitive (unlike
+     * notification_poll's instant memory read); this 1-tick bound is what
+     * keeps every call site other than supervision_thread_entry() from
+     * stalling its own loop by more than one scheduler tick per iteration
+     * while a check is made -- those loops have other work to interleave
+     * with (root's readiness-detection loop, or a probe-wait's reap()
+     * polling) and must not block indefinitely.
+     * supervision_thread_entry() has no such other work and passes
+     * no_timeout instead; see its own comment.
+     */
+    inline constexpr word_t fault_poll_ticks = 1U;
+
     // Defined below, next to the fault-endpoint constants they depend on.
-    inline void drain_fault_reports(supervisor_state* state) noexcept;
+    // The default preserves every existing call site's bounded-yield
+    // behavior exactly; only supervision_thread_entry() overrides it.
+    inline void drain_fault_reports(
+        supervisor_state* state,
+        word_t timeout = abi::v1::encode_timeout(fault_poll_ticks)) noexcept;
     [[nodiscard]] inline bool restart_role(supervisor_state& state, word_t index) noexcept;
 
     /*
@@ -907,11 +993,21 @@ namespace sys::root_graph
      * nullptr, so a crashed mapping still leaves fault reaping intact, just
      * without restart.
      */
+    /*
+     * Unlike every other caller of drain_fault_reports(), this loop does
+     * nothing else -- it is this thread's entire purpose for the rest of
+     * the system's uptime. There is nothing to interleave with, so a
+     * genuinely blocking wait is correct here (fault delivery is a real
+     * IPC message to root_fault_endpoint, not a notification, so no
+     * notification_bind is needed): previously this woke and re-checked
+     * every single scheduler tick forever regardless of whether any
+     * thread had faulted.
+     */
     [[noreturn]] inline void supervision_thread_entry() noexcept {
         supervisor_state* const state =
             map_supervisor_state_self() ? supervisor_state_ptr() : nullptr;
         for (;;)
-            drain_fault_reports(state);
+            drain_fault_reports(state, abi::v1::no_timeout);
     }
 
     [[nodiscard]] inline bool spawn_supervision_thread() noexcept {
@@ -1290,8 +1386,6 @@ namespace sys::root_graph
      * used to keep this from stalling the readiness-detection loop below
      * by more than one scheduler tick per iteration while a check is made.
      */
-    inline constexpr word_t fault_poll_ticks = 1U;
-
     /*
      * The reply must always happen first, regardless of what follows: it's
      * what releases the crashed thread from blocked_fault. Restart is a
@@ -1305,9 +1399,8 @@ namespace sys::root_graph
      * fault plan's "Explicitly out of scope"); either way this just falls
      * back to today's terminate-only behavior.
      */
-    inline void drain_fault_reports(supervisor_state* state) noexcept {
-        const auto reply =
-            ipc_receive(root_fault_endpoint, abi::v1::encode_timeout(fault_poll_ticks));
+    inline void drain_fault_reports(supervisor_state* state, word_t timeout) noexcept {
+        const auto reply = ipc_receive(root_fault_endpoint, timeout);
         if (reply.status != static_cast<word_t>(error_t::success))
             return;
         (void)ipc_reply(static_cast<word_t>(abi::v1::fault_disposition::terminate), 0U, 0U, 0U);
@@ -1482,6 +1575,11 @@ namespace sys::root_graph
                         service_endpoint, serial_service_endpoint,
                         read_write) != static_cast<word_t>(error_t::success))
                 return 1;
+            // Must exist before mint_serial_resources() below, which mints it
+            // into the driver's cspace for its RX thread to receive on.
+            if (control(abi::v1::control_operation::endpoint_create, serial_rx_endpoint) !=
+                static_cast<word_t>(error_t::success))
+                return 1;
             if (!create_serial_resources() || !mint_serial_resources())
                 return 1;
             if (control(abi::v1::control_operation::endpoint_create, console_stdin_endpoint) !=
@@ -1572,6 +1670,46 @@ namespace sys::root_graph
 #if !CONFIG_GUEST_EMBEDDED_IMAGE
         bool shell_spawned = false;
 #endif
+        /*
+         * Diagnostics for the readiness wait below, which is otherwise
+         * unbounded AND silent: a role that never signals leaves root
+         * polling forever, and every early return here exits root without
+         * printing anything, so both failures look identical from outside --
+         * a boot whose last line is whatever the drivers printed on their
+         * own. That is exactly what an intermittent boot stall observed at
+         * roughly 3-in-12 (both before and after the serial RX split) looks
+         * like, and the reason it could not be attributed to a role.
+         *
+         * Reported through serial-driver's endpoint directly rather than
+         * through console-server's: console-server is one of the roles this
+         * is reporting on, so routing the report through it would go silent
+         * in precisely the cases worth reporting. Root holds
+         * serial_service_endpoint in its own cspace already.
+         *
+         * The stall report is one-shot and does NOT change control flow --
+         * a boot that is merely slow still proceeds normally once the last
+         * badge lands.
+         */
+        /*
+         * ~30s, since each iteration costs at least drain_fault_reports()'s
+         * one-tick receive at 100Hz. Deliberately far past a healthy boot
+         * (~1s, ~100 iterations) rather than close to it: this is a
+         * diagnostic for a system that has already stopped making progress
+         * permanently, so a late report costs nothing, while a threshold
+         * near normal boot time would fire on a merely loaded host and
+         * report a healthy boot as stalled. Measured on this host under
+         * concurrent load, boot has taken over 10s.
+         */
+        constexpr word_t readiness_stall_iterations = 3000U;
+        word_t readiness_iterations = 0U;
+        bool readiness_stall_reported = false;
+        const auto report_badges = [&](const char* text) noexcept {
+            native::text::packed(serial_service_endpoint, text);
+            native::text::hex(serial_service_endpoint, ready);
+            native::text::packed(serial_service_endpoint, " want=");
+            native::text::hex(serial_service_endpoint, expected);
+            native::text::packed(serial_service_endpoint, "\r\n");
+        };
         for (;;) {
             // Once the supervision thread exists, it owns fault draining
             // (and thus restart) exclusively -- see the comment above
@@ -1583,15 +1721,32 @@ namespace sys::root_graph
             word_t badges = 0U;
             const word_t status = control_result1(
                 badges, abi::v1::control_operation::notification_poll, root_notification);
-            if (status != static_cast<word_t>(error_t::success))
+            if (status != static_cast<word_t>(error_t::success)) {
+                report_badges("root: poll failed ready=");
                 return 2;
-            if ((badges & (1U << 15U)) != 0U)
+            }
+            if ((badges & (1U << 15U)) != 0U) {
+                // A role reported its own bring-up failure. Which one is not
+                // recoverable from the badge (failure_badge is shared), but
+                // knowing a role failed rather than merely stalled already
+                // separates two very different investigations.
+                report_badges("root: role FAILED ready=");
                 return 3;
+            }
             ready |= badges;
+            if ((ready & expected) != expected && !readiness_stall_reported &&
+                ++readiness_iterations >= readiness_stall_iterations) {
+                readiness_stall_reported = true;
+                report_badges("root: readiness stalled ready=");
+            }
             if ((ready & expected) == expected) {
                 for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index)
-                    if (!healthy(index))
+                    if (!healthy(index)) {
+                        native::text::packed(serial_service_endpoint, "root: role unhealthy index=");
+                        native::text::hex(serial_service_endpoint, index);
+                        native::text::packed(serial_service_endpoint, "\r\n");
                         return 4;
+                    }
                 /*
                  * Proves the console-server can genuinely drive the UART
                  * from userspace: this text reaches the real serial output

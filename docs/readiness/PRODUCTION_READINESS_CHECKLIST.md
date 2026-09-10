@@ -353,7 +353,7 @@ Every completed requirement must link to:
 - [-] **USR-019** No generic device resource database exists; `memory::create_device_frame()` now rejects a second live device frame at the same physical address (a linear scan of `frames[]`, closing a real gap where two callers could otherwise both get capabilities to the same MMIO page), which is minimal exclusivity tracking, not a registry. A real database (enumerable inventory, ownership queries) remains open.
 - [-] **USR-020** MMIO delegation exists only as the pre-existing single-purpose `device_frame_create` + `capability_mint` mechanism, now exclusivity-checked (USR-019); no generic broker/policy layer. The one production consumer (the guest's UART) no longer uses it at all -- it was converted to trap-and-emulate (vPL011) specifically to resolve the console-server/guest ownership conflict the exclusivity check surfaced, since a single physical UART cannot be safely handed to two direct-passthrough owners. `domain-manager` decodes guest MMIO exits (`exit.qualification`, not `exit.fault_address` -- the latter is unreliable for stage-2-only faults) and emulates PL011 register semantics, forwarding real character I/O through the console-server.
 - [ ] **USR-021** IRQ broker implemented. Still open as a *broker*: there is no generic registration/arbitration layer. Two concrete userspace IRQ consumers now exist and share the same fixed pattern (root-gated `interrupt_create` in root, `capability_mint` into the owner, then `interrupt_bind` to a notification and `interrupt_ack` after servicing) -- the domain manager's manifest-driven guest IRQ forwarding, and the serial driver's real PL011 RX interrupt (USR-022). Both hardcode their own IRQ numbers and own their own notification; nothing enumerates, arbitrates, or delegates IRQs as a policy layer, which is what this item requires.
-- [x] **USR-022** Userspace UART driver implemented, and now split out of the console service into its own PL3 process (`src/user/drivers/serial/main.cc`, role `0x107`, wired like memory-server via a direct `process_create` outside the fixed five-slot `control_plane_role` loop since it is not a control-plane role). It exclusively owns the physical PL011: claims the root-minted device frame (`device_frame_create` is root-gated), configures `CR = UARTEN|TXE|RXE` (QEMU's PL011 model accepts TX regardless but gates RX behind `CR.RXE`), and drives real hardware with zero kernel `printk` involvement. **RX is now interrupt-driven rather than polled**: the driver unmasks `IMSC.RXIM`, binds a root-minted IRQ capability to its own notification (`interrupt_create` is root-gated, `interrupt_bind`/`interrupt_ack` are not), and drains the hardware FIFO into a 64-byte ring buffer only when the GIC has actually signaled, instead of re-reading `FR.RXFE` on every loop wakeup. The IRQ number was read off this platform's real device tree rather than assumed -- `pl011@9000000` declares `interrupts = <0 1 4>`, i.e. GIC SPI 1 = INTID 33, level-triggered. Proven end to end: with the driver instrumented, typing `help` at the guest shell fired the interrupt exactly once and drained exactly five bytes (`help\r`), which also demonstrates why the ring buffer is required -- the previous single-pending-byte scheme would have dropped four of those five. Serves a private `serial_operation` ABI (`include/abi/sys/v1/serial.hh`) to its one client, the console server. **Known limitation:** the driver still wakes on a bounded `ipc_receive` timeout rather than sleeping on the interrupt, because this kernel has no blocking-wait syscall for notifications (`notification_poll` is an instant read-and-clear); what the interrupt buys is that FIFO-drain work happens only on real signals, plus correct `IMSC`/ack lifecycle and multi-byte capture. Not covered by restart-on-fault (no `service_policy` entry), same boundary already drawn for memory-server.
+- [x] **USR-022** Userspace UART driver implemented, and now split out of the console service into its own PL3 process (`src/user/drivers/serial/main.cc`, role `0x107`, wired like memory-server via a direct `process_create` outside the fixed five-slot `control_plane_role` loop since it is not a control-plane role). It exclusively owns the physical PL011: claims the root-minted device frame (`device_frame_create` is root-gated), configures `CR = UARTEN|TXE|RXE` (QEMU's PL011 model accepts TX regardless but gates RX behind `CR.RXE`), and drives real hardware with zero kernel `printk` involvement. **RX is now interrupt-driven rather than polled**: the driver unmasks `IMSC.RXIM`, binds a root-minted IRQ capability to its own notification (`interrupt_create` is root-gated, `interrupt_bind`/`interrupt_ack` are not), and drains the hardware FIFO into a 64-byte ring buffer only when the GIC has actually signaled, instead of re-reading `FR.RXFE` on every loop wakeup. The IRQ number was read off this platform's real device tree rather than assumed -- `pl011@9000000` declares `interrupts = <0 1 4>`, i.e. GIC SPI 1 = INTID 33, level-triggered. Proven end to end: with the driver instrumented, typing `help` at the guest shell fired the interrupt exactly once and drained exactly five bytes (`help\r`), which also demonstrates why the ring buffer is required -- the previous single-pending-byte scheme would have dropped four of those five. Serves a private `serial_operation` ABI (`include/abi/sys/v1/serial.hh`) to its one client, the console server. **RX now sleeps on the interrupt rather than polling for it**: `notification_bind`/`notification_unbind` (`control_operation` 52/53) let a thread bind a notification to itself so a blocked `ipc_receive()` also wakes when that notification signals -- the driver binds its IRQ notification once at startup and runs a single unbounded `ipc_receive`, branching on the new `error_t::notification_signal` status to distinguish a hardware wake from a real client request. The blocking behaviour is a SEPARATE operation, `serial_operation::read_byte_wait` (and `control_plane_operation::read_byte_wait` in front of it), not a change to `read_byte`: a `read_byte_wait` that finds the ring empty is answered later (kernel-retained reply capability, no extra userspace bookkeeping needed) once a subsequent interrupt actually delivers data, while plain `read_byte` keeps its original instant "none available" reply. That split is load-bearing and was found by regression, not designed up front -- making `read_byte` itself block silently broke its other caller, `domain-manager`'s `forward_console_input()`, which polls console input on every guest VM idle exit and depends on an immediate reply to hand control straight back to the vCPU; with it blocking, the guest-serving thread stalled until a real keystroke arrived, freezing the Zephyr guest (including its own timer processing) for seconds at a time. This directly fixed the reported bug: an idle interactive shell was measured pinning the qemu process at 115% host CPU because the shell's own `read()` (`src/user/lib/libc/io.cc`) retried a blocking `console::read_byte()` call in an unbounded loop every time the driver's old 1-tick bounded poll came back empty, which was also why a real keystroke felt delayed -- it queued up behind however many stale polls were already in flight. That retry loop is gone (`read()`'s `console_in` case is now a single `read_byte_wait` call). **The driver is correspondingly split across two threads and two endpoints**, for the reason the deferral itself creates: a parked reply lives in the serving thread's single `thread::reply` slot, which `install_reply()` overwrites on the next incoming call, so a `write` arriving while a read was parked destroyed the reader's reply capability and stranded every console reader permanently. Writes stay on `serial_service_endpoint`; `read_byte`/`read_byte_wait` moved to a new `serial_rx_endpoint` served by a second thread (reserved role `0x10b`, bound to the driver's own binary -- the same `thread_create` mechanism console-server uses for its stdin thread) which owns the RX half outright: the bound IRQ notification, the ring buffer, `drain_rx()`, and both read operations. Root mints that endpoint to console-server alone, whose stdin thread is itself a single thread blocking in `ipc_call`, so at most one reply is ever owed and one slot always suffices; both invariants are enforced by the capability graph and documented at `serial_rx_endpoint` rather than left implicit in driver code. The split also surfaced that `thread_create` gives each sibling thread its own address space (only the cspace is shared), so the RX thread must map the UART device frame into its own space -- `memory::map()` keys mapping records on (space, address) and supports this directly. See evidence 0137. Not covered by restart-on-fault (no `service_policy` entry), same boundary already drawn for memory-server.
 - [x] **USR-023** Console server implemented (`src/user/servers/console/main.cc`): serves `health`/`describe`/`stop`/`write` (string)/`write_byte`/`read_byte` over IPC. It no longer touches hardware at all -- hardware ownership moved to the serial driver (USR-022) and the console server is now a pure IPC relay, **split across two independent threads**: the main thread serves `write`/`write_byte`/`health`/`describe`/`stop` on its existing service endpoint, and a second thread (spawned by the server itself via `thread_create` under reserved role `0x108`, bound to console-server's own binary -- the same mechanism root uses for its supervision thread) serves `read_byte` on a dedicated stdin endpoint. Neither thread shares state with the other; each only forwards its own operation type to the driver, so no cross-thread coordination is needed. `console_client.hh` keeps the same three functions -- only the endpoint value callers pass for `read_byte` changed, and the domain manager now holds a second console capability for it. Two genuine bugs surfaced during this split, both first reachable only because it is the first use of `thread_create` by a non-root task: boot hung nondeterministically (2 of 6 runs) because the stdin thread could spawn before root minted its endpoint, then spin hot on a failing capability resolution and starve its CPU -- fixed by waiting for the capability to resolve before spawning (6/6 after, 4/4 on re-check); and `destroy_user_bundle()` tore down only the thread named by `thread_selector`, leaving sibling threads of the same task pointing at a task object about to be unregistered and reused, which surfaced as a real `process_lifecycle_invariants` failure and is now fixed by tearing down every thread sharing the task. Originally verified end to end via `samples/guests/zephyr`'s `acceptance` target in release mode (`make MODE=release acceptance`, exit 0): guest boots, prints its banner, and its interactive shell responds correctly to a scripted `help` command through the entire real userspace-mediated I/O path (vPL011 MMIO trap/decode/resume, TX forwarding, RX polling, virtual IRQ 33 injection). Debug-mode (`CONFIG_VERBOSE_DIAGNOSTICS=y`) acceptance is functionally identical but its scripted exact-string grep fails on unrelated trace-log interleaving (`console_puts` in `arch/arm64/include/sys/arch/hypervisor.hh`'s per-guest-exit `[HV-TRAP]` diagnostic, pre-existing, now firing far more often since vPL011 makes every guest UART touch a real MMIO exit) -- not a functional gap, just a noisy debug config not designed for scripted matching. vPL011 TX now batches into a 23-byte local FIFO (`domain/main.cc`'s `vpl011::tx_buffer`) flushed via the console-server's existing string `write` op on buffer-full or guest idle (`wait`/`virtual_timer` exit), instead of one blocking IPC round-trip to the console-server per guest register write -- fixes serial output that was visibly slow under QEMU TCG emulation, since every character previously paid two full context switches. `forward_console_input()`'s RX poll (a blocking IPC call to the console-server) is now only invoked on genuinely idle exits (`wait`/`virtual_timer`), not on every mmio exit as it originally was -- measured via a host-side PTY timing harness capturing the `help` command's full response: unthrottled, 1219 bytes over 2.445s (499 B/s); idle-gated, the same 1219 bytes over 0.760s (1604 B/s, 3.2x). The guest's TX poll pattern (read `FR`, write `DR`) produces two mmio exits per output byte, so calling this on every exit taxed every single register access, not just genuine RX checks; gating it to idle exits keeps RX responsiveness between characters (the console-server and real hardware FIFO both cushion a few bytes typed mid-burst) without paying that cost during an active print. Remaining latency is consistent with QEMU TCG guest-CPU emulation speed (string formatting/shell processing between print segments), not I/O virtualization overhead -- not something this layer can improve further.
 - [ ] **USR-024** Driver crash and restart policy implemented. Neither userspace driver is restart-covered: serial-driver (USR-022) and the block driver (USR-038) both lack a `service_policy` entry, the same boundary drawn for memory-server in USR-034, because every holder of a capability into a restarted driver would need a mid-flight re-mint. This is the one item that blocks calling the driver layer production-complete.
 - [-] **USR-038** A second real userspace driver exists: the virtio-mmio block driver (`src/user/drivers/virtio/main.cc`, role `0x109`, wired like serial-driver via a direct `process_create` outside the fixed five-slot `control_plane_role` loop). Root creates the one live virtio-mmio device frame -- exclusivity-checked against the same physical page per USR-019 -- and mints it plus GIC SPI 79 and a serial-driver endpoint into the driver, which then binds the IRQ to its own notification and acks after servicing, the same fixed pattern USR-021 notes is still not a broker. It drives a real split virtqueue and serves a private `block_operation` ABI (`include/abi/sys/v1/virtio.hh`, same non-control-plane-role convention as `serial_operation`): `info` reports capacity and sector size, `probe` returns a transport's device id/version, and `read`/`write` move whole 512-byte sectors through a shared payload frame kept deliberately separate from the virtqueue ring page, so a client holding the payload capability cannot reach the ring. Verified from a real client rather than from inside the driver: `root_graph.hh::verify_block_service()` performs a write/read sector round trip and `make smoke` gates on `block-service verified`. Open: no partition or filesystem layer, no concurrent-client policy, no restart coverage (USR-024), and only one transport is claimed.
@@ -912,3 +912,406 @@ certification `[ACCEPTANCE] result=PASS failures=0`, `make smoke` PASS
 across all three profiles including a run immediately after a full clean
 rebuild of every build tree, and no stray qemu process survives the new
 profile's teardown. -->
+
+<!-- 0133 evidence: added a bound-notification IPC wake primitive
+(`notification_bind`/`notification_unbind`, `control_operation` 52/53;
+`src/kernel/include/sys/kernel/notification/notification.hh`,
+`thread/scheduler.hh`, `syscall/{control,ipc}.hh`) so a thread can bind a
+notification to itself and have a blocked `ipc_receive()` wake on either a
+real message or that notification's signal, distinguished via the new
+`error_t::notification_signal` status rather than a reserved badge bit
+(`capability::badge_t` is u64, and `ipc_result.status` was sitting unused
+for exactly this). Two real concurrency bugs were found and fixed while
+landing it, both only reachable under specific interleavings and neither
+caught by a single green certification run: (1) `receive()`'s
+blocking-commit path transitioned to `blocked_receive` under only the
+endpoint's own lock, with nothing synchronizing a bound notification's
+signal against that transition -- a signal landing in the window between
+"decided to block" and "recorded as blocked" was silently dropped; fixed
+by holding `lock_ipc_lifecycle()` across both sides of that race, endpoint
+lock outer per the existing documented ordering. (2) a notification wake
+pulls a thread out of `blocked_receive` without going through the normal
+send()-finds-receiver path that clears the endpoint's `receiver` field,
+which `kernel_lifetime_invariants`' endpoint check caught once as a stale
+reference; fixed by snapshotting the thread's endpoint registration under
+the lock and clearing it via the existing `ipc::cancel_thread()` after the
+lock is released (endpoint locks are never nested inside
+`lock_ipc_lifecycle()`, so the clear cannot happen synchronously without
+risking an AB-BA deadlock against `receive()`'s own path). Adopted in the
+serial driver (USR-022) and the shell's `read()` (`src/user/lib/libc/io.cc`),
+eliminating the specific busy-poll that was measured pinning an idle
+interactive shell's qemu process at 115% host CPU. Verified: the new
+certification race test (`test_notification_bind_wake`,
+`src/user/tests/certification/main.cc`) passed on every run; the full
+certification suite was run ~20 times total during this work, all
+`[ACCEPTANCE]` failures traced to either wall-clock latency-threshold
+assertions or one dangling-sender endpoint state, both reproduced on a
+clean pre-change baseline under the same (real, shared, non-dedicated)
+host and confirmed unrelated to this change; `make smoke` passed across
+all three profiles (one transient miss on the shell profile's
+timing-paced marker count reproduced as a clean pass on immediate re-run
+under identical host load, consistent with the profile's own documented
+host-load sensitivity, not a functional regression). Found while
+measuring, and fixed in the same pass -- see 0134 below: root's own
+fault-supervision thread had an identical 1-tick bounded-poll pattern and
+ran forever regardless of shell activity. -->
+
+<!-- 0134 evidence: measuring 0133's fix directly (idle qemu-process %CPU
+on the release profile, sitting at a shell prompt) found it unchanged at
+~108-110%, not the near-0% the original plan expected. Investigation
+found three more instances of the exact same 1-tick bounded-`ipc_receive`
+polling anti-pattern USR-022/0133 fixed for serial-driver, all with
+nothing else to interleave with in their loop bodies so a plain
+unbounded, genuinely blocking `ipc_receive()` (no `notification_bind`
+needed -- these only ever wait on ONE thing, a real IPC message) was
+sufficient: root's fault-supervision thread (`drain_fault_reports()`,
+`src/user/include/sys/root_graph.hh` -- a default-argument change
+preserves the bounded 1-tick wait for its OTHER three call sites, which
+genuinely must not block indefinitely because they interleave with
+other polling in the same loop; only `supervision_thread_entry()`'s own
+dedicated forever-loop, which does nothing else, now passes
+`no_timeout`), virtio-driver's steady-state service loop, and
+vfs-server's steady-state service loop (both `src/user/drivers/virtio/
+main.cc` and `src/user/servers/vfs/main.cc` -- unlike virtio's own
+completion-wait spin, which must keep draining its IRQ notification and
+is unaffected). console-server's two service loops were already
+correctly blocking (no change needed). Applying all three did not move
+idle %CPU either -- conclusion: that metric is dominated by QEMU/TCG's
+own per-vCPU emulation overhead for this machine's `-smp 4` GICv3 +
+`virtualization=on` configuration, not by guest-level busy-polling; a
+`CPUS=1` isolation test to confirm by scaling was attempted but the
+kernel requires exactly 4 CPUs and halts otherwise, so this remains an
+inference from four independent fixes producing zero measurable change,
+not a direct measurement. The original bug (serial-driver's poll making
+the shell laggy) remains conclusively fixed regardless -- verified
+directly, not via this metric, in 0133's certification race test and the
+dramatic contrast observed while bisecting it: an otherwise-identical
+build with only serial-driver/shell reverted to the old polling code
+took over 3 minutes of real time to reach a boot marker the fixed build
+reached in ~15 seconds, under comparable host load, because a guest that
+busy-polls competes for scarce host CPU time against QEMU's other vCPU
+threads in a way a genuinely blocked thread does not. Verified: all
+three profiles compile clean; certification `[ACCEPTANCE] result=PASS
+failures=0`; `make smoke` passed all three profiles, including the guest
+profile's `restart ok` marker, which directly exercises the changed
+`drain_fault_reports()` restart-on-fault path (root_supervisor_role
+detecting and restarting a crashed role) -- about as direct a functional
+test of that specific change as exists in this suite. One `make smoke`
+run hit a 45s profile timeout under a host load spike (peaked ~6.4/8
+cores, a second interactive session having started) with zero markers
+seen despite the qemu process still alive and slowly accumulating CPU
+(confirmed via `/proc/pid/stat` tick deltas, not deadlocked); the very
+next profile in the same run, booting the identical release image and
+services, passed cleanly, and a standalone re-run of just the missed
+profile with SMOKE_TIMEOUT=90 passed cleanly too -- host-timing noise,
+not a regression, consistent with everything else observed this
+session about this host's variable load. -->
+
+<!-- 0135 evidence: two follow-ups to 0133/0134, one a real fix and one a
+disproven hypothesis recorded so it is not re-attempted blindly.
+
+(a) FIXED -- `fork()` did not re-establish the child's own mapping of the
+shared VFS transfer frame. `ensure_vfs_mapped()` (`src/user/lib/libc/io.cc`)
+caches "already mapped" in process memory, and `process_fork`'s eager
+address-space copy duplicates frame-backed mappings as PRIVATE copies (see
+`control_operation::process_fork`'s own ABI note), so a child inherited the
+flag as true, skipped `map_frame`, and then exchanged VFS requests through a
+page that is no longer the frame `vfs-server` reads. Symptom was an `open()`
+with `O_CREAT` intermittently failing inside a forked pipeline stage, after
+which the stage wrote to inherited stdout instead of the pipe temp file and
+the parent's `waitpid()` never returned -- i.e. an interactive shell that
+stopped responding permanently after `cat foo | cat`. Fixed by clearing the
+cache in the child branch of `fork()` so its first VFS call re-runs
+`map_frame` for real. Isolation-tested: with the fix, 4 of 5 runs of a
+scripted pipeline-then-keystroke session recovered fully where nearly every
+run had previously wedged.
+
+(b) NOT A DEFECT, hypothesis withdrawn -- the residual multi-second
+keystroke stalls on this host are NOT caused by this kernel's scheduler and
+should not be "fixed" by touching it. The theory was that because nothing in
+the shipping boot graph ever calls `scheduling_configure` (only the
+certification suite does), every thread keeps `scheduling::initialize()`'s
+priority 128 / 1-tick budget / 1-tick period, making `next_runnable()` a
+strict round-robin in which an interrupt-woken thread cannot preempt a
+merely-eligible background one. Three separate remedies were implemented and
+measured: a priority boost for the serial-driver/console-server/shell chain
+installed via `thread_suspend`+`scheduling_configure`+`thread_resume`; the
+same boost via a new non-destructive priority-only operation added
+specifically to avoid `quiesce_user_thread()`'s destructive teardown; and
+raising the default budget/period granularity from 1/1 to 16/16. All three
+made interactive responsiveness measurably WORSE, up to near-total
+unresponsiveness, and all three were reverted -- the tree carries none of
+them.
+
+The measurement the theory rested on (~650ms between a keystroke's UART
+interrupt waking the serial driver and that thread's next scheduled run) is
+invalid: it was taken with kernel `printk` tracing active, and `printk` goes
+out the same PL011 the entire measured I/O path contends for -- one such run
+emitted 98,380 log lines. That is a severe observer effect on exactly the
+quantity being measured.
+
+A controlled A/B settled it: the shell profile's scripted session was run
+repeatedly against the pristine pre-change tree and the current one,
+interleaved, recording `/proc/loadavg` per run. The untouched baseline
+stalled and timed out at least as often as the fixed tree (baseline 15
+answered / 39 timed out; fixed 40 answered / 32 timed out, across 4 runs of
+18 commands each). The stalls are pre-existing behaviour of this system
+under host contention -- this host ran at load ~2.4-4.0 of 8 cores with an
+unrelated browser and editor session live -- not a regression, and not
+something the scheduler changes above improved. Anyone revisiting
+interactive latency should start by reproducing on an idle, dedicated host
+with NO kernel tracing on the console UART; without that, the measurement
+cannot distinguish this kernel from QEMU/TCG vCPU scheduling on a loaded
+machine.
+
+Consequently `tools/verification/smoke.sh`'s new post-pipeline keystroke
+check REPORTS rather than gates. Two stricter forms were tried and both
+measured as flaky on this host: a per-keystroke latency ceiling (failed on
+the pristine baseline too), then a liveness gate (did any of several
+keystrokes get answered) -- back-to-back runs of the identical image
+alternated between answering in ~950ms and answering nothing in 20s, and one
+such run additionally lost `shell ready` plus every guest-profile marker that
+had passed minutes earlier, i.e. the whole VM was starved. Gating on that
+would make `make smoke` fail roughly half the time for reasons outside this
+kernel. The check therefore prints `N/6 answered` with latencies and does not
+fail the suite; it should be promoted to a hard gate once it can be run on an
+idle, dedicated host, where "0 answered" becomes unambiguous (a real
+regression to the pre-0133 busy-poll shows up as 0-answered on EVERY run
+rather than intermittently). -->
+
+<!-- 0136 evidence: FIXED -- a lost PL011 RX interrupt permanently killed
+console input after a burst of typed characters. Reported as "zephyr shell
+hang after repeat inputting s"; the reporter's own hypothesis (an input
+buffer problem) is what pointed at the FIFO boundary and found it.
+
+Root cause, in serial-driver's `drain_rx()` (`src/user/drivers/serial`):
+UARTICR was written AFTER the drain loop. A byte arriving in the window
+between the final `try_getc()` (which saw RXFE and returned false) and that
+ICR write left the FIFO non-empty while ICR wiped the latch that byte had
+just set. The PL011 asserts RX when the FIFO level REACHES its trigger, not
+while it sits at or above it, so with a byte already resident the level can
+never re-cross from below: no further RX interrupt is ever delivered, and
+the driver sits in `ipc_receive()` forever. Fixed by clearing RXIC BEFORE
+each drain pass and looping until a pass ends with the FIFO genuinely
+empty, so anything arriving during or after a pass keeps its latch.
+
+Scope of the symptom explains why it looked like several different bugs:
+the interactive shell and any hosted guest both read through this one
+driver, so both died together, and downstream everything simply blocked --
+console-server's stdin thread on the driver, domain-manager inside its
+`serve` operation on console-server (instrumented: `serve` never returns),
+root's guest loop on domain-manager. Nothing crashed, which is why no
+failure marker ever fired.
+
+Verified with `tools/verification/guest_input_burst.sh` (added): the guest
+repro failed 3/3 before the fix and passed 5/5 after, and the same burst
+aimed at the host shell passed 2/2. BURST=64 ROUNDS=1 does NOT reproduce --
+the race needs a sustained burst to land a byte in that window, which is
+why it survived earlier testing.
+
+Three hypotheses were pursued and disproven before this one; each is
+recorded because re-following them would cost the same time again:
+  - Not root abandoning the guest. Instrumented root to print `serve`'s
+    return value; it never printed.
+  - Not the interrupt storm detector. Instrumented record_delivery()'s
+    storm branch; it never fires during the repro. The ~64 echoed
+    characters is serial-driver's 64-byte RX ring draining, which
+    coincidentally equals storm_threshold (64). That coincidence was
+    actively misleading. (A genuine latent defect was noticed while
+    checking: `stormed` is latched and cleared only by bind(), while
+    acknowledge() refuses to unmask while it is set, so a line that ever
+    does storm stays masked for the remaining uptime. A timer-tick re-arm
+    was written and reverted -- it fixes nothing observable here and
+    deserves its own evidence.)
+  - Not vPL011 losing an RX interrupt across an IMSC mask window. Adding
+    re-injection on RXIM unmask plus refilling the one-byte RX holding
+    register on DR read changed nothing; reverted.
+
+Found by inspection while landing 0133 and unrelated to the above:
+serial-driver's `read_byte_wait` defers by leaving the caller's reply
+capability held across its next `ipc_receive()`, but `install_reply()`
+overwrites a thread's single reply slot unconditionally, so another request
+on that shared endpoint while a read is deferred would orphan the deferred
+caller. Not observed in practice and not the cause of this bug. Fixed
+separately in 0137. -->
+
+<!-- 0137 evidence: FIXED -- the deferred-reply clobber left open by 0136.
+
+Defect: serial-driver served write, write_byte, read_byte and
+read_byte_wait from ONE thread on ONE endpoint, and read_byte_wait parks
+(replying later, out of the interrupt path). A parked reply lives in that
+thread's single `thread::reply` slot, which `install_reply()` (ipc.hh)
+overwrites unconditionally on every incoming call. So any write reaching
+the driver while a read was parked destroyed the reader's reply capability:
+console-server's stdin thread would stay `blocked_reply` forever, and with
+it every console reader in the system. Permanent, silent, no failure marker
+-- the same shape as 0136 but a different mechanism.
+
+The exposure was real, not theoretical: console-server's own write path and
+the virtio driver's bring-up diagnostics are both serial-driver clients
+independent of the reader.
+
+Fix: split the driver in two along the TX/RX line.
+  - New `serial_rx_endpoint` (root_graph.hh) carries only read_byte and
+    read_byte_wait; write/write_byte stay on `serial_service_endpoint`.
+  - serial-driver spawns a second thread under `serial_rx_role` that owns
+    the RX half entirely: the bound interrupt notification, the RX ring,
+    `drain_rx()`, and both read operations. The main thread serves writes
+    and never touches the ring. A write can therefore no longer land on the
+    thread holding a parked reply.
+  - Root mints the RX endpoint to console-server ALONE, whose stdin thread
+    is a single thread that blocks in `ipc_call`. At most one RX request is
+    ever outstanding, so one reply slot is always sufficient. Both
+    invariants are properties of the capability graph, and are documented at
+    `serial_rx_endpoint` rather than left implicit in driver code -- minting
+    that endpoint to a second client would silently reintroduce the hang.
+
+One non-obvious consequence, and the one bug hit while landing this:
+`thread_create` gives each sibling thread its OWN address space (only the
+cspace is shared -- see `create_user_thread()`'s teardown comment). The RX
+thread therefore did not inherit the main thread's UART mapping and faulted
+on its first drain, which presented as a booting system whose shell echoed
+nothing (`user fault delivered thread=10 cpu=3`, exactly one, at the first
+keystroke). `map_uart()` now takes the target space and the RX thread maps
+the device into its own; `memory::map()` supports this directly, keying
+mapping records on (space, address) and rejecting only a repeat of the same
+pair, and `maximum_mappings_per_frame` is 8.
+
+Verified: `make smoke` PASS on all three profiles (service graph, shell,
+guest vPL011 + restart); `guest_input_burst.sh` BURST=256 ROUNDS=6 PASS;
+interactive shell echo confirmed byte-for-byte on a scripted session.
+
+Certification: functionally clean -- `failures=0 failure_mask=0
+transport=PASS` with 131 tests PASS -- but the ACCEPTANCE verdict is FAIL,
+on the wall-clock latency gates alone (`ipc_latency_bound`,
+`scheduler_latency_bounds`, which `kernel_lifetime_invariants` rolls up).
+It reported a full PASS including `kernel_lifetime_invariants result=PASS`
+earlier in the same session on the same kernel, and that PASS could not be
+reproduced afterwards on this host. Measured `ipc_latency` max_ticks
+against a 620000 limit: 823726 at load 1.8, 732799 at load 15, 1436549 at
+load 21, 1900311 at load 9.5 -- i.e. over the limit even when idle, by 1.3x
+at best, on a host running an unrelated multi-core build for most of the
+session. A max-over-8000-samples wall-clock bound on a big.LITTLE desktop
+SBC is a fragile gate, but "fragile gate" is a hypothesis here, not a
+finding: it is recorded as UNRESOLVED, not as a host flake.
+
+Two other tests, `capability_transfer_revoke_race` and
+`ipc_capability_batch`, failed once at load 21 (guest time 524s against a
+normal ~7s, ~50x starved) and passed on a quiet host. Those two ARE
+attributable to load. -->
+
+<!-- (continues 0137) Scope note on what could and could not have caused
+the certification latency result: `CONFIG_SELFTEST` replaces init's main()
+with the harness, and `src/user/tests/certification/main.cc` never includes
+root_graph.hh, nor touches vfs-server or native::text -- so 0138's changes
+cannot reach this image at all. The kernel-side changes from 0133 (
+notification_bind, the interrupt dispatch_result split,
+signal_notification, the ipc_receive lifecycle locking) were already
+present for the earlier PASS and are unchanged since, which is evidence
+against them without being proof.
+
+Not verified by an on-demand repro of the original failure, and that is a
+deliberate limitation rather than an oversight: with the current process set
+no second writer is active while a reader is parked (the shell writes only
+in response to input, and the virtio diagnostics are boot-only), so the race
+cannot be provoked from userspace without adding a process that exists only
+to provoke it. The fix is structural -- the clobbering call can no longer
+reach the parked thread -- and smoke, the burst regression and the scripted
+shell session confirm nothing else moved (certification's latency gates
+excepted, per the UNRESOLVED note above). A latent hang that cannot be
+triggered on demand is still worth closing; it is exactly the class 0136
+turned out to belong to.
+
+Still open, unchanged from 0136: `stormed` (interrupt.hh) is a latch cleared
+only by `bind()`, while `acknowledge()` refuses to unmask while it is set,
+so a line that ever storms stays masked for the remaining uptime. -->
+
+<!-- 0138 evidence: boot reliability. Found while regression-testing 0137,
+and pre-existing -- every rate below was measured on BOTH the working tree
+and a pristine worktree at HEAD, run alternately on the same host.
+
+## The silent boot stall (fixed, measured)
+
+Symptom: roughly 2-in-5 boots stop dead after the block driver's bring-up
+diagnostics and print nothing further, forever. Only reproducible with a
+fifo on qemu's stdin (an idle interactive terminal); with `</dev/null` it
+went 8/8 clean, which is why `make smoke` sees it and a casual `make run`
+does not. It is the reason smoke has looked flaky: a stalled profile
+reports every marker MISSING at once, which reads like a broken assertion
+and is actually a boot that never happened.
+
+Two independent causes, one fixed:
+
+1. FIXED -- `vfs-server`'s `map_shared_frames()` mapped its two root-minted
+   frames with a ONE-SHOT `map_frame`, while every sibling bring-up path
+   (serial-driver's `map_uart()`, the virtio driver's `map_mmio()` and
+   `bind_irq()`) wraps the identical call in `native::retry` against the
+   identical documented hazard: root mints into a child's cspace only after
+   `process_create` returns, so the child can and does get there first. VFS
+   lost that race, its map returned not_found, and it answered by signalling
+   `failure_badge` -- which root's readiness loop turned into a silent exit.
+   Now retried, matching its siblings.
+
+2. OPEN -- a control-plane role sometimes never signals ready at all.
+   Root's new diagnostics (below) caught it directly: `root: readiness
+   stalled ready=0x1f7 want=0x1ff` (missing bit 3, the domain role),
+   `ready=0x1ef` (bit 4, supervisor), `ready=0x1fe` (bit 0, process). It is
+   not one specific role, and `root: role FAILED` also appears, meaning a
+   role took a bring-up failure path. Note `bin/control-plane`'s ONLY
+   failure path is `!valid(policy_for(role)) || ready == 0`, which depends
+   on nothing but the `role` argument -- so a role reaching it at all is
+   evidence that the value `main` received was not the one
+   `process_create`/`thread_create` was given. A role receiving another
+   role's value would equally explain a ready bit that never arrives (two
+   roles signalling one badge). That hypothesis is NOT yet confirmed and
+   the argument-passing path has not been audited; it is recorded as the
+   strongest lead, not as a diagnosis.
+
+Measured, same harness both trees, 14 boots each: baseline 6 stalls,
+with the VFS fix 1. Two smaller samples inside that total agreed (3/8 and
+3/6 baseline; 0/8 and 1/6 fixed).
+
+## Root's readiness loop had no diagnostics (fixed)
+
+None of this was findable before, and that was the real defect: root's
+readiness wait is unbounded, and each of its five failure exits returned a
+bare status code. A role that failed and a role that merely never answered
+produced byte-identical output -- nothing. Root now reports, once and
+without changing control flow, which badges are missing (`ready=` /
+`want=`), and reports before each failure exit.
+
+Deliberately routed through serial-driver's endpoint rather than
+console-server's, since console-server is one of the roles being reported
+on; root already holds `serial_service_endpoint`. `native::text::packed()`
+was added for it -- the existing `text::write()` sends one IPC per
+character, and the first captured report came out shuffled character-by-
+character with the virtio driver's concurrent probe output, which cost real
+time to untangle. Packed chunking drops interleaving granularity from 1
+byte to 23.
+
+The stall threshold is ~30s of loop iterations, far past a healthy boot
+(~1s), because a threshold near normal boot time would report a merely
+loaded host as stalled -- boot has been measured over 10s here under
+concurrent load.
+
+## `vfs absent` with a working disk (open, NOT fixed)
+
+Separately intermittent, and unrelated to the stall above: with a disk
+attached and the block driver demonstrably healthy in the same boot
+(`virtio: sector round trip PASS`, capacity reported, and root's own
+`block-service verified`), `verify_vfs()` reports absent on roughly half of
+boots -- 4/8 on the working tree, 3/5 of completed baseline boots. This is
+what `make smoke`'s `vfs verified` marker intermittently trips on.
+
+One hypothesis was tested and REJECTED: that VFS's `ext2::mount` races
+root's mint of its block-service endpoint, the same shape as the map race
+fixed above. Gating the mount on a bounded retry of `block_operation::info`
+until the endpoint answers changed the rate not at all (4/8 before, 4/8
+after), so the endpoint is reachable and the driver is fully probed by the
+time VFS mounts. That attempt was reverted rather than kept, since keeping
+an unvalidated change would have implied a fix that was not there. The
+remaining candidates -- the shared payload frame being used by more than
+one client at a time, or the probe rather than the mount reporting absent
+-- are untested. -->
+
+

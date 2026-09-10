@@ -31,6 +31,15 @@ namespace
      * mirroring root_graph.hh's domain_console_endpoint_selector).
      */
     inline constexpr sys::capability_id_t serial_endpoint = 20U;
+    /*
+     * serial-driver serves RX from a SECOND endpoint, on a second thread,
+     * for the reason root_graph.hh's serial_rx_endpoint spells out:
+     * read_byte_wait defers its reply, and a deferred reply is destroyed by
+     * the next call to reach the same thread. This process is deliberately
+     * that endpoint's only holder, and only the stdin thread below calls it,
+     * so at most one RX request is ever outstanding.
+     */
+    inline constexpr sys::capability_id_t serial_rx_endpoint = 21U;
     inline constexpr sys::word_t stdin_role = 0x108U;
     inline constexpr sys::capability_id_t stdin_thread_selector = 30U;
     inline constexpr sys::capability_id_t stdin_space_selector = 31U;
@@ -57,8 +66,23 @@ namespace
 
         [[nodiscard]] inline read_byte_result read_byte() noexcept {
             const auto reply = sys::ipc_call(
-                serial_endpoint,
+                serial_rx_endpoint,
                 static_cast<sys::word_t>(sys::abi::v1::serial_operation::read_byte), 0U, 0U, 0U);
+            if (reply.status != static_cast<sys::word_t>(sys::error_t::success) ||
+                reply.message0 == 0U)
+                return {};
+            return {true, static_cast<sys::u8>(reply.message1)};
+        }
+
+        // Blocks until serial-driver actually has a byte -- see
+        // serial_operation::read_byte_wait's own comment. Only ever
+        // returns {available: false} on a genuine IPC error, never on "no
+        // byte yet".
+        [[nodiscard]] inline read_byte_result read_byte_wait() noexcept {
+            const auto reply = sys::ipc_call(
+                serial_rx_endpoint,
+                static_cast<sys::word_t>(sys::abi::v1::serial_operation::read_byte_wait), 0U, 0U,
+                0U);
             if (reply.status != static_cast<sys::word_t>(sys::error_t::success) ||
                 reply.message0 == 0U)
                 return {};
@@ -83,6 +107,10 @@ namespace
             sys::word_t result1 = 0U;
             if (operation == sys::abi::v1::control_plane_operation::read_byte) {
                 const auto polled = serial::read_byte();
+                result0 = polled.available ? 1U : 0U;
+                result1 = polled.available ? polled.value : 0U;
+            } else if (operation == sys::abi::v1::control_plane_operation::read_byte_wait) {
+                const auto polled = serial::read_byte_wait();
                 result0 = polled.available ? 1U : 0U;
                 result1 = polled.available ? polled.value : 0U;
             }

@@ -114,9 +114,12 @@ namespace
         out[at] = '\0';
     }
 
+    bool vfs_mapped = false;
+    bool vfs_map_attempted = false;
+
     [[nodiscard]] bool ensure_vfs_mapped() noexcept {
-        static bool mapped = false;
-        static bool attempted = false;
+        bool& mapped = vfs_mapped;
+        bool& attempted = vfs_map_attempted;
         if (attempted)
             return mapped;
         attempted = true;
@@ -187,15 +190,21 @@ ssize_t read(int descriptor_number, void* buffer, size_t count) noexcept {
          * Blocks until at least one byte arrives, then returns what is
          * already available rather than filling the buffer -- a
          * line-oriented reader would otherwise wait for bytes the user has
-         * not typed yet.
+         * not typed yet. console-server's stdin_endpoint forwards to
+         * serial-driver's read_byte_wait, which blocks end-to-end via a
+         * bound-notification wake rather than replying "not available" for
+         * this call to retry -- a single call already blocks correctly.
+         * Deliberately read_byte_wait, not read_byte: the latter's instant
+         * "none available" reply is load-bearing for domain-manager's
+         * guest-console forwarding (see console_client.hh), so this path
+         * needs its own blocking operation rather than changing read_byte
+         * out from under that caller.
          */
-        for (;;) {
-            const auto reply = sys::console::read_byte(sys::native::stdin_endpoint);
-            if (!reply.available)
-                continue;
-            bytes[0] = static_cast<char>(reply.value);
-            return 1;
-        }
+        const auto reply = sys::console::read_byte_wait(sys::native::stdin_endpoint);
+        if (!reply.available)
+            return -1;
+        bytes[0] = static_cast<char>(reply.value);
+        return 1;
     }
 
     if (entry.role == kind::file) {
@@ -273,8 +282,25 @@ int fork() noexcept {
         if (!sys::native::ok(sys::control_result1(
                 identifier, abi::control_operation::process_fork, selector)))
             return -1;
-        if (identifier == 0U)
+        if (identifier == 0U) {
+            /*
+             * native::vfs_frame is a specific shared frame capability, not
+             * anonymous memory -- fork's address-space clone does not
+             * guarantee this child's page table entry for it still points
+             * at the SAME physical frame vfs-server also has mapped (a
+             * regular COW divergence on first write would silently give
+             * the child its own private copy instead). ensure_vfs_mapped's
+             * cache is process memory, so a child inherits "already
+             * mapped" as true from the parent's own successful mapping and
+             * would skip ever re-establishing its own -- reset it here so
+             * the child's first VFS call re-runs map_frame for real,
+             * rather than trusting a flag that says nothing about whether
+             * THIS process's mapping is actually still the shared frame.
+             */
+            vfs_mapped = false;
+            vfs_map_attempted = false;
             return 0; // the child
+        }
         children[slot].live = true;
         return slot + 1; // pids are 1-based so 0 stays unambiguous
     }

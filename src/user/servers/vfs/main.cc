@@ -309,19 +309,39 @@ namespace
         return {static_cast<sys::word_t>(sys::error_t::success), position, 0U};
     }
 
+    /*
+     * Bounded retry, not a one-shot: root mints both of these frames into
+     * this cspace only AFTER process_create returns it a task capability, so
+     * this process genuinely can (and does) start running first -- the same
+     * ordering hazard serial-driver's map_uart() and the virtio driver's
+     * map_mmio() already retry against, and the same one root_graph.hh's
+     * launch() loop documents.
+     *
+     * Retrying was missing here, and it was the cause of an intermittent
+     * silent boot stall measured at roughly 3-in-12: VFS lost the race, its
+     * one-shot map_frame returned not_found, and it answered by signalling
+     * failure_badge. Root's readiness loop then took its failure-badge exit
+     * and returned without printing anything, so the whole boot simply
+     * stopped after the block driver's diagnostics with no indication of
+     * why. Found only after root's readiness loop grew the diagnostics that
+     * report which side gave up (see supervise()).
+     */
     [[nodiscard]] bool map_shared_frames() noexcept {
-        const sys::word_t success = static_cast<sys::word_t>(sys::error_t::success);
         const sys::word_t read_write = static_cast<sys::word_t>(abi::CapabilityRight::read) |
                                        static_cast<sys::word_t>(abi::CapabilityRight::write);
         const sys::word_t attrs = abi::encode_mapping_attributes(
             abi::memory_type::normal, abi::memory_shareability::inner_shareable);
-        if (sys::control(abi::control_operation::map_frame, native::own_space,
-                         block_shared_frame_selector, block_scratch_address, read_write,
-                         attrs) != success)
+        if (!native::retry([&] {
+                return native::ok(sys::control(abi::control_operation::map_frame,
+                                               native::own_space, block_shared_frame_selector,
+                                               block_scratch_address, read_write, attrs));
+            }))
             return false;
-        return sys::control(abi::control_operation::map_frame, native::own_space,
-                            client_shared_frame_selector, client_scratch_address, read_write,
-                            attrs) == success;
+        return native::retry([&] {
+            return native::ok(sys::control(abi::control_operation::map_frame, native::own_space,
+                                           client_shared_frame_selector, client_scratch_address,
+                                           read_write, attrs));
+        });
     }
 } // namespace
 
@@ -335,12 +355,28 @@ extern "C" int main(sys::word_t, sys::word_t) noexcept {
      * comment -- so it is not checked here at all; only the shared-frame
      * mappings above, without which VFS cannot serve anything, gate
      * readiness.
+     *
+     * KNOWN INTERMITTENT, and deliberately not papered over here: with a
+     * disk attached and the block driver demonstrably working (`virtio:
+     * sector round trip PASS`, and root's own `block-service verified`),
+     * this reports absent on roughly half of boots -- measured 4 of 8, and
+     * on the unmodified baseline too, so it predates the serial RX split.
+     * Gating the mount on a bounded retry of block_operation::info (the
+     * same shape as map_shared_frames() above) was tried and changed the
+     * rate not at all, which rules out the endpoint-mint race as the cause
+     * and is why that attempt is not present here. See the checklist's 0138
+     * evidence entry.
      */
     ext2_mounted = sys::ext2::mount(fs, &read_kib, nullptr);
     native::signal_ready(abi::vfs_service_ready_badge);
 
     for (;;) {
-        const auto request = sys::ipc_receive(service_endpoint, abi::encode_timeout(1U));
+        // Genuinely blocking: this loop only ever waits for the next
+        // client request, nothing to interleave with between them --
+        // previously bounded to 1 tick "same idiom as" the other service
+        // loops fixed for the same reason, see
+        // PRODUCTION_READINESS_CHECKLIST.md's 0133 evidence entry.
+        const auto request = sys::ipc_receive(service_endpoint);
         if (request.status != static_cast<sys::word_t>(sys::error_t::success))
             continue;
         const auto operation = static_cast<abi::vfs_operation>(request.message0);

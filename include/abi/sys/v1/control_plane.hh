@@ -42,6 +42,14 @@ namespace sys::abi::v1
          * replying -- so it must use a timeout.
          */
         inject_fault = 11U,
+        // Same wire shape and reply contract as read_byte, but blocks
+        // until a byte is actually available instead of replying
+        // immediately with "none available" -- see serial_operation::
+        // read_byte_wait, which this forwards to. Used only by the
+        // interactive shell's read() via console_client.hh; domain-manager
+        // must keep using plain read_byte (its non-blocking contract is
+        // load-bearing for VM idle-exit handling).
+        read_byte_wait = 12U,
     };
 
     inline constexpr usize_t console_write_max_bytes = 24U;
