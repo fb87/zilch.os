@@ -77,9 +77,38 @@ namespace sys::kernel::tests::interrupt
             notification::consume(bootstrap::root_notification) != (1ULL << 41U) ||
             kernel::interrupt::acknowledge(level_irq) != error_t::success)
             return error_t::invalid_argument;
+        /*
+         * Storm containment, and then storm RECOVERY. Both halves matter:
+         * `stormed` used to be a one-way latch, so a line that crossed the
+         * threshold once stayed masked for the remaining uptime. A test
+         * that only checked containment passed either way, which is how
+         * that survived.
+         *
+         * Fixed ticks rather than the real clock so both the "still inside
+         * the window" and "window has elapsed" cases are decidable.
+         */
+        constexpr u64 storm_at = 10U;
         for (u32 event = 0U; event <= kernel::interrupt::storm_threshold; ++event)
-            (void)kernel::interrupt::record_delivery(irq, 10U);
+            (void)kernel::interrupt::record_delivery(irq, storm_at);
         if (!irq.stormed || !irq.masked || irq.suppressed < kernel::interrupt::storm_threshold ||
+            kernel::interrupt::acknowledge(irq) != error_t::success)
+            return error_t::invalid_argument;
+        // Acknowledging does not clear the storm -- and cannot be what
+        // does, since the mask stops any further delivery to acknowledge.
+        if (!irq.stormed || !irq.masked)
+            return error_t::invalid_argument;
+        // A sweep still inside the detection window leaves it contained.
+        kernel::interrupt::recover_stormed(storm_at + 1U);
+        if (!irq.stormed || !irq.masked)
+            return error_t::invalid_argument;
+        // Once the window has elapsed, the timer-driven sweep re-arms the
+        // line: storm containment is a rate limit, not a permanent kill.
+        kernel::interrupt::recover_stormed(storm_at + kernel::interrupt::storm_window_ticks);
+        if (irq.stormed || irq.masked)
+            return error_t::invalid_argument;
+        // And it is genuinely usable again, not merely flagged clean.
+        if (!kernel::interrupt::record_delivery(
+                irq, storm_at + kernel::interrupt::storm_window_ticks) ||
             kernel::interrupt::acknowledge(irq) != error_t::success)
             return error_t::invalid_argument;
         const capability::derivation_id_t derivation =
@@ -100,6 +129,7 @@ namespace sys::kernel::tests::interrupt
         pr_info("[TEST] name=irq_trigger_modes result=PASS edge=40 level=41 reserved=reject\n");
         pr_info("[TEST] name=irq_ack_deactivate result=PASS edge=2 level=1\n");
         pr_info("[TEST] name=irq_storm_containment result=PASS threshold=64 masked=1\n");
+        pr_info("[TEST] name=irq_storm_recovery result=PASS window=100 rearmed=1\n");
         return error_t::success;
     }
 } // namespace sys::kernel::tests::interrupt

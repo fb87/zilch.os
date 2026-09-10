@@ -1738,6 +1738,38 @@ namespace sys::root_graph
                 ++readiness_iterations >= readiness_stall_iterations) {
                 readiness_stall_reported = true;
                 report_badges("root: readiness stalled ready=");
+                /*
+                 * Which roles are missing is only half the answer. A role
+                 * that answers health but never signalled ready is a lost
+                 * badge; one that does not answer at all never ran, or ran
+                 * and died. Those are entirely different bugs, and the
+                 * badge mask alone cannot tell them apart.
+                 *
+                 * Bounded, unlike healthy(): a plain ipc_call into a role
+                 * with no live receiver blocks forever, so probing a dead
+                 * role with it would hang root inside its own stall
+                 * diagnostic -- turning the one report that explains the
+                 * failure into a second silent hang.
+                 */
+                for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
+                    if ((ready & (1U << index)) != 0U)
+                        continue;
+                    const abi::v1::ipc_timeout probe_timeout{.ticks = 200U, .enabled = true};
+                    const auto probe =
+                        ipc_call(endpoint_base + index,
+                                 static_cast<word_t>(abi::v1::control_plane_operation::health), 0U,
+                                 0U, 0U, {}, probe_timeout);
+                    native::text::packed(serial_service_endpoint, "root:  role ");
+                    native::text::hex(serial_service_endpoint, index);
+                    native::text::packed(serial_service_endpoint,
+                                         probe.status == static_cast<word_t>(error_t::success)
+                                             ? " alive, badge lost\r\n"
+                                             : " not answering st=");
+                    if (probe.status != static_cast<word_t>(error_t::success)) {
+                        native::text::hex(serial_service_endpoint, probe.status);
+                        native::text::packed(serial_service_endpoint, "\r\n");
+                    }
+                }
             }
             if ((ready & expected) == expected) {
                 for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index)

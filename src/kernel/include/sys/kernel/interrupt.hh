@@ -39,6 +39,15 @@ namespace sys::kernel::interrupt
 
     inline interrupt_t* registry[maximum_irq_count]{};
     inline interrupt_t dynamic_interrupts[dynamic_interrupt_count]{};
+    /*
+     * One past the highest IRQ ever registered, so the per-tick sweep in
+     * recover_stormed() costs a handful of loads instead of walking all
+     * 1020 registry slots every tick on every boot. Only ever grows;
+     * unregister_irq() deliberately does not shrink it, since a slot that
+     * was used once can be reused and the bound only needs to be an
+     * over-approximation to stay correct.
+     */
+    inline volatile u32 registry_bound{};
 
     inline void initialize(interrupt_t& value, irq_id_t irq,
                            trigger mode = trigger::level) noexcept {
@@ -62,6 +71,11 @@ namespace sys::kernel::interrupt
         if (!__atomic_compare_exchange_n(&registry[value.irq], &expected, &value, false,
                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
             return error_t::busy;
+        for (u32 bound = __atomic_load_n(&registry_bound, __ATOMIC_ACQUIRE);
+             value.irq >= bound &&
+             !__atomic_compare_exchange_n(&registry_bound, &bound, value.irq + 1U, false,
+                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);) {
+        }
         platform::interrupt::mask(value.irq);
         const error_t result =
             platform::interrupt::configure(value.irq, value.trigger_mode == trigger::edge);
@@ -185,6 +199,59 @@ namespace sys::kernel::interrupt
             platform::interrupt::unmask(value.irq);
         }
         return error_t::success;
+    }
+
+    /*
+     * Re-arms lines the storm detector masked, once their detection window
+     * has fully elapsed. A storm is a RATE limit, not a death sentence:
+     * `stormed` used to be cleared only by bind(), while acknowledge()
+     * refuses to unmask while it is set, so any line that ever crossed
+     * storm_threshold stayed masked for the remaining uptime. The only
+     * recovery was for the owner to notice and re-bind, which no driver
+     * does. A single burst of legitimate traffic -- a fast typist on the
+     * console, a busy disk -- permanently killed the device.
+     *
+     * MUST be driven by the timer, and this is the load-bearing part:
+     * while `stormed` holds the line masked at the GIC, nothing is
+     * delivered, so the owner has nothing left to acknowledge and an
+     * acknowledge-driven re-arm can never run at all. That was the obvious
+     * place to put it and it is wrong -- the interrupt lifecycle test
+     * caught it immediately, because after the storm the next
+     * record_delivery() is suppressed by the very mask being recovered
+     * from. Nothing inside the interrupt path can break that cycle; only
+     * an external clock can.
+     *
+     * Re-storming is intended: a line that really is stuck asserting trips
+     * the detector again after another storm_threshold deliveries, so the
+     * steady state is a ceiling of roughly storm_threshold per
+     * storm_window_ticks. Containment is preserved; permanence is not.
+     *
+     * `active` is respected rather than overridden: a delivery in flight
+     * belongs to acknowledge(), which owns that unmask.
+     */
+    inline void recover_stormed(u64 now) noexcept {
+        /*
+         * Walks the registry rather than the dynamic_interrupts pool:
+         * record_delivery() and dispatch() can set `stormed` on ANY
+         * registered interrupt, whichever storage it lives in, so keying
+         * recovery off one pool would leave the others latched. Bounded by
+         * registry_bound so the common case is a few loads.
+         */
+        const u32 bound = __atomic_load_n(&registry_bound, __ATOMIC_ACQUIRE);
+        for (u32 irq = 0U; irq < bound; ++irq) {
+            interrupt_t* const value = __atomic_load_n(&registry[irq], __ATOMIC_ACQUIRE);
+            if (value == nullptr || !__atomic_load_n(&value->stormed, __ATOMIC_ACQUIRE))
+                continue;
+            if (now - __atomic_load_n(&value->window_start, __ATOMIC_ACQUIRE) < storm_window_ticks)
+                continue;
+            __atomic_store_n(&value->window_start, now, __ATOMIC_RELEASE);
+            __atomic_store_n(&value->window_count, 0U, __ATOMIC_RELEASE);
+            __atomic_store_n(&value->stormed, false, __ATOMIC_RELEASE);
+            if (!__atomic_load_n(&value->active, __ATOMIC_ACQUIRE)) {
+                __atomic_store_n(&value->masked, false, __ATOMIC_RELEASE);
+                platform::interrupt::unmask(value->irq);
+            }
+        }
     }
 
     /*

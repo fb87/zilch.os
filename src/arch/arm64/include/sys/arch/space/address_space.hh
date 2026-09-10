@@ -290,6 +290,39 @@ namespace sys::arch::space
         return user_code + elf64::bootstrap_size;
     }
 
+    /*
+     * Makes freshly written translation-table entries visible to OTHER PEs'
+     * table walkers. Must run after the last descriptor store in a newly
+     * populated address space and before the owning thread can be scheduled
+     * anywhere.
+     *
+     * The release store that publishes a thread as runnable
+     * (thread::store_state) orders the descriptor writes for other PEs'
+     * ordinary loads, but a translation table walk is a separate observer,
+     * and the architecture requires an explicit DSB for table writes to be
+     * guaranteed visible to it. Without this, a thread pinned to a remote
+     * CPU can begin executing at its entry point while that CPU's walker
+     * still sees the pre-population state of the tables.
+     *
+     * Added while investigating exactly that failure shape -- a thread
+     * faulting on its first instruction with esr=0x2000000 (EC 0, "unknown
+     * reason", what executing a zero word raises), far=0, pc=0x20000000
+     * (the image entry), always on a CPU other than the one that built the
+     * space. It did NOT fix it: the stall rate was unchanged across 20
+     * boots. It is kept anyway because the barrier is required
+     * independently of that symptom, not because it explains it -- see the
+     * checklist's 0139 entry, where the real cause is still open.
+     *
+     * `ishst` rather than a full `ish`: only the store side needs to
+     * complete, and the tables are inner-shareable normal memory. No TLBI
+     * accompanies it because these are invalid-to-valid transitions, which
+     * need no break-before-make; activate() separately invalidates the ASID
+     * to cover slot reuse.
+     */
+    inline void publish_translation_tables() noexcept {
+        __asm__ volatile("dsb ishst" : : : "memory");
+    }
+
     inline void synchronize_instruction_cache(void* start, usize_t size) noexcept {
         if (size == 0U)
             return;
@@ -486,6 +519,7 @@ namespace sys::arch::space
                 memory::inner_shareable | memory::attr_normal | memory::ap_el0_rw | memory::pxn |
                 memory::uxn;
         }
+        publish_translation_tables();
         return value.image_status;
     }
 
@@ -566,6 +600,7 @@ namespace sys::arch::space
                 memory::inner_shareable | memory::attr_normal | memory::ap_el0_rw | memory::pxn |
                 memory::uxn;
         }
+        publish_translation_tables();
         return error_t::success;
     }
 

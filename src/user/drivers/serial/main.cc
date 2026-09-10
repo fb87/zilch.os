@@ -91,6 +91,27 @@ namespace
         *data = static_cast<sys::u32>(static_cast<sys::u8>(value));
     }
 
+    /*
+     * Bring-up diagnostics written STRAIGHT to the device, with no IPC.
+     *
+     * Every other process reports through this driver, so this driver is
+     * the one that cannot: a failure here takes the console down with it,
+     * and then root, the block driver and console-server all block forever
+     * inside their own report calls. That produced the worst failure shape
+     * in this system -- a boot that stops dead with no output at all, or
+     * mid-character partway through another process's line, and no way to
+     * tell which of them was at fault. Since this process owns the PL011
+     * outright once map_uart() succeeds, it can just write the bytes.
+     *
+     * Only for bring-up failures, not for the serving path: it bypasses
+     * the endpoint that serializes writes, so concurrent output from a
+     * healthy system would interleave mid-character.
+     */
+    inline void report(const char* text) noexcept {
+        for (const char* cursor = text; *cursor != '\0'; ++cursor)
+            putc(*cursor);
+    }
+
     [[nodiscard]] inline bool try_getc(sys::u8& value) noexcept {
         auto* data = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + data_offset);
         auto* flags = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + flag_offset);
@@ -245,9 +266,14 @@ namespace
          * installs this thread's own space capability at the selector it was
          * created with, and that is the one to map into here.
          */
-        if (!map_uart(rx_space_selector) ||
-            !native::ok(sys::control(sys::abi::v1::control_operation::notification_bind,
+        if (!map_uart(rx_space_selector)) {
+            // No mapping means no way to say so on the device itself.
+            native::signal_failure();
+            sys::thread_exit(1U, native::root_notification, native::failure_badge);
+        }
+        if (!native::ok(sys::control(sys::abi::v1::control_operation::notification_bind,
                                      irq_notification_selector))) {
+            report("serial: rx notification bind failed\r\n");
             native::signal_failure();
             sys::thread_exit(1U, native::root_notification, native::failure_badge);
         }
@@ -322,17 +348,34 @@ extern "C" int main(sys::word_t role, sys::word_t) noexcept {
     if (role == rx_role)
         rx_main(); // noreturn
 
-    if (!map_uart(self_space_selector) || !bind_irq()) {
+    /*
+     * map_uart() is the one failure this process genuinely cannot report:
+     * without the mapping there is no device to write to. Everything after
+     * it reports through report() directly, since a bring-up failure here
+     * silently takes the whole system's console with it.
+     */
+    if (!map_uart(self_space_selector)) {
         native::signal_failure();
         return 1;
     }
     configure_uart();
+    if (!bind_irq()) {
+        report("serial: irq bind failed\r\n");
+        native::signal_failure();
+        return 1;
+    }
 
     // CPU 3 deliberately: not root's CPU 0, and not this driver's own (root
     // process_creates serial-driver onto CPU 2).
-    if (!await_rx_endpoint() ||
-        sys::control(sys::abi::v1::control_operation::thread_create, 3U, rx_role, rx_thread_selector,
+    if (!await_rx_endpoint()) {
+        report("serial: rx endpoint never minted\r\n");
+        native::signal_failure();
+        return 1;
+    }
+    if (sys::control(sys::abi::v1::control_operation::thread_create, 3U, rx_role,
+                     rx_thread_selector,
                      rx_space_selector) != static_cast<sys::word_t>(sys::error_t::success)) {
+        report("serial: rx thread create failed\r\n");
         native::signal_failure();
         return 1;
     }

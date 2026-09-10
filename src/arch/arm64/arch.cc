@@ -61,6 +61,17 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                 } else {
                     sys::kernel::scheduler::on_timer_tick();
                 }
+                /*
+                 * One CPU only: the sweep is idempotent, but re-arming a
+                 * line is a GIC write and there is nothing to gain from
+                 * four CPUs racing to do the same one. See
+                 * interrupt::recover_stormed() for why this has to run off
+                 * the timer rather than out of the interrupt path.
+                 */
+                if (sys::arch::cpu::current_id() == 0U) {
+                    sys::kernel::interrupt::recover_stormed(
+                        sys::platform::timer::ticks(sys::arch::cpu::current_id()));
+                }
                 if (ticks == 1U && sys::arch::cpu::current_id() == 0U) {
                     sys::printk::defer(sys::kernel::emergency::event::irq,
                                                 static_cast<sys::u64>(sys::arch::cpu::current_id()),
