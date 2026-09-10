@@ -1689,3 +1689,72 @@ crash into a silent isolation violation -- two processes quietly sharing
 translations instead of one visibly dying. It wants its own pass, with the
 mismatch check above kept as the regression test, since it detects the
 condition directly rather than waiting for a boot to hang. -->
+
+<!-- 0143 evidence: the ASID allocator, hardened. The boot stall is STILL
+open, and this entry is careful to separate what was proven from what was
+merely hoped, because an earlier draft of it got that wrong.
+
+## What was actually wrong with the allocator
+
+Two real defects, both found from 0142's ttbr/want mismatch:
+
+  - `allocations` counted LIFETIME allocations, not live ones: release()
+    cleared the in_use bit and left the counter alone. The rollover
+    trigger (`allocations >= capacity - 1`) therefore fired every 63
+    allocations ever made, no matter how few were outstanding. With at
+    most 16 live spaces against 63 usable tags, rollover should be
+    unreachable in this kernel; process churn reached it in under a
+    second. It is now a live count.
+  - Nothing stopped a tag being recycled while a CPU still had it in
+    TTBR0. rollover_locked() cleared the whole mask, and allocate() only
+    consulted in_use. A tag handed to a second live space while the first
+    still translates through it means two address spaces sharing one TLB
+    tag -- an isolation hazard, not merely a crash. The allocator now
+    tracks the tag each CPU has installed (asid::installed[], maintained
+    by activate() and cleared by activate_kernel()), skips installed tags
+    when allocating, preserves them across rollover, and returns no_memory
+    on genuine exhaustion instead of handing out tag 1 unconditionally --
+    which is what the old fallback did, aliasing it with whoever held it.
+
+## Proven: aliasing was happening, and is now prevented
+
+The mismatches after the change have a signature that is itself the proof:
+`want` is consistently the installed tag PLUS TWO (ttbr asid 7 against
+want 9; 8 against 0xa), on an identical table root. That is allocate()
+stepping over the tags currently installed on other CPUs instead of
+reusing one. Before the change it would have returned the same tag again.
+
+## NOT proven: that any of this fixes the boot stall
+
+It does not, on the evidence. Two A/B rounds, same host, back to back,
+release profile, 16 boots each:
+
+    round 1   without: 7/16    with: 2/16
+    round 2   without: 1/16    with: 3/16
+    combined  without: 8/32    with: 5/32
+
+Round 1 alone looks like a fix and round 2 alone looks like a regression;
+together they are noise, and the between-round swing (7/16 then 1/16 on
+the SAME build) is larger than the effect being measured. So the change is
+kept as allocator hardening on its own merits, and explicitly not as the
+fix. Anyone measuring this needs paired A/B rounds on an otherwise idle
+host -- a single sample of 16 proves nothing here, which this
+investigation has now demonstrated twice.
+
+## The sharper lead, for the next pass
+
+The mismatch means a live address_space object has acquired a NEW tag
+while a CPU still runs the old one, on the same table root -- so the
+object is being re-initialized underneath a running thread. One capture
+caught it mid-rebuild: `l3e=0`, the entry page's descriptor not yet
+written.
+
+`process_exec` (thread/scheduler.hh) is the one path that does exactly
+that, and says so: it calls activate_kernel(), then initialize() on the
+CURRENT space, then activate() -- with its own comment noting "exec is the
+first caller that rebuilds a live space rather than retiring it". The
+faults match a post-exec first instruction exactly: pc == image entry, sp
+== stack_top, faults=1.
+
+That is where to look next, and it is a much narrower target than "an SMP
+race somewhere in address-space publication". -->

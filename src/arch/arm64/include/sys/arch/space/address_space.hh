@@ -621,13 +621,12 @@ namespace sys::arch::space
          * -- two live spaces aliasing one tag.
          *
          * This closes the read-back window only. It does NOT fix the boot
-         * stall, and the measurement says so: the installed-vs-expected
-         * ASID mismatch still appears afterwards (ttbr=0x9...  against
-         * want=0xb..., same table root), which means the ASID is also
-         * being RECYCLED while the space is live -- a separate and larger
-         * defect in the ASID lifecycle. Kept because the read-back race is
-         * real on its own terms, not because it explains the symptom. See
-         * the checklist's 0142 entry.
+         * stall: the installed-vs-expected mismatch still appears
+         * afterwards, on an identical table root, which means a live
+         * address_space is being RE-INITIALIZED underneath a running
+         * thread -- see process_exec() in thread/scheduler.hh, and the
+         * checklist's 0142/0143 entries. Kept because the read-back race
+         * is real on its own terms, not because it explains the symptom.
          */
         value.asid = identifier.value;
         value.asid_generation = identifier.generation;
@@ -650,6 +649,14 @@ namespace sys::arch::space
                          :
                          : "r"(ttbr), "r"(asid_operand)
                          : "memory");
+        /*
+         * Published after the tag is genuinely in TTBR0, so the allocator
+         * never sees a tag advertised as installed before it is. Ordering
+         * the other way would let it reserve a tag this CPU had not yet
+         * taken, which is harmless, but this way the invariant it relies on
+         * -- "installed implies really installed" -- holds exactly.
+         */
+        asid::note_installed(arch::cpu::current_id(), identifier.value);
         /*
          * A bootstrap address-space slot can be destroyed, reloaded with a
          * different ELF, and then scheduled on a CPU that previously executed
@@ -677,6 +684,12 @@ namespace sys::arch::space
          * kernel instruction stream itself.
          */
         memory::activate(reinterpret_cast<paddr_t>(&memory::kernel_l0));
+        /*
+         * This CPU no longer holds any user tag, so whatever it had stops
+         * pinning that tag in the allocator. Without this the idle CPUs
+         * would keep reserving the last space each ran, permanently.
+         */
+        asid::note_installed(arch::cpu::current_id(), 0U);
     }
 
     inline void release(address_space& value, elf64::page_release_fn release_page) noexcept {
