@@ -1507,3 +1507,105 @@ Still open, and now the only one left from 0138/0139: the silent boot
 stall, which accounts for the 2 non-completing boots in the sample above.
 Its cause is characterised in 0139 and is a kernel SMP defect, not this. -->
 
+
+<!-- 0141 evidence: the boot stall, still OPEN. This entry exists so the
+next attempt starts where this one stopped instead of re-deriving it. Real
+diagnostics landed; no fix did, and nothing speculative was kept.
+
+## The one decisive new fact: it needs parallel vCPUs
+
+Same build, same host, back to back:
+
+    -accel tcg,thread=single    0 stalls / 16 boots
+    default (MTTCG)             5-7 stalls / 16 boots
+
+That is the cleanest signal in this whole investigation. The failure
+requires genuinely concurrent CPUs, so it is a real SMP race (in the
+kernel, or in QEMU's MTTCG fidelity -- see the open question at the end),
+and NOT host load, not scheduling luck, and not anything in the userspace
+graph.
+
+## What actually faults
+
+Release builds previously logged only "user fault delivered thread=N
+cpu=M", which cannot distinguish an undefined instruction from a
+translation fault. The warn now carries pc, esr, spsr, sp and the fault
+count. With that, every captured stall is the same shape:
+
+    pc=20000000 esr=2000000  spsr=0 sp=20050000 faults=1
+    pc=20000000 esr=82000007 spsr=0 sp=20050000 faults=1
+
+pc is the image entry, sp is exactly stack_top, spsr is the initial
+PSTATE, faults=1. So this is a brand-new thread failing on its FIRST
+instruction, before it has executed anything, always on a CPU other than
+the one that created it. Two exception classes appear:
+
+  - esr=0x2000000  -> EC 0x00, undefined instruction: the fetch returned
+    something that is not an instruction.
+  - esr=0x82000007 -> EC 0x20, instruction abort, IFSC 0x07 = translation
+    fault at level 3: the entry page is not mapped in the space the CPU is
+    walking.
+
+Both are "the new address space is not correctly visible to the remote CPU
+at first fetch", from opposite directions.
+
+## Levers pulled, and rejected on measurement
+
+None of these changed the rate beyond noise, so none was kept. They are
+listed because each looks obviously right and re-trying them costs the
+same day again:
+
+  - dsb ishst after the last page-table store (kept anyway, as 0139
+    records, because the barrier is required independently -- but it is
+    NOT the fix).
+  - tlbi vmalle1is instead of tlbi aside1is in activate(), i.e. a full
+    stage-1 flush rather than by-ASID, in case of ASID aliasing: 1/16
+    against 2/16. Noise. Reverted.
+  - ic ialluis + dsb ish instead of ic iallu + dsb nsh in activate(), i.e.
+    broadcasting the instruction-cache invalidate: 1/16. Noise. Reverted.
+
+Also ruled out by inspection rather than measurement:
+
+  - Interrupts nesting inside load_user() and swapping TTBR0 between
+    activate() and the eret. This would explain both fault shapes exactly,
+    and it is wrong: boot/vectors.S never issues daifclr, so IRQ/FIQ stay
+    masked for the whole handler.
+  - Page tables being misaligned. memory::table_t is alignas(page_size).
+  - The physical page allocator handing the same page out twice. Both
+    allocate_physical_page() and allocate_resource_page() mark the bitmap
+    under the allocator lock, and the general path additionally skips
+    pages inside a child's delegated extent.
+  - asid::refresh() failing and activate() returning without installing
+    TTBR0 (which would run a thread in the previous space -- an isolation
+    violation, not a crash). refresh() delegates to allocate(), which
+    always succeeds, so that early return is dead code. Still worth
+    deleting or converting to a panic on its own merits.
+
+## A self-inflicted lesson worth keeping
+
+An earlier version of this diagnostic also printed the instruction word at
+the entry point, read through the image's backing page. It was genuinely
+useful -- it is how the "page is mapped but holds zeros" hypothesis was
+raised and then disproved -- but it dereferences process memory from
+INSIDE the fault handler, so a torn-down or half-built address space
+faults the kernel there, in the handler for a fault. That turned a
+recoverable user fault into a deterministic total lockup: `make smoke`
+went from PASS to both release profiles producing no output at all, twice
+in a row, which looks exactly like a much worse regression. Removed. A
+diagnostic must not be able to fault.
+
+## Where to start next
+
+The open question is whether this is a kernel race or a QEMU MTTCG
+fidelity issue, and that is worth settling BEFORE more kernel changes,
+because every architecturally-motivated fix tried above came back as
+noise. The kernel's publication sequence reads correct on inspection: the
+loader does dc cvau per page, dsb ish, ic ialluis, dsb ish, isb; the
+tables get a dsb ishst; the thread is published with a release store;
+activate() does tlbi, msr ttbr0, isb, then a local ic iallu, dsb nsh, isb
+before the eret.
+
+Settling it needs either targeted TB-invalidation instrumentation in QEMU,
+or a run on real hardware. Note that KVM is not a shortcut on this host
+despite it being aarch64: the machine is built with virtualization=on and
+the kernel uses EL2, which an A76 cannot nest. -->

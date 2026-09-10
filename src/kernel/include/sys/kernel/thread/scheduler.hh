@@ -1952,10 +1952,33 @@ namespace sys::kernel::thread
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U));
 #else
-        pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu\n",
+        /*
+         * esr/spsr/pc are what actually identify a user fault, and none of
+         * them was reported in a release build before -- "user fault
+         * delivered thread=N cpu=M" alone cannot distinguish an undefined
+         * instruction from a translation fault, which turned out to be the
+         * difference between two entirely separate defects while chasing
+         * the boot stall (see the checklist's 0141 entry).
+         *
+         * Everything here comes from the trap frame. An earlier version
+         * also dereferenced the image's backing page to show the
+         * instruction word at the entry point; that is deliberately gone.
+         * Reading process memory from inside the fault handler means a
+         * torn-down or half-built address space can fault the KERNEL here,
+         * inside the handler for a fault -- turning a recoverable user
+         * fault into a silent total lockup. A diagnostic must not be able
+         * to do that.
+         */
+        pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu pc=%llx esr=%llx spsr=%llx "
+                "sp=%llx faults=%llu\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
-                                                                       : 0U));
+                                                                       : 0U),
+                static_cast<unsigned long long>(frame.instruction_pointer),
+                static_cast<unsigned long long>(syndrome),
+                static_cast<unsigned long long>(frame.status),
+                static_cast<unsigned long long>(frame.stack_pointer),
+                static_cast<unsigned long long>(value.faults));
 #endif
         if (deliver_fault_ipc(value, frame, syndrome, delivered_address, fault_kind))
             return true;
