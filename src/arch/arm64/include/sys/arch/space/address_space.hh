@@ -387,6 +387,15 @@ namespace sys::arch::space
         u16 asid{};
         u32 asid_generation{};
         volatile u32 active_cpu_mask{};
+        /*
+         * How many times this space has been built. Greater than one means
+         * the object was rebuilt in place rather than freshly created --
+         * process_exec() is the only path that does that -- which is the
+         * distinction the fault diagnostic needs to tell "a new process
+         * failed to start" from "a live process was rebuilt underneath
+         * itself". Reported by thread/scheduler.hh's user-fault warn.
+         */
+        u32 initializations{};
     };
 
     /*
@@ -460,6 +469,28 @@ namespace sys::arch::space
         release_image_backing(value, release_page);
         release_dynamic_tables(value, release_page);
         release_stack_backing(value, release_page);
+        ++value.initializations;
+
+        /*
+         * Give back the tag this space already holds, if any, before taking
+         * a new one. initialize() is called on LIVE spaces, not only fresh
+         * ones -- process_exec() rebuilds the calling thread's space in
+         * place -- and it previously allocated into a fresh handle while
+         * discarding value.asid, leaking one tag per exec. Since the pool
+         * is 63 usable tags, a leak per exec walks it to exhaustion and
+         * every exhaustion is a rollover, which is precisely the event that
+         * reassigns tags underneath running CPUs.
+         *
+         * Safe against the tag still being installed: process_exec() calls
+         * activate_kernel() first, which switches this CPU to the kernel
+         * root and clears its installed slot, so release() here is
+         * reclaiming a tag nothing is translating through. A fresh space
+         * has value.asid == 0, which release() ignores.
+         */
+        asid::handle previous{value.asid, value.asid_generation};
+        asid::release(previous);
+        value.asid = 0U;
+        value.asid_generation = 0U;
 
         asid::handle identifier{};
         const error_t asid_result = asid::allocate(identifier);
@@ -858,6 +889,17 @@ namespace sys::arch::space
     [[nodiscard]] inline u64 entry_descriptor(const address_space& value) noexcept {
         const usize_t index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
         return value.l3.entry[index];
+    }
+
+    // See address_space::initializations, and asid::rollovers -- a rollover
+    // in a kernel with 16 spaces and 63 tags should never happen at all, so
+    // a non-zero count at fault time is itself a finding.
+    [[nodiscard]] inline u32 initialization_count(const address_space& value) noexcept {
+        return value.initializations;
+    }
+
+    [[nodiscard]] inline u64 rollover_count() noexcept {
+        return asid::rollovers;
     }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;

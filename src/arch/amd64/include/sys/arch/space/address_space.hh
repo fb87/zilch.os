@@ -407,6 +407,12 @@ namespace sys::arch::space
     [[nodiscard]] inline u64 entry_descriptor(const address_space&) noexcept {
         return 0U;
     }
+    [[nodiscard]] inline u32 initialization_count(const address_space&) noexcept {
+        return 0U;
+    }
+    [[nodiscard]] inline u64 rollover_count() noexcept {
+        return 0U;
+    }
 
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;

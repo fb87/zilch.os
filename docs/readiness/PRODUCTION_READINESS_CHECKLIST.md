@@ -1758,3 +1758,61 @@ faults match a post-exec first instruction exactly: pc == image entry, sp
 
 That is where to look next, and it is a much narrower target than "an SMP
 race somewhere in address-space publication". -->
+
+<!-- 0144 evidence: two theories killed outright, and the culprit path
+identified. The boot stall is still OPEN, but the search space is now
+small.
+
+The fault warn gained two more fields, both safe BSS reads:
+`inits` (how many times this address_space object has been BUILT) and
+`rollovers` (asid::rollovers). They settled two questions immediately.
+
+## rollovers=0 -- the ASID rollover chain is not the cause
+
+Every captured stall reports rollovers=0. Rollover never happens during
+boot at all, so 0143's entire line of reasoning -- lifetime-counted
+allocations forcing spurious rollovers, rollover reassigning live tags --
+cannot be what produces the stall. That work stands as allocator
+correctness (it does prevent a real aliasing condition, per 0143's +2
+evidence) and is now positively excluded as the mechanism here.
+
+A genuine ASID leak was found and fixed while checking this:
+initialize() is called on LIVE spaces, not only fresh ones, and allocated
+into a fresh handle while discarding value.asid -- leaking one tag per
+exec. It now releases the previous tag first. Also correctness, also not
+the fix; with rollovers=0 the leak never got far enough to matter.
+
+## inits=2 -- the space is rebuilt in place, and exec is the path
+
+Most captures report inits=2: the address_space object was built twice.
+Only one path rebuilds a live space rather than retiring it, and it says
+so in its own comment -- process_exec() in thread/scheduler.hh, which
+calls activate_kernel(), then initialize() on the CURRENT space, then
+activate(). Boot reaches it through verify_fork_exec().
+
+That matches the fault shape exactly: after exec a thread restarts at the
+new image's entry with a fresh stack, which is precisely
+pc=<image entry>, sp=stack_top, faults=1.
+
+With ttbr == want and a valid l3e in the same captures, translation is
+correct by then. So what remains is narrow: after exec rebuilds a space,
+the CPU sometimes fetches non-instruction bytes for the NEW image at
+virtual addresses it was very recently executing the OLD image from.
+
+## The one loose end in that story
+
+Not every capture is exec: one reported inits=1, a freshly created space
+failing the same way. So either there is a second path into the same
+condition, or the fresh-creation case shares whatever the rebuild case
+exposes. That is the first thing to settle next, because it decides
+whether the fix belongs in process_exec() specifically or in the
+image-publication path generally.
+
+## Measurement discipline, restated
+
+Rates in this entry are not quoted, deliberately. 0143 established that a
+16-boot sample cannot resolve an effect this size on this host -- the
+same build measured 7/16 and then 1/16 in consecutive rounds. Any claimed
+fix here needs paired A/B rounds on an idle machine, and `inits`/`ttbr`/
+`want`/`l3e` are better signals than the stall rate anyway, because they
+detect the condition directly instead of waiting for a boot to hang. -->
