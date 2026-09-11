@@ -311,7 +311,10 @@ namespace sys::arch::space
      * space. It did NOT fix it: the stall rate was unchanged across 20
      * boots. It is kept anyway because the barrier is required
      * independently of that symptom, not because it explains it -- see the
-     * checklist's 0139 entry, where the real cause is still open.
+     * checklist's 0139 entry. (The real cause turned out to be two
+     * concurrent creators claiming one thread slot -- see 0147 -- so this
+     * barrier is unrelated to it and remains kept purely on its own
+     * merits.)
      *
      * `ishst` rather than a full `ish`: only the store side needs to
      * complete, and the tables are inner-shareable normal memory. No TLBI
@@ -481,11 +484,20 @@ namespace sys::arch::space
          * freeing its own pages no longer looks like a space freeing pages
          * somebody still maps.
          */
+        /*
+         * Bumped FIRST, before anything is torn down. It used to be bumped
+         * after the frees below, which made a rebuild-in-progress
+         * indistinguishable from a first build for anything sampling it
+         * concurrently -- the fault diagnostic read inits=1 with a cleared
+         * L3 and made a slot being reused look like a slot freshly created.
+         * The counter exists to answer exactly that question, so it has to
+         * lead the mutations rather than trail them.
+         */
+        ++value.initializations;
         memory::clear(value.l3);
         release_image_backing(value, release_page);
         release_dynamic_tables(value, release_page);
         release_stack_backing(value, release_page);
-        ++value.initializations;
 
         /*
          * Give back the tag this space already holds, if any, before taking

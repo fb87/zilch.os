@@ -174,7 +174,18 @@ namespace sys::kernel::thread
                                                  word_t argument0, word_t argument1) noexcept {
         value.id = id;
         value.pinned_cpu = cpu;
-        value.current_state = state::inactive;
+        /*
+         * `suspended`, NOT `inactive`: the caller has already claimed this
+         * slot by atomically moving it inactive -> suspended
+         * (find_free_user_slot), and `inactive` is what marks a slot
+         * claimable. Storing it back here would re-open the slot to another
+         * CPU's creator for the whole of construction, which is the race
+         * that claim exists to close. Not runnable either way, so nothing
+         * schedules a half-built thread; the creator publishes `ready` when
+         * it is done, and every failure path stores `inactive` to release
+         * the claim.
+         */
+        value.current_state = state::suspended;
         value.waiting_endpoint = 0U;
         value.bound_notification = {};
         scheduling::initialize(value.scheduling_context, cpu);

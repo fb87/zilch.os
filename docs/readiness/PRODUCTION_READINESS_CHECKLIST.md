@@ -1978,3 +1978,71 @@ before initialize() finished publishing them, or the fault is attributed
 to the wrong thread (current_user_thread[cpu] stale across a switch).
 Distinguishing those two is the next step, and it is a much smaller
 question than any this investigation started with. -->
+
+<!-- 0147 evidence: THE BOOT STALL, FIXED. Two concurrent creators could
+claim the same thread slot, and the second rebuilt the first one's address
+space underneath its running thread.
+
+## The defect
+
+find_free_user_slot() searched for a slot whose state was `inactive` with
+a plain load, and returned it. There was no claim. So two creators running
+on different CPUs could both observe slot N free and both build into it:
+
+  - CPU A: create_user_bundle -> initialize_user -> initialize() builds the
+    space, loads the image, publishes `ready`. Its thread starts running.
+  - CPU B: had already selected the same slot, and its initialize() now
+    clears that space's L3 table and reloads a different image -- under a
+    thread that is executing from it.
+
+The running thread then faults at its image entry with an empty L3.
+
+Concurrent creators are not exotic here, which is why boot hit it: root
+calls process_create for each role on CPU 0, while console-server and
+serial-driver each call thread_create for their own second thread from
+their own CPUs, all inside the same few tens of milliseconds of graph
+bring-up.
+
+## Why it took so long to see
+
+Every earlier theory was consistent with the evidence and wrong, and each
+one had to be excluded by measurement rather than argument -- the record is
+in 0141 through 0146. What finally identified it was making the address
+space report how many times it had been BUILT, and then fixing that
+counter: `initializations` was incremented after the teardown it describes,
+so a rebuild in progress read inits=1 and looked exactly like a first
+build. Moving the increment ahead of the mutations turned every captured
+fault into inits=2 -- two builds of one space -- with byspace == self,
+i.e. the space rebuilding itself. That is unambiguous.
+
+The SMP-only behaviour follows directly and had been the strongest clue
+all along (0141: 0 stalls in 16 boots under `-accel tcg,thread=single`
+against 5-7/16 with MTTCG) -- with one vCPU there is never a second
+creator to race.
+
+## The fix
+
+The slot is now claimed atomically, moving it `inactive -> suspended` with
+a compare-exchange, so exactly one creator can win it. `suspended` is the
+right marker: it is not `inactive`, so no other claimer takes it; it is not
+runnable, so the scheduler skips a half-built thread; and every existing
+failure path already stores `inactive`, which releases the claim for free.
+
+initialize_user() had to stop storing `inactive`. It set the slot back to
+inactive as its "known starting state", which would have re-opened the
+claim for the whole of construction -- the exact window being closed. It
+now stores `suspended`, and the creator still publishes `ready` when done.
+
+## Measured
+
+Release service graph, fifo on stdin (the configuration that reproduces
+it), on the same host that was producing 2-7 stalls per 16 boots
+throughout this investigation:
+
+    40 boots (16 + 24):  0 stalls, 0 user faults, 0 barrier firings
+
+`make smoke` PASS on all three profiles. Certification `failures=0
+failure_mask=0 transport=PASS` with zero release-of-mapped-page firings and
+a normal ~4s guest time; the wall-clock latency gates alone still trip at
+host load 6 (694251 against a 620000 limit) and pass on a quiet host, which
+is the pattern 0137 documents. -->

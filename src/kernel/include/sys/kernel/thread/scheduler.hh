@@ -416,12 +416,36 @@ namespace sys::kernel::thread
         return false;
     }
 
+    /*
+     * Claims a free slot ATOMICALLY, publishing `suspended` as the
+     * reservation so no other CPU can pick the same one.
+     *
+     * This used to be a plain load of each slot's state, with no claim at
+     * all: two concurrent creators -- root's process_create on one CPU and
+     * a server's own thread_create on another, which is exactly what
+     * happens while the service graph is coming up -- could both observe
+     * slot N inactive and both build into it. The first one's thread starts
+     * running; the second one's initialize() then clears that space's page
+     * tables and reloads its image underneath the running thread, which
+     * faults at its entry with an empty L3.
+     *
+     * That was the boot stall. It is SMP-only by construction, which is why
+     * `-accel tcg,thread=single` never reproduced it (0146/0141), and the
+     * fault always reported inits=2 -- two builds of one space -- once the
+     * counter was moved ahead of the teardown it describes.
+     *
+     * `suspended` is the right reservation marker: it is not `inactive`, so
+     * no other claimer takes it; it is not runnable, so the scheduler skips
+     * it while it is half-built; and every existing failure path already
+     * stores `inactive` to release it. initialize_user() must therefore NOT
+     * reset it to inactive -- see its own comment.
+     */
     [[nodiscard]] inline u32 find_free_user_slot(cpu_id_t preferred) noexcept {
         if (preferred > 0U && preferred < user_thread_count &&
-            load_state(user_threads[preferred]) == state::inactive)
+            compare_state(user_threads[preferred], state::inactive, state::suspended))
             return preferred;
         for (u32 id = 1U; id < user_thread_count; ++id) {
-            if (load_state(user_threads[id]) == state::inactive)
+            if (compare_state(user_threads[id], state::inactive, state::suspended))
                 return id;
         }
         return user_thread_count;
