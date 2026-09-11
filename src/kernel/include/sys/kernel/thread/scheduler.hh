@@ -133,7 +133,18 @@ namespace sys::kernel::thread
                static_cast<capability::badge_t>(value.id + 1U);
     }
 
+    // Defined below, next to find_free_user_slot() and the rest of the slot
+    // lifecycle it belongs with; installed here because this runs first.
+    [[nodiscard]] inline bool page_mapped_by_live_space(paddr_t address) noexcept;
+
     [[nodiscard]] inline error_t initialize_user_threads() noexcept {
+        /*
+         * Arm the page allocator's "is this page still mapped?" barrier
+         * before any address space exists, so no window of unchecked
+         * recycling is left behind. See page_mapped_by_live_space().
+         */
+        memory::install_live_mapping_probe(&page_mapped_by_live_space);
+
         error_t bootstrap_result = bootstrap::initialize_objects();
         if (bootstrap_result != error_t::success)
             return bootstrap_result;
@@ -376,6 +387,34 @@ namespace sys::kernel::thread
 
     inline volatile u64 certification_operations[maximum_cpu_count]{};
     inline volatile u64 certification_failures[maximum_cpu_count]{};
+
+    /*
+     * Whether any LIVE address space still maps `address`. Installed into
+     * the page allocator (memory::install_live_mapping_probe) so it can
+     * refuse to free a page out from under a running process -- see
+     * release_physical_page()'s barrier.
+     *
+     * "Live" excludes inactive slots deliberately: a slot mid-teardown is
+     * exactly the one legitimately handing its pages back, and treating it
+     * as live would make every normal free fail. It checks the L3
+     * descriptors rather than image_backing/stack_backing, because the
+     * descriptors are what a CPU can actually still translate through, and
+     * that is the property that matters.
+     */
+    [[nodiscard]] inline bool page_mapped_by_live_space(paddr_t address) noexcept {
+        if (address == 0U)
+            return false;
+        const u32 count = __atomic_load_n(&active_user_thread_count, __ATOMIC_ACQUIRE);
+        for (u32 id = 0U; id < count && id < user_thread_count; ++id) {
+            thread& candidate = user_threads[id];
+            const state candidate_state = load_state(candidate);
+            if (candidate_state == state::inactive || candidate_state == state::terminated)
+                continue;
+            if (arch::space::maps_physical_page(candidate.address_space.native, address))
+                return true;
+        }
+        return false;
+    }
 
     [[nodiscard]] inline u32 find_free_user_slot(cpu_id_t preferred) noexcept {
         if (preferred > 0U && preferred < user_thread_count &&
@@ -850,9 +889,12 @@ namespace sys::kernel::thread
          */
         arch::space::activate_kernel();
 
+        // Same attribution as initialize_user()'s; see memory::release_context.
+        memory::note_release_context(reinterpret_cast<u64>(&current.address_space.native));
         const error_t result = current.address_space.initialize(
             static_cast<space_id_t>(current.id), role, &memory::allocate_physical_page,
             &memory::release_physical_page);
+        memory::note_release_context(0U);
         if (result != error_t::success) {
             store_state(current, state::terminated);
             return result;
@@ -2029,7 +2071,7 @@ namespace sys::kernel::thread
          */
         pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu pc=%llx esr=%llx spsr=%llx "
                 "sp=%llx faults=%llu ttbr=%llx want=%llx l3e=%llx inits=%u rollovers=%llu "
-                "word=%x phys=%llx held=%u\n",
+                "word=%x phys=%llx held=%u freedby=%llx byspace=%llx self=%llx\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U),
@@ -2054,7 +2096,15 @@ namespace sys::kernel::thread
                     static_cast<paddr_t>(arch::space::mapped_physical(
                         value.address_space.native, frame.instruction_pointer)))
                                           ? 1U
-                                          : 0U));
+                                          : 0U),
+                static_cast<unsigned long long>(memory::last_release_site(
+                    static_cast<paddr_t>(arch::space::mapped_physical(
+                        value.address_space.native, frame.instruction_pointer)))),
+                static_cast<unsigned long long>(memory::last_release_context(
+                    static_cast<paddr_t>(arch::space::mapped_physical(
+                        value.address_space.native, frame.instruction_pointer)))),
+                static_cast<unsigned long long>(
+                    reinterpret_cast<uintptr_t>(&value.address_space.native)));
 #endif
         if (deliver_fault_ipc(value, frame, syndrome, delivered_address, fault_kind))
             return true;

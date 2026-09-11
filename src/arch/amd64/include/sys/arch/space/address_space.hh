@@ -416,6 +416,9 @@ namespace sys::arch::space
     [[nodiscard]] inline u32 mapped_word(const address_space&, vaddr_t) noexcept {
         return 0U;
     }
+    [[nodiscard]] inline bool maps_physical_page(const address_space&, paddr_t) noexcept {
+        return false;
+    }
     [[nodiscard]] inline u64 mapped_physical(const address_space&, vaddr_t) noexcept {
         return 0U;
     }

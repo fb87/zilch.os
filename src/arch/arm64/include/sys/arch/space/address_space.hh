@@ -466,6 +466,22 @@ namespace sys::arch::space
     [[nodiscard]] inline error_t initialize(address_space& value, word_t role,
                                             elf64::page_allocate_fn allocate_page,
                                             elf64::page_release_fn release_page) noexcept {
+        /*
+         * DETACH BEFORE FREEING. Block 0's table still maps this space's
+         * image and stack at this point, and releasing those pages while
+         * the descriptors point at them leaves live translations aimed at
+         * memory the allocator is free to reissue -- precisely the hazard
+         * release_dynamic_tables() below already documents for L3 tables,
+         * applied to the pages themselves.
+         *
+         * It used to be clear_after: the table was cleared further down,
+         * after the frees. The page allocator's release-of-mapped-page
+         * barrier flags the old order immediately -- it is how this was
+         * found -- and the barrier stays precise because of it: a space
+         * freeing its own pages no longer looks like a space freeing pages
+         * somebody still maps.
+         */
+        memory::clear(value.l3);
         release_image_backing(value, release_page);
         release_dynamic_tables(value, release_page);
         release_stack_backing(value, release_page);
@@ -724,6 +740,10 @@ namespace sys::arch::space
     }
 
     inline void release(address_space& value, elf64::page_release_fn release_page) noexcept {
+        // Detach before freeing, for the same reason initialize() does: a
+        // descriptor left pointing at a released page is a live translation
+        // into memory the allocator may reissue.
+        memory::clear(value.l3);
         release_image_backing(value, release_page);
         release_dynamic_tables(value, release_page);
         release_stack_backing(value, release_page);
@@ -926,6 +946,35 @@ namespace sys::arch::space
      * still allocated, which is how a page reused underneath a live
      * mapping gets caught.
      */
+    /*
+     * Whether any live L3 descriptor in this space points at `page`. Walks
+     * the descriptors rather than image_backing/stack_backing because the
+     * descriptors are what a CPU can still translate through -- a page
+     * dropped from the bookkeeping arrays but left in a table is exactly
+     * the dangerous case. Block 0's table is embedded; the rest are
+     * on-demand and may be absent.
+     */
+    [[nodiscard]] inline bool maps_physical_page(const address_space& value, paddr_t page) noexcept {
+        if (page == 0U)
+            return false;
+        for (usize_t entry = 0U; entry < memory::entries; ++entry) {
+            const u64 descriptor = value.l3.entry[entry];
+            if ((descriptor & 0x3ULL) == 0x3ULL && (descriptor & 0x0000fffffffff000ULL) == page)
+                return true;
+        }
+        for (usize_t block = 1U; block < user_block_count; ++block) {
+            const memory::table_t* table = value.l3_tables[block];
+            if (table == nullptr)
+                continue;
+            for (usize_t entry = 0U; entry < memory::entries; ++entry) {
+                const u64 descriptor = table->entry[entry];
+                if ((descriptor & 0x3ULL) == 0x3ULL && (descriptor & 0x0000fffffffff000ULL) == page)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] inline u64 mapped_physical(const address_space& value, vaddr_t address) noexcept {
         if (address < user_code || address >= user_code + user_block_size)
             return 0U;

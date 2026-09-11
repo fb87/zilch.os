@@ -7,6 +7,8 @@
 #include <sys/kernel/lock/order.hh>
 #include <sys/kernel/memory/object.hh>
 #include <sys/kernel/object/table.hh>
+// pr_err, for the release-of-mapped-page barrier below.
+#include <sys/kernel/printk.hh>
 #include <sys/kernel/space/address_space.hh>
 #include <sys/kernel/task/task.hh>
 #include <sys/kernel/verification/hooks.hh>
@@ -190,6 +192,95 @@ namespace sys::kernel::memory
      * condition was first caught.
      */
     [[nodiscard]] inline bool page_used(u32 index) noexcept;
+
+    /*
+     * A short history of which code released which physical page.
+     *
+     * Detecting a page freed while still mapped (page_used() == false for a
+     * live mapping) says the bug exists but not who caused it, and every
+     * candidate release site in this kernel had already been audited and
+     * found guarded -- so narrowing further by inspection had run out. This
+     * records the return address of each release instead, which names the
+     * culprit directly: resolve it against the kernel ELF with
+     * `llvm-addr2line -e out/.../zilch.elf <site>`.
+     *
+     * A ring rather than a per-page table: one byte per page would be 64 KiB
+     * of permanent kernel BSS to answer a question that only ever concerns
+     * the most recent few frees. 128 entries is far more than the window
+     * between a free and the fault it causes.
+     */
+    inline constexpr u32 release_trace_capacity = 128U;
+
+    struct release_record {
+        paddr_t address{};
+        u64 site{};
+        u64 context{};
+    };
+
+    inline release_record release_trace[release_trace_capacity]{};
+    inline volatile u32 release_trace_next{};
+
+    /*
+     * Whatever the current releaser wants attributed to its frees, set
+     * around a release burst by the caller. address_space::initialize()
+     * sets it to the address of the space it is rebuilding, which is the
+     * one fact the return address cannot give: whether a page was freed by
+     * the space that owns it (a legitimate rebuild) or by a DIFFERENT
+     * space, which would mean the same page was recorded in two places.
+     */
+    inline volatile u64 release_context{};
+
+    inline void note_release_context(u64 context) noexcept {
+        __atomic_store_n(&release_context, context, __ATOMIC_RELEASE);
+    }
+
+    /*
+     * Answers "does any LIVE address space still map this physical page?".
+     *
+     * Installed by the thread layer at boot rather than implemented here:
+     * the answer needs the thread/address-space tables, and this file
+     * cannot include them (manager.hh is what those tables are built on).
+     * Null until installed, and the check below is simply skipped then --
+     * the early-boot window before it is set does no page recycling.
+     */
+    inline bool (*live_mapping_probe)(paddr_t) noexcept = nullptr;
+
+    inline void install_live_mapping_probe(bool (*probe)(paddr_t) noexcept) noexcept {
+        __atomic_store_n(&live_mapping_probe, probe, __ATOMIC_RELEASE);
+    }
+
+    inline void note_release(paddr_t address, u64 site) noexcept {
+        const u32 slot =
+            __atomic_fetch_add(&release_trace_next, 1U, __ATOMIC_ACQ_REL) % release_trace_capacity;
+        release_trace[slot].address = address;
+        release_trace[slot].site = site;
+        release_trace[slot].context = __atomic_load_n(&release_context, __ATOMIC_ACQUIRE);
+    }
+
+    // Most recent first, so a page freed twice reports the latest free.
+    [[nodiscard]] inline u64 last_release_site(paddr_t address) noexcept {
+        if (address == 0U)
+            return 0U;
+        const u32 next = __atomic_load_n(&release_trace_next, __ATOMIC_ACQUIRE);
+        for (u32 back = 1U; back <= release_trace_capacity; ++back) {
+            const u32 slot = (next + release_trace_capacity - back) % release_trace_capacity;
+            if (release_trace[slot].address == address)
+                return release_trace[slot].site;
+        }
+        return 0U;
+    }
+
+    [[nodiscard]] inline u64 last_release_context(paddr_t address) noexcept {
+        if (address == 0U)
+            return 0U;
+        const u32 next = __atomic_load_n(&release_trace_next, __ATOMIC_ACQUIRE);
+        for (u32 back = 1U; back <= release_trace_capacity; ++back) {
+            const u32 slot = (next + release_trace_capacity - back) % release_trace_capacity;
+            if (release_trace[slot].address == address)
+                return release_trace[slot].context;
+        }
+        return 0U;
+    }
 
     [[nodiscard]] inline bool physical_page_allocated(paddr_t address) noexcept {
         for (u32 region_index = 0U; region_index < physical_region_count; ++region_index) {
@@ -561,6 +652,34 @@ namespace sys::kernel::memory
     [[nodiscard]] inline error_t release_physical_page(paddr_t address) noexcept {
         if ((address & (page_size - 1U)) != 0U)
             return error_t::invalid_argument;
+        // Recorded before the bitmap changes, so the trace is complete even
+        // for a release that then reports not_found (a double free).
+        const auto site = reinterpret_cast<u64>(__builtin_return_address(0));
+        note_release(address, site);
+        /*
+         * Refuse to free a page a live address space still maps.
+         *
+         * This is a containment barrier, not a diagnostic. Freeing such a
+         * page zeroes it (just below) and hands it to the next allocation,
+         * which silently destroys a running process's code or stack -- the
+         * boot stall's `held=0, word=0` signature. Leaking the page instead
+         * is strictly better than corrupting a live process, and turns a
+         * silent memory-corruption race into a bounded leak plus a named
+         * culprit.
+         *
+         * Deliberately loud: every hit is a real lifecycle defect in the
+         * caller, and the site is the return address, resolvable with
+         * `llvm-addr2line -e ... <site>`.
+         */
+        const auto probe = __atomic_load_n(&live_mapping_probe, __ATOMIC_ACQUIRE);
+        if (probe != nullptr && probe(address)) {
+            pr_err("release of mapped page addr=%llx site=%llx context=%llx -- leaked\n",
+                   static_cast<unsigned long long>(address),
+                   static_cast<unsigned long long>(site),
+                   static_cast<unsigned long long>(
+                       __atomic_load_n(&release_context, __ATOMIC_ACQUIRE)));
+            return error_t::busy;
+        }
         lock_allocator();
         for (u32 region_index = 0U; region_index < physical_region_count; ++region_index) {
             const auto& region = physical_regions[region_index];

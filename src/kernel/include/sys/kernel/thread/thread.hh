@@ -208,9 +208,19 @@ namespace sys::kernel::thread
         value.last_fault = {};
         value.fault_disposition = fault::disposition::pending;
         __atomic_store_n(&value.executing, false, __ATOMIC_RELAXED);
+        /*
+         * Attribute any page this rebuild frees to the space being rebuilt,
+         * so the user-fault diagnostic can tell a space freeing its OWN
+         * pages from one space freeing a page another space still maps.
+         * Set here rather than inside address_space::initialize() because
+         * the arch layer cannot see the page allocator, and the kernel-side
+         * wrapper cannot include it without a circular dependency.
+         */
+        memory::note_release_context(reinterpret_cast<u64>(&value.address_space.native));
         const error_t space_result = value.address_space.initialize(
             static_cast<space_id_t>(id), argument0, &memory::allocate_physical_page,
             &memory::release_physical_page);
+        memory::note_release_context(0U);
         if (space_result != error_t::success)
             return space_result;
         arch::thread::initialize_user(value.context, arch::space::entry(value.address_space.native),

@@ -1900,3 +1900,81 @@ The useful change is that this no longer needs the stall to reproduce.
 `held=0` on a valid l3e detects the condition directly, at the moment it
 bites, and it is worth turning into an assertion rather than a printout
 once the remaining producer is found. -->
+
+<!-- 0146 evidence: detach-before-free, and a permanent barrier against
+freeing a page a live address space still maps. The boot stall is still
+open; what changed is that this class of corruption can no longer happen
+silently.
+
+## Naming the releaser
+
+0145 could detect a page freed while still mapped but not say who freed
+it, and every candidate site had already been audited and found guarded --
+so inspection had run out. release_physical_page() now records the return
+address of each free in a small ring (128 entries; a per-page table would
+be 64 KiB of permanent BSS to answer a question that only ever concerns
+the last few frees), plus a caller-set "context" identifying the address
+space a rebuild is attributed to.
+
+Resolving those addresses with `llvm-addr2line -e out/.../zilch.elf` named
+`release_stack_backing` inlined into `arch::space::initialize`, and
+`thread::clear_user_bundle`. Note the first symbolisation attempt was
+misleading: `release_image_backing`/`release_stack_backing` are inlined
+into several callers, so a return address can land in a symbol that is not
+the real caller. The `context` field exists precisely to disambiguate that
+and it is what showed these frees were NOT attributable to a rebuild.
+
+## Fixed: initialize() and release() freed pages their own tables still mapped
+
+`initialize()` released a space's image and stack pages and only cleared
+block 0's L3 table afterwards. Between those two steps the descriptors
+pointed at pages already handed back to the allocator -- live translations
+into memory anything could be given next. `release()` had the same order.
+
+This is the exact hazard `release_dynamic_tables()` already documents for
+L3 tables ("Clear the L2 entry BEFORE handing the page back... The page is
+only safe to release once nothing can reach it"), just never applied to
+the pages themselves. Both now clear the table first.
+
+## Added: the allocator refuses to free a mapped page
+
+`release_physical_page()` now consults a probe -- installed by the thread
+layer at boot, since the answer needs the thread tables and the allocator
+cannot include them -- asking whether any LIVE address space still maps
+the page. If one does, the free is refused and reported, leaking the page.
+
+That is a containment barrier, not a diagnostic. Freeing such a page
+zeroes it (release_physical_page scrubs on free) and hands it to the next
+allocation, silently destroying a running process's code or stack. A
+bounded leak plus a named culprit is strictly better than that.
+
+It earned its place immediately: armed, it fired on the certification
+profile against the old initialize() ordering above -- sixteen stack pages
+per occurrence -- which is how that ordering bug was found at all. With
+the ordering fixed it fires zero times across certification and 16 release
+boots, so it is precise rather than merely loud.
+
+"Live" deliberately excludes inactive and terminated slots: a slot
+mid-teardown is exactly the one legitimately handing pages back, and
+counting it as live would fail every normal free. The probe walks L3
+descriptors rather than the image_backing/stack_backing arrays, because
+descriptors are what a CPU can still translate through -- a page dropped
+from the bookkeeping but left in a table is the dangerous case, not the
+reverse.
+
+## Where the stall stands
+
+Still open, and the surviving fault signature is now clean enough to be
+worth stating exactly:
+
+    pc=20000000 esr=82000007 ttbr=8...15b000 want=8...15b000
+      l3e=0 inits=1 freedby=0 held=0
+
+ASID consistent, space built exactly ONCE, nothing ever freed that page --
+and the L3 entry for the image entry is simply zero. So this last case is
+not a use-after-free and not ASID aliasing: a thread is executing while
+its space's descriptors are absent. Either the thread became runnable
+before initialize() finished publishing them, or the fault is attributed
+to the wrong thread (current_user_thread[cpu] stale across a switch).
+Distinguishing those two is the next step, and it is a much smaller
+question than any this investigation started with. -->
