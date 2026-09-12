@@ -2046,3 +2046,51 @@ failure_mask=0 transport=PASS` with zero release-of-mapped-page firings and
 a normal ~4s guest time; the wall-clock latency gates alone still trip at
 host load 6 (694251 against a 620000 limit) and pass on a quiet host, which
 is the pattern 0137 documents. -->
+
+<!-- 0148 evidence: the investigation's scaffolding removed, and the whole
+series re-verified end to end.
+
+Finding the boot stall (0141-0147) needed a lot of instrumentation, and
+most of it had no business staying in a shipping kernel: a fourteen-field
+fault line, a 128-entry release-history ring, and helpers that existed
+only to answer questions now answered. Kept vs removed, deliberately:
+
+KEPT, because each pays for itself independently of that investigation:
+  - The page allocator's refusal to free a page a live address space still
+    maps, with its thread-layer probe (maps_physical_page) and the
+    release_context attribution in its report. This is a safety barrier,
+    not a diagnostic -- it converts a silent use-after-free of physical
+    memory into a bounded leak plus a named culprit, and it found the
+    detach-before-free ordering bug the moment it was armed (0146).
+  - installed_root()/expected_root() in the fault line. Two cheap reads --
+    one system register, two BSS loads -- that answer "was this thread
+    running on the tables it was supposed to be?", which is the question
+    that took longest to get evidence for.
+  - initialization_count(). One field, and the field that actually cracked
+    it: a space built more than once means it was rebuilt rather than
+    created, which is what separates "a new process failed to start" from
+    "a live process was rebuilt underneath itself".
+  - esr/spsr/pc/sp/faults in the fault line. A release build previously
+    reported only thread and cpu, which cannot tell an undefined
+    instruction from a translation fault.
+
+REMOVED as pure scaffolding: the release-history ring and its lookups
+(the barrier reports the site at the moment of the free, so a history to
+consult after the fact is redundant), physical_page_allocated(),
+entry_descriptor(), rollover_count(), mapped_word() and
+mapped_physical(), plus the l3e/rollovers/word/phys/held/freedby/byspace/
+self fields. mapped_word() in particular read process memory from the
+fault handler, and while the final version was guarded by a descriptor
+check, an earlier one was not and locked the kernel up (0141) -- not a
+thing to leave lying around once it has served its purpose.
+
+Re-verified after the trim, on the same host:
+  - 24 release boots with a fifo on stdin: 0 stalls, 0 faults, 0 barrier
+    firings
+  - make smoke PASS on all three profiles, twice consecutively
+  - certification [ACCEPTANCE] result=PASS failures=0 failure_mask=0
+    transport=PASS on a quiet host, 2.5s guest time, 0 barrier firings
+  - guest_input_burst.sh BURST=256 ROUNDS=6 PASS
+  - scripted interactive shell: both commands echoed and executed
+
+That closes every issue opened in this series. -->

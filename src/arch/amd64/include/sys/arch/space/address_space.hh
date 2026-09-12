@@ -404,23 +404,11 @@ namespace sys::arch::space
     [[nodiscard]] inline u64 expected_root(const address_space&) noexcept {
         return 0U;
     }
-    [[nodiscard]] inline u64 entry_descriptor(const address_space&) noexcept {
-        return 0U;
-    }
     [[nodiscard]] inline u32 initialization_count(const address_space&) noexcept {
-        return 0U;
-    }
-    [[nodiscard]] inline u64 rollover_count() noexcept {
-        return 0U;
-    }
-    [[nodiscard]] inline u32 mapped_word(const address_space&, vaddr_t) noexcept {
         return 0U;
     }
     [[nodiscard]] inline bool maps_physical_page(const address_space&, paddr_t) noexcept {
         return false;
-    }
-    [[nodiscard]] inline u64 mapped_physical(const address_space&, vaddr_t) noexcept {
-        return 0U;
     }
 
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {

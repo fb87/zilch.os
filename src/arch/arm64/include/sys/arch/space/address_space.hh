@@ -895,17 +895,19 @@ namespace sys::arch::space
     }
 
     /*
-     * Three reads that together say whether a faulting thread was running
-     * on the translation tables it was supposed to be. All are safe from
-     * inside a fault handler: a system register read, and two loads from
-     * the address_space object itself, which lives in kernel BSS and is
-     * never freed. Deliberately NOT a walk through the process's own
-     * memory -- doing that faults the kernel inside the fault handler when
-     * the space is half-built, which is a lockup rather than a diagnostic.
+     * Two reads that together say whether a faulting thread was running on
+     * the translation tables it was supposed to be: TTBR0 as installed,
+     * against the root and ASID the space believes it has. Disagreement
+     * means the CPU had some OTHER space, or the same space under a stale
+     * ASID.
      *
-     * installed_root() vs expected_root() disagreeing means the CPU had
-     * some OTHER space installed. They agreeing while entry_descriptor()
-     * is zero means the tables really do lack the entry mapping.
+     * Both are safe from inside a fault handler -- a system register read
+     * and two loads from the address_space object, which lives in kernel
+     * BSS and is never freed. Deliberately NOT a walk through the faulting
+     * process's own memory: doing that faults the kernel inside the handler
+     * for a fault when the space is half-built, which is a lockup rather
+     * than a diagnostic. An earlier version did exactly that and had to be
+     * removed (see the checklist's 0141 entry).
      */
     [[nodiscard]] inline u64 installed_root() noexcept {
         u64 value = 0U;
@@ -918,46 +920,18 @@ namespace sys::arch::space
         return root | (static_cast<u64>(value.asid) << 48U);
     }
 
-    [[nodiscard]] inline u64 entry_descriptor(const address_space& value) noexcept {
-        const usize_t index = static_cast<usize_t>((user_code >> 12U) & 0x1ffU);
-        return value.l3.entry[index];
-    }
-
-    // See address_space::initializations, and asid::rollovers -- a rollover
-    // in a kernel with 16 spaces and 63 tags should never happen at all, so
-    // a non-zero count at fault time is itself a finding.
+    /*
+     * How many times this space has been built. Anything above one at fault
+     * time means the space was rebuilt rather than freshly created, which is
+     * what distinguishes "a new process failed to start" from "a live
+     * process was rebuilt underneath itself". That distinction is what
+     * identified the boot stall (0147), which is why this one stayed after
+     * the rest of that investigation's instruments were removed.
+     */
     [[nodiscard]] inline u32 initialization_count(const address_space& value) noexcept {
         return value.initializations;
     }
 
-    [[nodiscard]] inline u64 rollover_count() noexcept {
-        return asid::rollovers;
-    }
-
-    /*
-     * The instruction word the DATA side sees at `address`, or 0 if the
-     * space does not currently map it.
-     *
-     * This is the one question the other fields cannot answer: whether the
-     * bytes at the faulting PC are actually wrong in memory, or whether
-     * memory is fine and only the instruction side disagreed. The first is
-     * a publication bug, the second is instruction-cache coherency, and
-     * they need completely different fixes.
-     *
-     * Safe from a fault handler, unlike an earlier attempt that indexed
-     * image_backing[] directly and could dereference a stale or zero entry
-     * mid-rebuild -- faulting the kernel inside the fault handler. The
-     * physical page here is taken from the live L3 descriptor and only
-     * after checking that it is a valid page mapping, so it is by
-     * construction a page this space currently has mapped.
-     */
-    /*
-     * The physical page `address` currently resolves to in this space, or
-     * 0 if it does not resolve. Same validity check as mapped_word(); the
-     * caller uses it to ask the page allocator whether that page is even
-     * still allocated, which is how a page reused underneath a live
-     * mapping gets caught.
-     */
     /*
      * Whether any live L3 descriptor in this space points at `page`. Walks
      * the descriptors rather than image_backing/stack_backing because the
@@ -965,6 +939,9 @@ namespace sys::arch::space
      * dropped from the bookkeeping arrays but left in a table is exactly
      * the dangerous case. Block 0's table is embedded; the rest are
      * on-demand and may be absent.
+     *
+     * Backs the page allocator's refusal to free a page a live space still
+     * maps; see memory::install_live_mapping_probe.
      */
     [[nodiscard]] inline bool maps_physical_page(const address_space& value, paddr_t page) noexcept {
         if (page == 0U)
@@ -987,32 +964,6 @@ namespace sys::arch::space
         return false;
     }
 
-    [[nodiscard]] inline u64 mapped_physical(const address_space& value, vaddr_t address) noexcept {
-        if (address < user_code || address >= user_code + user_block_size)
-            return 0U;
-        const usize_t index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
-        const u64 descriptor = value.l3.entry[index];
-        if ((descriptor & 0x3ULL) != 0x3ULL)
-            return 0U;
-        return descriptor & 0x0000fffffffff000ULL;
-    }
-
-    [[nodiscard]] inline u32 mapped_word(const address_space& value, vaddr_t address) noexcept {
-        if (address < user_code || address >= user_code + user_block_size)
-            return 0U;
-        const usize_t index = static_cast<usize_t>((address >> 12U) & 0x1ffU);
-        const u64 descriptor = value.l3.entry[index];
-        // Bits [1:0] == 0b11 is a valid level-3 page descriptor; anything
-        // else is a fault entry or a malformed one, and must not be
-        // followed.
-        if ((descriptor & 0x3ULL) != 0x3ULL)
-            return 0U;
-        const u64 physical = descriptor & 0x0000fffffffff000ULL;
-        if (physical == 0U)
-            return 0U;
-        const auto offset = static_cast<uintptr_t>(address & (memory::page_size - 1U));
-        return *reinterpret_cast<const volatile u32*>(static_cast<uintptr_t>(physical) + offset);
-    }
     [[nodiscard]] inline constexpr vaddr_t stack_top() noexcept {
         return user_stack_base + user_stack_size;
     }

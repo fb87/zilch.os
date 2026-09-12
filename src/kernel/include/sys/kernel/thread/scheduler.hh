@@ -2094,8 +2094,7 @@ namespace sys::kernel::thread
          * to do that.
          */
         pr_warn("user fault delivered thread=%llu cpu=%u pager=%llu pc=%llx esr=%llx spsr=%llx "
-                "sp=%llx faults=%llu ttbr=%llx want=%llx l3e=%llx inits=%u rollovers=%llu "
-                "word=%x phys=%llx held=%u freedby=%llx byspace=%llx self=%llx\n",
+                "sp=%llx faults=%llu ttbr=%llx want=%llx inits=%u\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
                 static_cast<unsigned long long>(value.owner != nullptr ? value.owner->fault_endpoint
                                                                        : 0U),
@@ -2107,28 +2106,8 @@ namespace sys::kernel::thread
                 static_cast<unsigned long long>(arch::space::installed_root()),
                 static_cast<unsigned long long>(
                     arch::space::expected_root(value.address_space.native)),
-                static_cast<unsigned long long>(
-                    arch::space::entry_descriptor(value.address_space.native)),
                 static_cast<unsigned>(
-                    arch::space::initialization_count(value.address_space.native)),
-                static_cast<unsigned long long>(arch::space::rollover_count()),
-                static_cast<unsigned>(arch::space::mapped_word(value.address_space.native,
-                                                               frame.instruction_pointer)),
-                static_cast<unsigned long long>(arch::space::mapped_physical(
-                    value.address_space.native, frame.instruction_pointer)),
-                static_cast<unsigned>(memory::physical_page_allocated(
-                    static_cast<paddr_t>(arch::space::mapped_physical(
-                        value.address_space.native, frame.instruction_pointer)))
-                                          ? 1U
-                                          : 0U),
-                static_cast<unsigned long long>(memory::last_release_site(
-                    static_cast<paddr_t>(arch::space::mapped_physical(
-                        value.address_space.native, frame.instruction_pointer)))),
-                static_cast<unsigned long long>(memory::last_release_context(
-                    static_cast<paddr_t>(arch::space::mapped_physical(
-                        value.address_space.native, frame.instruction_pointer)))),
-                static_cast<unsigned long long>(
-                    reinterpret_cast<uintptr_t>(&value.address_space.native)));
+                    arch::space::initialization_count(value.address_space.native)));
 #endif
         if (deliver_fault_ipc(value, frame, syndrome, delivered_address, fault_kind))
             return true;
