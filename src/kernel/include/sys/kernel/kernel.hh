@@ -8,6 +8,7 @@
 #include <sys/kernel/ipc.hh>
 #include <sys/kernel/printk.hh>
 #include <sys/kernel/scheduler.hh>
+#include <sys/kernel/smmu.hh>
 #include <sys/kernel/thread.hh>
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/platform.hh>
@@ -123,6 +124,9 @@ namespace sys::kernel
                 pr_info("memory firmware=%llx parse=%d\n",
                         static_cast<unsigned long long>(memory::firmware_data),
                         static_cast<int>(memory::firmware_inventory_result));
+                // Discovery only; see smmu.hh for why translation stays off
+                // on this platform.
+                smmu::report(memory::discovered_smmu);
             }
             if (user_result != error_t::success) {
                 pr_err("user object initialization failed=%d\n", static_cast<int>(user_result));

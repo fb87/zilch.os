@@ -67,6 +67,12 @@ namespace sys::kernel::memory
         platform_fallback = 2U,
     };
     inline inventory_source physical_inventory_source{inventory_source::firmware_register};
+    /*
+     * The system MMU's register window as discovered from the device tree,
+     * retained past the parse because the inventory itself is local to it.
+     * Zero base means the machine has none. Consumed by smmu::report().
+     */
+    inline boot::fdt::range discovered_smmu{};
 
     struct physical_region {
         paddr_t base{};
@@ -323,6 +329,10 @@ namespace sys::kernel::memory
             }
         }
         firmware_inventory_result = parse_result;
+        // Retained regardless of the memory-range outcome: a machine whose
+        // memory inventory came from the platform fallback can still have
+        // had its SMMU described by the blob that was parsed.
+        discovered_smmu = inventory.smmu;
         if (parse_result != error_t::success) {
             inventory.memory_count = 0U;
             inventory.reserved_count = 0U;

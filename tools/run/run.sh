@@ -62,7 +62,17 @@ case "$machine" in
             blockdev="1"
         fi
         trap 'rm -f "$dtb"; [ -n "${BLOCK_IMAGE:-}" ] || rm -f "$disk"' EXIT HUP INT TERM
-        qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on,dumpdtb=$dtb" \
+        # ZILCH_SMMU=1 adds an SMMUv3 to the machine. Off by default because
+        # QEMU only instantiates one on request, and because nothing in this
+        # system sits behind it -- on the virt board the SMMU fronts the PCIe
+        # root complex, and this kernel's devices are virtio-mmio. It exists so
+        # the kernel's discovery path (smmu.hh, DEV-006) can be exercised
+        # against a real device rather than only against its absence. It must
+        # be part of the dumpdtb machine too, or the blob the kernel parses
+        # would not describe the SMMU the running machine has.
+        smmu_opt=""
+        [ "${ZILCH_SMMU:-}" = "1" ] && smmu_opt=",iommu=smmuv3"
+        qemu-system-aarch64 -machine "virt,gic-version=3,virtualization=on${smmu_opt},dumpdtb=$dtb" \
             -cpu cortex-a57 -smp "$cpus" -m "${memory_mb}M" -display none
         # force-legacy=false selects the modern (VIRTIO 1.x, MMIO version 2)
         # transport. QEMU's virt board otherwise presents these as legacy
@@ -74,7 +84,7 @@ case "$machine" in
             set -- -drive "if=none,file=$disk,format=raw,id=blk0" \
                 -device virtio-blk-device,drive=blk0 "$@"
         fi
-        run_arm64_qemu -machine virt,gic-version=3,virtualization=on -cpu cortex-a57 \
+        run_arm64_qemu -machine "virt,gic-version=3,virtualization=on${smmu_opt}" -cpu cortex-a57 \
             -smp "$cpus" -m "${memory_mb}M" -nographic -no-reboot -kernel "$kernel" \
             -global virtio-mmio.force-legacy=false \
             -device "loader,file=$dtb,addr=0x48000000,force-raw=on" "$@"

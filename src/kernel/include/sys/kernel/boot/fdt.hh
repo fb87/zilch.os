@@ -24,6 +24,15 @@ namespace sys::kernel::boot::fdt
         u32 reserved_count{};
         paddr_t blob_base{};
         psize_t blob_size{};
+        /*
+         * The system MMU, discovered rather than assumed (DEV-006). Unlike
+         * every other device in this system, an SMMU cannot be delegated to
+         * a userspace driver: it is what enforces isolation between the
+         * drivers, so the kernel has to own it. Zero base means the machine
+         * has none, which is the default for this platform -- QEMU's virt
+         * only instantiates one with `iommu=smmuv3`.
+         */
+        range smmu{};
     };
 
     [[nodiscard]] inline u32 be32(const void* pointer) noexcept {
@@ -115,6 +124,22 @@ namespace sys::kernel::boot::fdt
         bool memory_node[16]{};
         bool reserved_container[16]{};
         bool reserved_child[16]{};
+        /*
+         * Set by a `compatible` containing "arm,smmu-v3". Matched on
+         * compatible rather than node name because the name carries the
+         * base address and so differs between machines, whereas the binding
+         * string does not.
+         *
+         * The node's `reg` is captured provisionally alongside and committed
+         * at end_node, NOT consumed directly when compatible matches:
+         * property order inside a node is not guaranteed, and a `reg` that
+         * precedes `compatible` would otherwise be missed -- which is
+         * exactly what happened on the first attempt, reporting a machine
+         * that does have an SMMU as having none.
+         */
+        bool smmu_node[16]{};
+        paddr_t node_reg_base[16]{};
+        psize_t node_reg_size[16]{};
 
         while (cursor + 4U <= structure_end) {
             const u32 token = be32(cursor);
@@ -133,11 +158,21 @@ namespace sys::kernel::boot::fdt
                 memory_node[depth] = starts_with(name, "memory@");
                 reserved_container[depth] = depth == 1U && equal(name, "reserved-memory");
                 reserved_child[depth] = depth > 1U && reserved_container[depth - 1U];
+                smmu_node[depth] = false;
+                node_reg_base[depth] = 0U;
+                node_reg_size[depth] = 0U;
                 ++depth;
             } else if (token == end_node) {
                 if (depth == 0U)
                     return error_t::invalid_argument;
                 --depth;
+                // Commit here, where both halves are known regardless of the
+                // order they appeared in. First match wins, so a machine
+                // with several SMMUs reports the first described.
+                if (smmu_node[depth] && output.smmu.base == 0U && node_reg_base[depth] != 0U) {
+                    output.smmu.base = node_reg_base[depth];
+                    output.smmu.size = node_reg_size[depth];
+                }
             } else if (token == property) {
                 if (cursor + 8U > structure_end)
                     return error_t::invalid_argument;
@@ -158,9 +193,34 @@ namespace sys::kernel::boot::fdt
                 else if (depth != 0U && equal(name, "device_type") && length >= 7U &&
                          equal(reinterpret_cast<const char*>(value), "memory"))
                     memory_node[depth - 1U] = true;
-                else if (depth != 0U && equal(name, "reg")) {
+                else if (depth != 0U && equal(name, "compatible")) {
+                    /*
+                     * `compatible` is a list of NUL-separated strings, so
+                     * scan every entry rather than only the first -- a node
+                     * may legitimately name a more specific binding before
+                     * the generic one.
+                     */
+                    for (u32 offset = 0U; offset < length;) {
+                        const char* entry = reinterpret_cast<const char*>(value + offset);
+                        if (equal(entry, "arm,smmu-v3"))
+                            smmu_node[depth - 1U] = true;
+                        u32 span = 0U;
+                        while (offset + span < length && entry[span] != '\0')
+                            ++span;
+                        offset += span + 1U;
+                    }
+                } else if (depth != 0U && equal(name, "reg")) {
                     const bool is_memory = memory_node[depth - 1U];
                     const bool is_reserved = reserved_child[depth - 1U];
+                    // Provisional: committed at end_node once this node's
+                    // `compatible` has also been seen, in either order.
+                    if (root_address_cells != 0U && root_address_cells <= 2U &&
+                        root_size_cells != 0U && root_size_cells <= 2U &&
+                        length >= (root_address_cells + root_size_cells) * 4U) {
+                        node_reg_base[depth - 1U] = read_cells(value, root_address_cells);
+                        node_reg_size[depth - 1U] =
+                            read_cells(value + root_address_cells * 4U, root_size_cells);
+                    }
                     if (!is_memory && !is_reserved)
                         continue;
                     if (root_address_cells == 0U || root_address_cells > 2U ||

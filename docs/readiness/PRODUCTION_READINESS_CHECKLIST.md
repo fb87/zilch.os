@@ -468,8 +468,8 @@ Every completed requirement must link to:
 
 ## 9.2 SMMU
 
-- [ ] **DEV-006** ARM SMMU discovery implemented.
-- [ ] **DEV-007** Stream ownership database implemented.
+- [x] **DEV-006** ARM SMMU discovery implemented. The device tree is searched for a node whose `compatible` names `arm,smmu-v3` and that node's `reg` window is retained (`boot::fdt::inventory::smmu`, `memory::discovered_smmu`); the kernel then reads IDR0/IDR1/IDR5 out of it and reports what the implementation supports. Matched on the binding string rather than the node name, since the name carries the base address and differs between machines. Verified both ways on the machine `tools/run/run.sh` boots: without an SMMU it reports `smmu: absent (no arm,smmu-v3 node)`, and with `ZILCH_SMMU=1` (which adds `iommu=smmuv3` to both the dumpdtb and run invocations, so the blob the kernel parses describes the machine it is running on) it reports `arm,smmu-v3 at 9050000 idr0=d44101b idr1=2730010 idr5=74 stage1=1 stage2=1 sidbits=16 translation=off` — S1P and S2P both set and SIDSIZE=16, which is exactly QEMU's SMMUv3. Identification registers only; no write touches the device. The SMMU is deliberately kernel-owned rather than delegated to a userspace driver like every other device here, because it is what makes that delegation safe: a driver holding it could remove its own containment. `translation=off` is reported honestly — see DEV-007 for why the translation path is not reachable on this platform.
+- [ ] **DEV-007** Stream ownership database implemented. Blocked on a prerequisite this platform does not provide, and the blocker is shared by DEV-008 through DEV-018 so it is recorded once here. On QEMU's `virt` machine the SMMUv3 fronts the PCIe root complex and nothing else: the device tree gives `iommu-map` to `pcie`, and not one of the thirty-two `virtio_mmio@...` nodes carries an `iommus` property — verified by dumping the DTB of the very machine `tools/run/run.sh` boots. This kernel's only real device is virtio-mmio, which bypasses the SMMU entirely. A stream table, per-domain translation context or invalidation path built now would translate for no device, and every assertion about it would be vacuous — which the release evidence section already forbids ("no mandatory feature relies on a model, mock, fixture, or hard-coded resource pool"). Reaching the translation path needs a DMA-capable device behind the SMMU, which on this machine means PCIe, which means a root-complex driver: ECAM enumeration, BAR assignment, and MSI through the ITS. That subsystem does not exist here and is not itself listed as a requirement. DEV-006 (discovery) is done because it is the part that can be exercised against the real device.
 - [ ] **DEV-008** Per-domain translation context implemented.
 - [ ] **DEV-009** DMA mappings tied to VM capabilities.
 - [ ] **DEV-010** SMMU invalidation and synchronization implemented.
@@ -479,7 +479,7 @@ Every completed requirement must link to:
 
 ## 9.3 Production assignment tests
 
-- [ ] **DEV-014** Assigned device cannot DMA into kernel memory.
+- [ ] **DEV-014** Assigned device cannot DMA into kernel memory. Requires a DMA-capable device behind the SMMU to assert against; see DEV-007 for the platform blocker shared by this whole group.
 - [ ] **DEV-015** Assigned device cannot DMA into another VM.
 - [ ] **DEV-016** Device revoke stops DMA before teardown completes.
 - [ ] **DEV-017** Device reset prevents state leakage to the next owner.
@@ -2285,3 +2285,68 @@ Verified: make smoke PASS on all three profiles with `assign-rollback ok`
 gated; guest profile 5/5 with zero barrier firings; certification
 [ACCEPTANCE] result=PASS failures=0 failure_mask=0 transport=PASS with
 zero firings; 12 release boots, 0 stalls. -->
+
+<!-- 0152 evidence: DEV-006 closed. SMMU discovery, and why the rest of
+section 9.2 stops there rather than being built unexercised.
+
+## Discovery
+
+The device tree is searched for a node whose `compatible` names
+`arm,smmu-v3`, its `reg` window retained past the parse, and IDR0/IDR1/IDR5
+read out of it. Matched on the binding string rather than the node name --
+the name carries the base address and so differs between machines.
+
+Verified both ways on the machine tools/run/run.sh boots:
+
+    (default)        smmu: absent (no arm,smmu-v3 node)
+    ZILCH_SMMU=1     smmu: arm,smmu-v3 at 9050000 idr0=d44101b idr1=2730010
+                           idr5=74 stage1=1 stage2=1 sidbits=16
+                           translation=off
+
+S1P and S2P both set, SIDSIZE=16 -- exactly QEMU's SMMUv3. Identification
+registers only; no write touches the device. ZILCH_SMMU=1 adds
+iommu=smmuv3 to the dumpdtb invocation as well as the run, so the blob the
+kernel parses describes the machine it is actually running on; getting that
+wrong would have the kernel discover a device the machine does not have.
+
+One bug worth recording, because the first version passed a machine that
+HAS an SMMU as having none: `reg` was consumed only if `compatible` had
+already been seen. Property order within a DTB node is not guaranteed. The
+reg is now captured provisionally per depth and committed at end_node, when
+both halves are known in either order.
+
+The SMMU is kernel-owned rather than delegated, unlike every other device
+in this system. It is what makes that delegation safe -- it is what stops
+an assigned device's DMA from reaching memory its owner was never given --
+so a userspace driver holding it could remove its own containment.
+
+## Why 9.2 stops here
+
+Not effort. On QEMU's virt machine the SMMUv3 fronts the PCIe root complex
+and nothing else: `iommu-map` belongs to pcie@10000000, and not one of the
+thirty-two virtio_mmio@... nodes carries an `iommus` property. Confirmed by
+dumping the DTB of the machine this project boots. This kernel's only real
+device is virtio-mmio, which bypasses the SMMU entirely.
+
+So a stream table, per-domain translation context, invalidation path or
+fault handler written now would translate for no device, and every
+assertion about it would be vacuous. The release evidence section of this
+very checklist already rules that out -- "no mandatory feature relies on a
+model, mock, fixture, or hard-coded resource pool" -- and building it
+anyway would convert twelve open items into twelve items that look closed
+and prove nothing, which is worse than leaving them open.
+
+Reaching the translation path needs a DMA-capable device behind the SMMU.
+On this machine that means PCIe, which means a root-complex driver: ECAM
+enumeration, BAR assignment, MSI through the ITS. That subsystem does not
+exist in this kernel and is not itself listed as a requirement anywhere in
+this document -- which is a gap in the requirements, not just in the code,
+and is worth fixing before section 9.2 is attempted again.
+
+DEV-006 is closed because discovery is the part that can be exercised
+against the real device. DEV-007 carries the shared blocker; DEV-008..018
+point at it.
+
+Verified: make smoke PASS on all three profiles; certification
+failures=0 failure_mask=0 transport=PASS with zero barrier firings; both
+SMMU-present and SMMU-absent boots reach `graph ready`. -->
