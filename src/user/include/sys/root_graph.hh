@@ -340,8 +340,11 @@ namespace sys::root_graph
     // Both must run exactly once: device_frame_create()'s and
     // interrupt_create()'s exclusivity checks reject a second live
     // frame/IRQ capability for the same physical address/IRQ number.
-    // serial-driver is not restart-covered (see restart_role()'s comment),
-    // so there is no repeatable re-mint counterpart to design for here.
+    // serial-driver IS restart-covered now (restart_service(), USR-024), and
+    // this function is exactly the half that must not be replayed: its
+    // repeatable counterpart is mint_serial_resources(), which hands root's
+    // originals to a fresh task. Keeping create one-shot is what lets that
+    // work -- root's device frame and IRQ capabilities outlive the driver.
     [[nodiscard]] inline bool create_serial_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
         if (control(abi::v1::control_operation::device_frame_create,
@@ -554,6 +557,90 @@ namespace sys::root_graph
      */
     enum class block_check { absent, verified, failed };
 
+    /*
+     * Restart coverage for the three services that are NOT control-plane
+     * roles -- serial-driver, the block driver and VFS. restart_role()
+     * handles the fixed five-slot roles; these have their own selectors and
+     * their own extra capabilities, so they need their own replay.
+     *
+     * USR-024 recorded the obstacle as "every holder of a capability into a
+     * restarted driver would need a mid-flight re-mint". That turned out to
+     * be wrong, for the reason restart_role() already documents about its
+     * own roles: a client holds a capability to the service ENDPOINT
+     * OBJECT, which root created and owns, and which survives the driver
+     * task's destruction untouched. Nothing on the client side needs
+     * touching. Only the fresh child needs its own capabilities minted back
+     * into an empty cspace, and root holds every original.
+     *
+     * What genuinely blocked it was in the kernel, not here: an interrupt
+     * whose owner died mid-delivery kept `active` set with nobody left to
+     * acknowledge it, so interrupt::bind() refused forever and the driver
+     * could never take its line back. See that function's takeover path.
+     *
+     * `create` is deliberately absent from this struct. The create half
+     * (device_frame_create, interrupt_create) is one-shot by design --
+     * both reject a second live object for the same physical page or IRQ --
+     * so a restart must replay ONLY the mints. Root's originals are what
+     * make that possible.
+     */
+    struct service_restart final {
+        word_t role{};
+        word_t selector{};
+        capability_id_t endpoint{};
+        word_t cpu{};
+        word_t ready_badge{};
+        bool (*remint)(){};
+    };
+
+    [[nodiscard]] inline bool restart_service(const service_restart& service) noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        if (control(abi::v1::control_operation::process_destroy, service.selector,
+                    service.selector + 1U, service.selector + 2U) != success)
+            return false;
+        if (control(abi::v1::control_operation::process_create, service.cpu, service.role,
+                    service.selector, service.selector + 1U, service.selector + 2U) != success)
+            return false;
+        const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
+                                  static_cast<word_t>(abi::v1::CapabilityRight::write);
+        if (control(abi::v1::control_operation::capability_mint, service.selector + 1U,
+                    service_endpoint, service.endpoint, read_write) != success)
+            return false;
+        return service.remint == nullptr || service.remint();
+    }
+
+    /*
+     * Waits for a restarted service to report ready again, accumulating
+     * into the caller's badge set so a concurrent readiness signal from
+     * anything else is not dropped on the floor.
+     *
+     * Bounded, and that is the point: a restarted service that never comes
+     * up must be reportable rather than leave root blocked in an ipc_call
+     * against an endpoint nobody is serving.
+     *
+     * Deliberately does NOT interleave drain_fault_reports() the way root's
+     * own readiness loop does. Every caller runs after
+     * spawn_supervision_thread(), and that thread owns fault draining
+     * exclusively from then on -- two threads receiving the same fault and
+     * independently restarting the same role is the hazard the supervision
+     * thread exists to remove. So this polls without yielding, which is
+     * acceptable for what it is: a one-shot wait, bounded, in a
+     * CONFIG_FAULT_INJECTION build, while the service it is waiting for
+     * comes up on another CPU.
+     */
+    [[nodiscard]] inline bool await_service_ready(word_t badge, word_t& ready) noexcept {
+        constexpr word_t attempts = 100000U;
+        for (word_t attempt = 0U; attempt < attempts; ++attempt) {
+            word_t badges = 0U;
+            if (control_result1(badges, abi::v1::control_operation::notification_poll,
+                                root_notification) != static_cast<word_t>(error_t::success))
+                return false;
+            ready |= badges;
+            if ((ready & badge) != 0U)
+                return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] inline block_check verify_block_service() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
         const auto capacity = ipc_call(block_service_endpoint,
@@ -591,6 +678,74 @@ namespace sys::root_graph
                 return block_check::failed;
         return block_check::verified;
     }
+
+    /*
+     * The three non-control-plane services, described for restart_service().
+     * CPUs match their original process_create in supervise(), so a
+     * restarted service lands where the pinning table expects it.
+     */
+    inline constexpr service_restart serial_service_restart{
+        serial_role, serial_selector, serial_service_endpoint, 2U,
+        abi::v1::serial_service_ready_badge, &mint_serial_resources};
+    inline constexpr service_restart block_service_restart{
+        block_role, block_selector, block_service_endpoint, 3U,
+        abi::v1::block_service_ready_badge, &mint_block_resources};
+    inline constexpr service_restart vfs_service_restart{
+        vfs_role, vfs_selector, vfs_service_endpoint, 0U, abi::v1::vfs_service_ready_badge,
+        &mint_vfs_resources};
+
+#if CONFIG_FAULT_INJECTION
+    /*
+     * Proves restart coverage for a non-control-plane service the only way
+     * that means anything: destroy the block driver, bring it back, and
+     * then re-run the SAME write/read sector round trip against it from
+     * root. A restart that leaves the service unusable would pass any
+     * weaker check.
+     *
+     * The block driver deliberately, rather than serial-driver: it is not
+     * the path root reports through, so a failure here is observable
+     * instead of silencing the console it would need to report on. Serial
+     * and VFS share restart_service() and their descriptors above, so the
+     * mechanism is the same one; only this profile's proof is narrower.
+     */
+    [[nodiscard]] inline bool verify_block_restart(word_t& ready, block_check before) noexcept {
+        if (!restart_service(block_service_restart))
+            return false;
+        if (!await_service_ready(abi::v1::block_service_ready_badge, ready))
+            return false;
+        /*
+         * Must match what the SAME check reported before the restart, not
+         * merely "not failed". On a machine with no disk attached the
+         * honest answer is absent both times, and accepting absent
+         * unconditionally would let a restart that broke a working device
+         * pass on the profile that actually has one.
+         */
+        return verify_block_service() == before;
+    }
+
+    /*
+     * Serial-driver restart, which cannot be reported the way the others
+     * are: root's own report() goes THROUGH this driver, so a failed
+     * restart leaves nothing able to say so.
+     *
+     * Handled by making absence the signal. Root restarts the driver and
+     * then writes a marker through it; if the restart worked the marker
+     * appears, and if it did not the boot log simply stops, which
+     * tools/verification/smoke.sh already treats as a failure via its
+     * missing-marker check. That is a real test rather than a vacuous one,
+     * and it is the only shape available to a service that owns the
+     * reporting path it would need to report on.
+     *
+     * Console-server keeps working across this untouched: its capability
+     * names serial-driver's endpoint OBJECT, which root owns and which
+     * outlives the task, so nothing on the client side is re-minted.
+     */
+    [[nodiscard]] inline bool verify_serial_restart(word_t& ready) noexcept {
+        if (!restart_service(serial_service_restart))
+            return false;
+        return await_service_ready(abi::v1::serial_service_ready_badge, ready);
+    }
+#endif
 
     [[nodiscard]] inline bool mint_console_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
@@ -1659,6 +1814,11 @@ namespace sys::root_graph
         word_t ready = 0U;
         bool console_verified = false;
         bool supervisor_spawned = false;
+#if CONFIG_FAULT_INJECTION
+        // What verify_block_service() reported before any restart, so
+        // verify_block_restart() can require the same answer afterwards.
+        block_check observed_block_state = block_check::failed;
+#endif
         /* Only the non-guest build launches a shell (see the spawn below,
          * which is compiled out when a guest owns the console), so this is
          * genuinely unused there rather than merely appearing so.
@@ -1799,6 +1959,11 @@ namespace sys::root_graph
                      */
                     const block_check block_state =
                         map_block_buffer() ? verify_block_service() : block_check::failed;
+#if CONFIG_FAULT_INJECTION
+                    // Retained for verify_block_restart(), which asserts the
+                    // restarted driver reports the SAME thing this did.
+                    observed_block_state = block_state;
+#endif
                     (void)console::write(
                         endpoint_base + console_index,
                         block_state == block_check::verified ? "block-service verified\n"
@@ -1834,6 +1999,20 @@ namespace sys::root_graph
                     report("graph ready\n");
 #if CONFIG_FAULT_INJECTION
                     report(verify_restart_on_fault(state) ? "restart ok\n" : "restart FAILED\n");
+                    // Restart coverage for the services outside the fixed
+                    // control-plane roles -- see verify_block_restart().
+                    report(verify_block_restart(ready, observed_block_state)
+                               ? "block-restart ok\n"
+                               : "block-restart FAILED\n");
+                    /*
+                     * Serial last, and its marker written AFTER the restart
+                     * deliberately: root reports through this driver, so the
+                     * marker appearing at all is the proof. A failed restart
+                     * ends the log here, which smoke's missing-marker check
+                     * catches -- see verify_serial_restart().
+                     */
+                    const bool serial_restarted = verify_serial_restart(ready);
+                    report(serial_restarted ? "serial-restart ok\n" : "serial-restart FAILED\n");
 #endif
                 }
 #if CONFIG_GUEST_EMBEDDED_IMAGE

@@ -176,8 +176,33 @@ namespace sys::kernel::interrupt
             return error_t::invalid_argument;
         platform::interrupt::mask(value.irq);
         __atomic_store_n(&value.masked, true, __ATOMIC_RELEASE);
-        if (__atomic_load_n(&value.active, __ATOMIC_ACQUIRE))
-            return error_t::busy;
+        /*
+         * An outstanding delivery normally means the current owner still
+         * owes an acknowledge, and rebinding under it would strand that --
+         * so refuse.
+         *
+         * Unless the owner is GONE. If the notification this line was bound
+         * to no longer resolves, the task holding it was destroyed with a
+         * delivery in flight, and nothing will ever acknowledge it: `active`
+         * stays set for the remaining uptime and every future bind fails
+         * with busy. That made a driver unrestartable precisely when it
+         * most needed restarting -- after crashing while servicing its own
+         * interrupt -- and was the real obstacle behind USR-024, rather
+         * than the client re-minting that item assumed (clients hold
+         * capabilities to the endpoint OBJECT, which root owns and which
+         * outlives the task).
+         *
+         * Taking the line over deactivates it at the controller first, so
+         * the fresh owner starts from a clean GIC state rather than
+         * inheriting a half-serviced one.
+         */
+        if (__atomic_load_n(&value.active, __ATOMIC_ACQUIRE)) {
+            object::header_t* previous = object::resolve(value.notification);
+            if (previous != nullptr && previous->type == object::type_t::notification)
+                return error_t::busy;
+            platform::interrupt::deactivate(value.irq);
+            __atomic_store_n(&value.active, false, __ATOMIC_RELEASE);
+        }
         value.notification = target;
         __atomic_store_n(&value.stormed, false, __ATOMIC_RELEASE);
         __atomic_store_n(&value.window_count, 0U, __ATOMIC_RELEASE);

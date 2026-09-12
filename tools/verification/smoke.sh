@@ -56,6 +56,8 @@ failure_markers=(
     "guest: load failed"
     "virtio: sector round trip FAIL"
     "restart FAILED"
+    "block-restart FAILED"
+    "serial-restart FAILED"
     "shell FAILED"
     "sh: command not found"
 )
@@ -335,9 +337,16 @@ run_shell_profile
 # Also the only profile with CONFIG_FAULT_INJECTION, so it is where
 # restart-on-fault is proven: root crashes the device role and confirms the
 # supervision thread restarted it into a role that answers health checks.
+# Also the only profile with restart coverage for the two services outside
+# the fixed control-plane roles (USR-024). `serial-restart ok` is written
+# THROUGH the driver that was just restarted, so the marker appearing is
+# itself the proof; a failed serial restart ends the log and is caught here
+# as a missing marker rather than by a FAILED line it could not print.
 run_profile "guest (vPL011 hosting + restart)" "configs/guest_defconfig" development \
     "graph ready" \
     "restart ok" \
+    "block-restart ok" \
+    "serial-restart ok" \
     "guest: loaded, serving" \
     "guest alive via vpl011"
 

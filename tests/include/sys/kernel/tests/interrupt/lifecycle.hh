@@ -111,6 +111,32 @@ namespace sys::kernel::tests::interrupt
                 irq, storm_at + kernel::interrupt::storm_window_ticks) ||
             kernel::interrupt::acknowledge(irq) != error_t::success)
             return error_t::invalid_argument;
+
+        /*
+         * Orphaned-line takeover, which is what makes a driver restartable
+         * after it crashes while servicing its own interrupt.
+         *
+         * With a delivery outstanding, bind() must REFUSE while the owner is
+         * still live -- rebinding under it would strand the acknowledge it
+         * owes. But once that owner is gone, nothing will ever acknowledge,
+         * so `active` would stay set and every future bind would fail with
+         * busy for the remaining uptime. A destroyed notification is how
+         * "the owner is gone" is detectable, so that is the discriminator.
+         */
+        if (!kernel::interrupt::record_delivery(
+                irq, storm_at + 3U * kernel::interrupt::storm_window_ticks))
+            return error_t::invalid_argument;
+        if (kernel::interrupt::bind(irq, object::reference(
+                                             bootstrap::root_notification.object)) != error_t::busy)
+            return error_t::invalid_argument;
+        // The owner's notification no longer resolves: its task was torn
+        // down with the delivery in flight.
+        irq.notification = {};
+        if (kernel::interrupt::bind(irq, object::reference(
+                                             bootstrap::root_notification.object)) !=
+                error_t::success ||
+            irq.active || irq.masked)
+            return error_t::invalid_argument;
         const capability::derivation_id_t derivation =
             capability::slot_at(root.cspace, 30U).derivation;
         const u32 revoked = capability::revoke_descendants(derivation);
@@ -130,6 +156,7 @@ namespace sys::kernel::tests::interrupt
         pr_info("[TEST] name=irq_ack_deactivate result=PASS edge=2 level=1\n");
         pr_info("[TEST] name=irq_storm_containment result=PASS threshold=64 masked=1\n");
         pr_info("[TEST] name=irq_storm_recovery result=PASS window=100 rearmed=1\n");
+        pr_info("[TEST] name=irq_orphan_takeover result=PASS live=busy orphaned=rebound\n");
         return error_t::success;
     }
 } // namespace sys::kernel::tests::interrupt
