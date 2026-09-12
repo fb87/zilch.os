@@ -463,8 +463,8 @@ Every completed requirement must link to:
 - [x] **DEV-001** Device ownership represented by capabilities. A device is owned by holding capabilities to it and by nothing else: the MMIO page is a `frame` object with `device=true`, created only by a root task (`device_frame_create`) and exclusivity-checked so only one live device frame may exist per physical page; the line is an `interrupt` object created only by a root task (`interrupt_create`) and registered against a single IRQ number. Neither is reachable by a task that does not hold the capability — `map_frame` and `interrupt_bind` both resolve through the holder's cspace with the required rights — and both are delegated by `capability_mint` and withdrawn by `capability_revoke`, with revocation now severing the device's live effects as well as its name (DEV-003). There is no ambient device registry a task can address by number instead.
 - [x] **DEV-002** MMIO regions delegated safely. Delegation was already sound: an MMIO page is reachable only through a root-created `device_frame_create` capability, exclusivity-checked so two callers cannot both be granted the same physical page, minted onward with explicit rights, and mapped only with device memory attributes that `memory::valid_attributes()` enforces for any frame carrying the device flag. Revocation was the hole, exactly as for IRQs: clearing the cspace slot left the page still MAPPED in the old owner's address space, so it could no longer name the device but could still drive it. `memory::release_frame_mappings()` now drops every mapping of the frame across whatever spaces hold them — the inverse of `unmap_all()`, which drops every mapping of one space — driven by the same post-revoke hook as DEV-003. Restricted to device frames deliberately: an ordinary shared frame (VFS's client buffer, the block driver's payload page) legitimately has several holders, and revoking one holder's capability must not unmap it from the others, whereas a device frame is exclusivity-checked to a single live owner so reclaiming it means precisely this.
 - [x] **DEV-003** IRQs delegated and revoked safely. Delegation was already real (root-gated `interrupt_create`, `capability_mint` into the owner, `interrupt_bind` to the owner's own notification, `interrupt_ack` after servicing), and `irq_ownership_delegation` has covered it. Revocation was NOT: `revoke_descendants()` cleared the cspace slot and nothing else, so the interrupt object stayed bound to the old owner's notification and stayed unmasked — the device kept firing into a driver that no longer held a capability to it. The name was revoked; the authority was not. Capability revocation now runs a hook (`interrupt::on_capability_revoked`) that masks the line at the controller, drops any in-flight delivery, and unbinds it, so re-delegation starts from a clean state via `bind()`. The hook is invoked after every cspace lock is released, because the device teardown it performs takes locks that rank below them and would otherwise invert the order; `cspace.hh` deliberately does not know which object types own hardware, so the type filter lives in `interrupt.hh`. `irq_ownership_delegation` now asserts the severed state (masked, not active, unbound) rather than only that the capability lookup fails.
-- [ ] **DEV-004** Device reset requirement documented per device.
-- [ ] **DEV-005** Assignment rollback implemented.
+- [-] **DEV-004** Device reset requirement documented per device. Documented, not implemented, and the distinction is the point of this entry. Two devices are assignable today. PL011 UART (`serial-driver`): reset requirement is to mask RX at IMSC, drain the RX FIFO, and clear pending interrupts at ICR before a new owner binds; the kernel now performs the interrupt half on revocation (`interrupt::release_ownership()` masks the line, drops any in-flight delivery and unbinds), and the FIFO half is done by the incoming owner's `configure_uart()`/`drain_rx()` rather than by the outgoing one. virtio-mmio block (`virtio-driver`): reset requirement is a write of 0 to `Status`, which per the virtio spec resets the device and abandons the virtqueue, before a new owner re-negotiates; this is NOT performed on revocation — a restarted driver currently re-initialises the transport from whatever state the previous owner left, which works because it rewrites `Status` during its own bring-up, but is not the same as the host guaranteeing a clean device. Neither device is reset by the kernel on reassignment, so state leakage between owners is prevented only by each incoming driver re-initialising its device. That is what DEV-017 asks to be proven and why it stays open.
+- [x] **DEV-005** Assignment rollback implemented. Provisioning a service creates the task first and then mints its capabilities, and a failure anywhere after the create used to simply return, leaving the half-provisioned task alive: a stranded thread slot, cspace and memory resource, and — worse — holding whatever device capabilities did land, so the device looked busy to the next assignment attempt while nothing was driving it. `restart_service()` now destroys the fresh task on any provisioning failure. Rollback is one operation rather than an undo list, because destroying the task frees its whole cspace, and since revocation severs device authority as well as naming (DEV-001..003) the frame and line come back genuinely reclaimable rather than merely unnamed. Two supporting corrections fell out of testing it: the opening `process_destroy` is now best-effort, since it establishes a precondition ("nothing at these selectors") rather than performing an operation whose failure matters — treating an already-free slot as an error made recovery impossible exactly after a rollback; and every path that frees a space's pages now identifies itself to the allocator barrier (`release_space_pages()`, and the `clone()` call in fork), without which a space handing back its OWN pages was mistaken for one stealing them from a live holder and 23 pages leaked per fork-bearing boot. Gated by `assign-rollback ok`, which induces a real partial assignment — a descriptor whose service endpoint names a vacant root slot, so `process_create` succeeds and the first mint fails — and whose completeness is proven by the `block-restart ok` that follows: a successful restart at the same selectors is only possible if the rollback actually freed them.
 
 ## 9.2 SMMU
 
@@ -2221,3 +2221,67 @@ how this survived.
 Verified: certification [ACCEPTANCE] result=PASS failures=0
 failure_mask=0 transport=PASS with all five irq_* tests passing, and
 make smoke PASS on all three profiles. -->
+
+<!-- 0151 evidence: DEV-005 closed, DEV-004 documented. Assignment
+rollback, plus two corrections that testing it forced.
+
+## Rollback
+
+Provisioning creates the task and then mints its capabilities. A failure
+anywhere after the create used to just return, leaving a half-provisioned
+task alive: a stranded thread slot, cspace and memory resource, and
+holding whatever device capabilities did land -- so the device read as
+busy to the next attempt while nothing was driving it.
+
+restart_service() now destroys the fresh task on any provisioning failure.
+One operation rather than an undo list, because destroying the task frees
+its whole cspace, and since revocation severs device authority as well as
+naming (0150) the frame and line come back genuinely reclaimable.
+
+## Two things testing it exposed
+
+Neither was the feature being built, and both were real:
+
+  - The opening process_destroy had to become best-effort. It establishes
+    a precondition -- nothing occupying these selectors -- rather than
+    performing an operation whose failure matters, and "there was nothing
+    there" is that precondition already met. Treating it as an error made
+    recovery impossible exactly after a rollback, which is when recovery is
+    the whole point. A destroy that fails for a real reason still stops the
+    restart, because process_create then fails busy on what it did not
+    free.
+  - Every path that frees a space's pages now identifies itself to the
+    allocator's release-of-mapped-page barrier. Without that, a space
+    handing back its OWN pages looked exactly like one taking them from a
+    live holder, and the barrier refused: 23 leaked pages per boot that
+    forks. The state alone cannot distinguish the two cases --
+    quiesce_user_thread() publishes `suspended` before teardown and a
+    claimed-but-unbuilt slot is `suspended` too -- so the releaser says who
+    it is instead. The miss was fork's clone(), which opens by releasing
+    the destination's image and stack (the ones initialize_user() had just
+    built, and which are loaded only to be discarded) before copying the
+    parent's in.
+
+That second one is worth dwelling on: the barrier added in 0146 was doing
+its job precisely, and the leak was the cost of it not being told who was
+calling. A safety check that cannot tell self-teardown from theft will
+refuse honest work, and refusing honest work quietly is its own defect.
+
+## DEV-004: documented, not implemented
+
+Recorded honestly as partial. Two devices are assignable. The PL011's
+reset requirement (mask RX at IMSC, drain the FIFO, clear ICR) is now half
+performed by the kernel -- release_ownership() masks, drops any in-flight
+delivery and unbinds -- and half by the incoming owner's own bring-up. The
+virtio-mmio block device's requirement (write 0 to Status, which per spec
+resets it and abandons the virtqueue) is not performed on revocation at
+all; a restarted driver re-initialises from whatever the previous owner
+left, which works only because it rewrites Status during bring-up. Neither
+device is reset BY THE KERNEL on reassignment, so freedom from state
+leakage rests on each incoming driver re-initialising. That is exactly
+what DEV-017 asks to be proven, and why it stays open.
+
+Verified: make smoke PASS on all three profiles with `assign-rollback ok`
+gated; guest profile 5/5 with zero barrier firings; certification
+[ACCEPTANCE] result=PASS failures=0 failure_mask=0 transport=PASS with
+zero firings; 12 release boots, 0 stalls. -->

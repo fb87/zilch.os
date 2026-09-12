@@ -592,20 +592,55 @@ namespace sys::root_graph
         bool (*remint)(){};
     };
 
-    [[nodiscard]] inline bool restart_service(const service_restart& service) noexcept {
-        const word_t success = static_cast<word_t>(error_t::success);
-        if (control(abi::v1::control_operation::process_destroy, service.selector,
-                    service.selector + 1U, service.selector + 2U) != success)
-            return false;
-        if (control(abi::v1::control_operation::process_create, service.cpu, service.role,
-                    service.selector, service.selector + 1U, service.selector + 2U) != success)
-            return false;
+    // The capability half of bringing a service up: its own service
+    // endpoint, then whatever device resources that service needs.
+    [[nodiscard]] inline bool provision_service(const service_restart& service) noexcept {
         const word_t read_write = static_cast<word_t>(abi::v1::CapabilityRight::read) |
                                   static_cast<word_t>(abi::v1::CapabilityRight::write);
         if (control(abi::v1::control_operation::capability_mint, service.selector + 1U,
-                    service_endpoint, service.endpoint, read_write) != success)
+                    service_endpoint, service.endpoint,
+                    read_write) != static_cast<word_t>(error_t::success))
             return false;
         return service.remint == nullptr || service.remint();
+    }
+
+    [[nodiscard]] inline bool restart_service(const service_restart& service) noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        /*
+         * Best-effort, deliberately. This establishes a precondition --
+         * nothing occupying these selectors -- rather than performing an
+         * operation whose failure matters, and "there was nothing there" is
+         * that precondition already met. It matters concretely: a restart
+         * following a rolled-back assignment finds the selectors already
+         * free, and treating that as an error made recovery impossible
+         * exactly when it was needed. A destroy that fails for a real
+         * reason still stops the restart, because process_create will then
+         * fail with busy on the selectors it did not free.
+         */
+        (void)control(abi::v1::control_operation::process_destroy, service.selector,
+                      service.selector + 1U, service.selector + 2U);
+        if (control(abi::v1::control_operation::process_create, service.cpu, service.role,
+                    service.selector, service.selector + 1U, service.selector + 2U) != success)
+            return false;
+        /*
+         * From here the task EXISTS, so every failure below has to roll it
+         * back (DEV-005). A half-provisioned task left alive strands a
+         * thread slot, a cspace and a memory resource, and -- worse -- holds
+         * whatever device capabilities did land, so the device looks busy to
+         * the next assignment attempt while nothing is driving it. The
+         * previous code simply returned false and left all of that in place.
+         *
+         * Rollback is one operation rather than an undo list: destroying the
+         * task frees its entire cspace, and since revocation now severs
+         * device authority as well as the naming (DEV-001..003), the frame
+         * and line come back reclaimable rather than merely unnamed.
+         */
+        if (!provision_service(service)) {
+            (void)control(abi::v1::control_operation::process_destroy, service.selector,
+                          service.selector + 1U, service.selector + 2U);
+            return false;
+        }
+        return true;
     }
 
     /*
@@ -708,6 +743,40 @@ namespace sys::root_graph
      * and VFS share restart_service() and their descriptors above, so the
      * mechanism is the same one; only this profile's proof is narrower.
      */
+    /*
+     * Forces an assignment to fail partway and proves the rollback left
+     * nothing behind (DEV-005).
+     *
+     * The induced failure is a descriptor whose service endpoint names a
+     * root cspace slot that holds nothing, so process_create succeeds and
+     * the very next mint fails -- the exact shape of a real partial
+     * assignment, without needing to corrupt anything.
+     *
+     * The proof that the rollback was COMPLETE is deliberately not here --
+     * it is `block-restart ok`, which runs next. That check restarts the
+     * block driver for real and round-trips a sector through it, and it can
+     * only succeed if this rollback freed the thread and task slots and
+     * released the device capabilities: a half-provisioned task left alive
+     * would make process_create fail with busy at the same selectors.
+     * Checking only that the bad attempt returned false would prove nothing,
+     * and doing the recovery here as well would pay for an extra
+     * destroy/create cycle that the very next check already performs.
+     */
+    [[nodiscard]] inline bool verify_assignment_rollback() noexcept {
+        // 63 is inside root's leaf-0 range and deliberately unoccupied --
+        // see the selector map at the top of this file. process_create
+        // therefore succeeds and the first mint fails, which is exactly the
+        // shape of a real partial assignment.
+        constexpr capability_id_t vacant_root_slot = 63U;
+        const service_restart doomed{block_role,
+                                     block_selector,
+                                     vacant_root_slot,
+                                     3U,
+                                     abi::v1::block_service_ready_badge,
+                                     &mint_block_resources};
+        return !restart_service(doomed);
+    }
+
     [[nodiscard]] inline bool verify_block_restart(word_t& ready, block_check before) noexcept {
         if (!restart_service(block_service_restart))
             return false;
@@ -1999,6 +2068,15 @@ namespace sys::root_graph
                     report("graph ready\n");
 #if CONFIG_FAULT_INJECTION
                     report(verify_restart_on_fault(state) ? "restart ok\n" : "restart FAILED\n");
+                    /*
+                     * Rollback first, restart second, and in that order for
+                     * a reason: the rollback check leaves the block driver
+                     * freshly recreated, so the restart check that follows
+                     * exercises it again from a known-good state rather
+                     * than from whatever the failed assignment left.
+                     */
+                    report(verify_assignment_rollback() ? "assign-rollback ok\n"
+                                                        : "assign-rollback FAILED\n");
                     // Restart coverage for the services outside the fixed
                     // control-plane roles -- see verify_block_restart().
                     report(verify_block_restart(ready, observed_block_state)

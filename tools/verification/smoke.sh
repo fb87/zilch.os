@@ -57,6 +57,7 @@ failure_markers=(
     "virtio: sector round trip FAIL"
     "restart FAILED"
     "block-restart FAILED"
+    "assign-rollback FAILED"
     "serial-restart FAILED"
     "shell FAILED"
     "sh: command not found"
@@ -345,6 +346,7 @@ run_shell_profile
 run_profile "guest (vPL011 hosting + restart)" "configs/guest_defconfig" development \
     "graph ready" \
     "restart ok" \
+    "assign-rollback ok" \
     "block-restart ok" \
     "serial-restart ok" \
     "guest: loaded, serving" \
