@@ -205,6 +205,29 @@ run_shell_profile() {
     sleep 1
     printf 'cat /tmp/smoke.txt | cat\r' >&9
     sleep 2
+    # Then through a consumer whose output is NOT its input.
+    #
+    # Why this is worth running at all: the marker count below cannot tell a
+    # working pipeline from a producer stage whose stdout redirection
+    # silently failed, because both put the same text on the console. `| wc`
+    # can, since wc reports what it actually READ out of the pipe file.
+    #
+    # Why it is NOT gated: it currently fails, and it fails for a reason of
+    # its own rather than for the reason it was written to detect -- running
+    # it also stops the FOLLOWING pipeline from producing anything, while
+    # leaving the shell itself interactive. That is an open, separately
+    # recorded defect (checklist 0156), not the producer-redirection failure
+    # this check is aiming at, so gating on it now would turn `make smoke`
+    # red for something this assertion cannot actually diagnose. Runs last
+    # so its fallout cannot reach the assertions above it, and is reported
+    # so the signal is not lost. Promote to a hard gate once 0156 closes.
+    #
+    # No flags: bin/wc parses none at all, so `wc -l` would open `-l` as a
+    # filename and print nothing. Asserting the line/word columns rather
+    # than the byte count keeps this from breaking if the marker text is
+    # ever reworded.
+    printf 'cat /tmp/smoke.txt | wc\r' >&9
+    sleep 2
 
     # Still-interactive-after-a-pipeline check. The failure this guards is
     # the shell going PERMANENTLY unresponsive -- never printing another
@@ -261,13 +284,18 @@ run_shell_profile() {
     # earlier -- i.e. the whole VM was starved, which no assertion about
     # this kernel should be reporting as a defect in this kernel.
     #
-    # The underlying reason is recorded in PRODUCTION_READINESS_CHECKLIST
-    # entry 0135: a controlled, interleaved A/B against the pre-change
-    # tree showed the untouched baseline stalling and timing out at least
-    # as often as the current one, so there is no regression here to gate
-    # on -- only a host-contention signal that a gate would misattribute.
-    # Making `make smoke` fail ~half the time would cost far more than
-    # this check can currently prove.
+    # Entry 0135 recorded the reason as host contention, on the strength of
+    # a controlled, interleaved A/B against the pre-change tree that showed
+    # the untouched baseline stalling at least as often. Entry 0156 retracts
+    # that inference: the readiness loop polls the global authority lock
+    # that 0155 found to be unfair, so BOTH sides of that A/B carried the
+    # same starvation source and it could never have exonerated the kernel.
+    # Runs since 0155 have reached 6/6 answered at 25-29ms where 0/6 was
+    # typical, though a later run on the same build still reported 0/6.
+    #
+    # So it stays ungated, but for the honest reason: the measurement is
+    # unstable, not demonstrably external. Making `make smoke` fail ~half
+    # the time would still cost more than this check can prove.
     #
     # It stays as a printed measurement because the number is genuinely
     # useful (a regression back to the pre-0133 busy-poll shows up as
@@ -278,8 +306,9 @@ run_shell_profile() {
         echo "  ok      : shell still interactive after pipeline ($answered/$liveness_samples answered: ${keystroke_latencies_ms[*]})"
     else
         echo "  NOTE    : shell answered 0/$liveness_samples keystrokes in ${liveness_budget_ms}ms" \
-             "-- not gated, see checklist 0135 (host contention reproduces this on the" \
-             "unmodified baseline; investigate on an idle host before treating as a defect)"
+             "-- not gated, see checklist 0135 and its correction in 0156 (the A/B that" \
+             "blamed host contention compared two builds sharing one starvation source," \
+             "so it cannot exonerate the kernel; runs since have reached 6/6)"
     fi
 
     # The kernel never exits, so tearing qemu down here is the normal
@@ -310,6 +339,17 @@ run_shell_profile() {
     else
         echo "  MISSING : redirect + pipeline output (seen $marker_count time(s), need >= 3)"
         failures=$((failures + 1))
+    fi
+
+    # One line, one word, some bytes -- i.e. wc really read the marker out
+    # of the pipe file. A producer stage that wrote to the console instead
+    # leaves wc reading nothing and reporting zeros, which is the case the
+    # marker count above is blind to. Reported, not gated -- see the
+    # `| wc` command above and checklist 0156.
+    if grep -qE '^ *1 +1 +[0-9]+$' "$log"; then
+        echo "  ok      : pipeline consumer read the producer's bytes"
+    else
+        echo "  NOTE    : pipeline consumer read nothing -- not gated, see checklist 0156"
     fi
 
     local marker

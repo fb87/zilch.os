@@ -136,6 +136,22 @@ namespace sys::abi::v1
         /* Clears whatever notification_bind installed, if any. Always a
          * no-op success if nothing was bound. */
         notification_unbind = 53U,
+        /*
+         * Gives up the rest of this thread's slice to any other runnable
+         * thread on its CPU, then becomes runnable again. Never blocks and
+         * never fails: a thread with nothing to yield to is simply
+         * rescheduled.
+         *
+         * Added because its absence was a real livelock, not a missing
+         * convenience. A parent waiting on a child had no choice but to spin
+         * through process_wait, and every capability operation takes the
+         * global authority lock -- so the waiter hammered that lock and
+         * starved whatever it was waiting for. fork()'s own comment in
+         * libc records the workaround it forced (placing the child on
+         * another CPU) and names the cause: "There is no yield syscall
+         * here". There is now.
+         */
+        thread_yield = 54U,
     };
 
     /*

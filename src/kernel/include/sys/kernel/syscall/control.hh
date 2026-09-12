@@ -279,6 +279,24 @@ namespace sys::kernel::syscall
                 thread::schedule_prepared(frame);
                 return true;
             }
+            case abi::v1::control_operation::thread_yield: {
+                /*
+                 * Republished as `ready` rather than any blocked state: this
+                 * is a hand-off, not a wait, so the thread stays eligible and
+                 * is simply re-selected if nothing else on its CPU is
+                 * runnable.
+                 *
+                 * The result is written into the frame BEFORE prepare_block
+                 * captures it, since that capture is what the thread resumes
+                 * from -- setting it afterwards would return whatever the
+                 * saved frame happened to hold.
+                 */
+                arch::syscall::set_output(frame, 0U,
+                                          static_cast<word_t>(error_t::success));
+                thread::prepare_block(frame, thread::state::ready);
+                thread::schedule_prepared(frame);
+                return true;
+            }
             case abi::v1::control_operation::thread_suspend: {
                 thread::thread* target = nullptr;
                 result = resolve_thread(current, a1, capability::right_t::control, target);

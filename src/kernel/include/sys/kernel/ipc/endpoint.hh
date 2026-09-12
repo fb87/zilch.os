@@ -32,8 +32,9 @@ namespace sys::kernel::ipc
     inline endpoint endpoints[endpoint_count]{};
     inline endpoint dynamic_endpoints[dynamic_endpoint_count]{};
 
+    /* `value.lock` is deliberately not reset -- see capability::initialize()
+     * for why rewinding a ticket lock's word strands existing waiters. */
     inline void initialize(endpoint& value) noexcept {
-        value.lock = 0U;
         value.sender_head = 0U;
         value.sender_tail = 0U;
         value.sender_count = 0U;

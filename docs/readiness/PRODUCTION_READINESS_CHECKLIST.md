@@ -2476,3 +2476,204 @@ at all.
 Not fixed here, and deliberately not rolled into this change. Recorded as
 its own finding so it is not mistaken for fallout from the badge or
 lifecycle work. -->
+
+<!-- 0155 evidence: FIXED -- 0154's shell wedge. The global authority lock
+was unfair, and this kernel cannot afford an unfair lock.
+
+## What it actually was
+
+Not a shell bug, not a fork bug, not a capability-leak bug. Every kernel
+lock in this tree went through one `spin_lock()` (cspace.hh), and it was a
+bare test-and-set: exchange 1 into the word, spin on a relaxed load until
+it reads 0, repeat. No queue, no ticket, no fairness of any kind.
+
+That is survivable in a kernel where callers block. This kernel has no
+blocking wait -- `process_wait` and `notification_poll` both return `busy`
+and require the caller to poll again, and their own ABI comments explain
+why adding a blocking scheduler state was out of scope. So a parent in
+`waitpid()` polls, every poll resolves a capability, and every capability
+resolution takes the global authority lock. The polling CPU re-acquires a
+line it already owns exclusively and wins essentially every race; under
+QEMU's MTTCG, where a vCPU runs a long translation block before yielding,
+it wins nearly all of them. The parent starved exactly the child it was
+waiting for, plus the vfs-server that child was mid-call to.
+
+The symptom's shape follows from that directly, including the parts that
+had looked contradictory: the child DID run and DID produce its output
+(the prompt came back, `tok` printed), it simply could never finish
+exiting. And the run-to-run variance -- one, two, or zero commands before
+the wedge, with `vfs absent` reappearing in the worst runs -- is what
+starvation looks like, not what an exhausted fixed-size resource looks
+like. Two resource-exhaustion theories were tested and both were wrong:
+yielding in the poll loop, and deleting the reaped child's capability.
+
+## The fix
+
+`spin_lock`/`spin_unlock` are now a ticket lock. Two 16-bit counters are
+packed into the single word every lock here already is -- `halves[0]` is
+the ticket being served, `halves[1]` the next to hand out -- so no lock
+changes size or layout, and equal halves still mean unlocked, which is
+what lets every zero-initialized lock word in the tree stand unchanged
+(endpoint.hh:36 and cspace.hh:281 were both audited). Indexed as an array
+rather than by bit position, so it is endianness-neutral; nothing reads
+the word as a whole u32. Tickets wrap at 65536, far above
+`maximum_cpu_count` waiters, and the wait is an equality test on the
+wrapped value, so rollover is harmless.
+
+FIFO is the whole point: a poller takes a fresh ticket behind every
+existing waiter each time round, which bounds every other CPU's wait.
+
+## Two corrections to the record
+
+`thread_yield` (control op 54) was added while chasing this and does NOT
+fix this symptom -- measured, no change. A poller with nothing else
+runnable on its CPU is simply re-selected and goes straight back to the
+lock; yielding cannot help cross-CPU lock contention. It is kept because
+the gap it fills is real on its own terms (fork()'s own comment named the
+missing syscall, and its workaround -- placing the child on another CPU --
+is still in scheduler.hh), but it is not the fix and should not be cited
+as one.
+
+The other theory tried here -- that waitpid had to delete the reaped
+child's capability before fork could reuse the selector -- was reverted
+rather than kept. It was wrong twice over: it changed nothing when
+measured, and reap_user_bundle already deletes that exact capability
+itself (scheduler.hh's delete_capability_locked call), so the extra
+control call was redundant as well as misattributed.
+
+And `make smoke`'s `redirect + pipeline output` gate is weaker than it
+looks. It runs `cat /tmp/smoke.txt | cat`, where a producer stage whose
+stdout redirection silently failed writes the same text to the console
+that a working pipeline does -- the gate cannot tell success from that
+failure. A `| wc` probe that CAN tell them apart is now in smoke.sh,
+reported rather than gated for the reason 0156 records.
+(Note for the next investigator: `bin/wc` parses no flags at all, so
+`wc -l` there opens `-l` as a filename and prints nothing. That is wc's
+limitation, not a pipeline defect; a probe using it will mislead.)
+
+Verified: 5/5 consecutive `cat file` against a build that previously
+completed one, measured identically under burst and character-paced input.
+`make smoke`: PASS, all gates, including `redirect + pipeline output
+(seen 3 times)` -- which had been intermittently reporting 2. Kernel
+certification: `suite=root-only result=PASS failures=0 failure_mask=0
+transport=PASS`, with 4-CPU root fuzz clean at 4096 operations per CPU,
+which is the contended-lock case that matters for this change.
+
+Two hazards a ticket lock adds over test-and-set were checked rather than
+assumed, and both are clear here. A thread preempted mid-spin would stall
+everyone behind its ticket, but the IRQ path (arch.cc) only reprograms the
+timer and returns -- it never switches threads, so a spinning thread keeps
+its CPU. And GCC emitted no outline-atomics helpers for the 16-bit
+operations, which would not have linked freestanding; the build is the
+proof. -->
+
+<!-- 0156 evidence: OPEN. Two console/pipeline defects separated out from
+0155's lock fix, with the measurements that bound them, and one correction
+to 0135.
+
+## What 0155 did NOT fix
+
+0155 removed a real, system-wide starvation source and raised the ceiling
+from ONE completed external command to all six a probe asks for. It did
+not make the console path sound, and the remaining symptoms are not the
+same bug wearing a different mask. They are recorded here separately so
+the next investigator does not re-derive the eliminations.
+
+The honest number is a distribution, not a figure. Five runs of the same
+six-command probe against the same binary completed 0, 3, 5, 5 and 6 of
+them. The 0 run is its own shape: the shell never printed even its FIRST
+prompt, though `shell ready` had been reported -- i.e. the console path
+can be dead from boot, not only after N commands, and that is the same
+phenomenon the ungated keystroke check reports as 0/6. So "dies after five
+commands" was an artifact of small samples; what is actually true is that
+the console path fails intermittently at any point, including immediately.
+
+This variance predates 0155 (`vfs absent` shows up in these logs across
+the session, and 0135 recorded the keystroke flakiness long before), and
+the evidence that 0155 is not its cause is that certification passes
+root-only with 4-CPU root fuzz clean, `make smoke` passed three
+consecutive times, and the ceiling moved up rather than down.
+
+## Eliminated, with the experiment that eliminated each
+
+Worth writing down because each of these looked plausible and cost a run:
+
+  - NOT fork/child-lifetime exhaustion. Instrumenting sh's run_pipeline
+    with per-branch markers showed five clean `F`(fork) `W`(wait) `k`(reaped)
+    cycles and then a stall that never reaches `F` at all -- the shell dies
+    in read_line(), before forking. A builtin-only sequence (`echo`, no
+    fork anywhere) stalls the same way, which rules the child path out
+    entirely.
+  - NOT burst/FIFO overrun. Byte-at-a-time input paced at 60ms/char and a
+    whole-line burst write stall after the SAME number of commands. The
+    pacing that tools/verification/smoke.sh's comment credits for avoiding
+    this makes no difference here.
+  - NOT the interrupt storm detector. Raising `storm_threshold` from 64 to
+    1000000 changed nothing.
+  - NOT a kernel fault, and not lock-related. No [WARN]/[ERR] of any kind
+    is emitted between entering init.elf and the stall.
+
+## What the instrumented driver actually shows
+
+Tracing rx_main()'s own states (`[D]` deferred, `<N` notification woke,
+`R>` replied from the drain path, `[h]` served straight from the ring)
+gives a clean `[D]<NR>` per byte in steady state, and at the stall:
+
+    ... o[D]        <- deferred, and no `<N` ever follows
+
+So the RX thread parks with a reply owed and is never woken again while
+input keeps being typed. Giving its ipc_receive a 50-tick (0.5s) timeout
+and dumping PL011 registers on expiry produced only TWO timeouts across
+~70 seconds of stall -- so the IPC receive timeout itself also stops
+firing, which is a second defect and the reason the driver cannot poll
+its own way out. The one register dump obtained reads:
+
+    ris=0020 mis=0000 imsc=0010 fr=0090
+
+ris bit 5 is TXIS (expected -- the driver transmits and never clears it,
+harmlessly, since TXIM is masked). RXIS is clear, mis is zero, and fr bit
+4 is RXFE=1: the UART has no received byte and no pending RX interrupt.
+The typed character is not sitting undrained in the FIFO -- it never
+reached the device. That points upstream of the driver (host/QEMU chardev
+flow control, or the console-server stdin thread) rather than at
+drain_rx()'s ICR ordering, which 0136 already fixed and which this
+evidence does not implicate.
+
+Not fixed. Deliberately not patched around either: adding a poll to
+rx_main would paper over whichever of the two mechanisms is real.
+
+## Second, separate defect: `| wc` poisons the next pipeline
+
+`cat /tmp/smoke.txt | cat` works. `cat /tmp/smoke.txt | wc` produces
+nothing AND leaves the following pipeline producing nothing, while the
+shell itself stays interactive (it answered 6/6 bare newlines afterwards
+in the same run). Reordering smoke's commands so `| wc` runs third made
+the previously-passing `redirect + pipeline output` gate fail at 2 of 3
+occurrences; restoring the order made it pass at 3 again. So the damage is
+ordered and caused by that command, not by command count.
+
+cat's `stream()` and wc's `count_stream()` are structurally identical
+read loops, so stdin handling is not the difference; what differs is only
+wc's closing `printf("%7ld %7ld %7ld\n", ...)`. The printf implementation
+in libc/stdio.cc does handle width-plus-`l` correctly on inspection, so
+this is not yet explained and the next step is to determine whether the
+vfs-server is what wedges.
+
+The `| wc` probe stays in smoke.sh, reported and NOT gated, so the signal
+survives without turning `make smoke` red for an unexplained defect that
+the assertion cannot itself diagnose. Promote it to a hard gate when this
+closes.
+
+## Correction to 0135
+
+0135 concluded the flaky keystroke-liveness check was host contention and
+not a defect in this kernel, on the strength of an interleaved A/B against
+the pre-change tree. That conclusion should not be leaned on. The readiness
+loop is itself a poller on the global authority lock 0155 found to be
+unfair, so the baseline it was compared against had the same starvation
+source -- an A/B between two builds that share a defect cannot exonerate
+it. Post-0155 runs have been observed at 6/6 answered with 25-29ms
+latencies where 0/6 was previously typical, but a later run on the same
+build reported 0/6 again, so this is better and still variable. It stays
+ungated, now for an honest reason: the measurement is unstable, not
+demonstrably external. -->

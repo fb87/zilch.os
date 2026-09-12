@@ -7,6 +7,7 @@
 #include <sys/coreutils.hh>
 #include <sys/ipc.hh>
 #include <sys/native.hh>
+#include <sys/thread.hh>
 #include <sys/types.hh>
 
 #include <abi/sys/v1/capability.hh>
@@ -443,8 +444,24 @@ int waitpid(int pid, int* status, int) noexcept {
         sys::word_t value = 0U;
         const sys::word_t result =
             sys::control_result1(value, abi::control_operation::process_wait, selector);
-        if (result == static_cast<sys::word_t>(sys::error_t::busy))
+        if (result == static_cast<sys::word_t>(sys::error_t::busy)) {
+            /*
+             * Yield rather than spin. process_wait resolves a capability,
+             * which takes the global authority lock, so a tight poll here
+             * hammers that lock and adds nothing but contention while
+             * waiting on a child that by definition needs other CPUs to
+             * make progress.
+             *
+             * Not the fix for the wedge this was found while chasing --
+             * that was the lock's own unfairness, and this was measured to
+             * change nothing on its own (see checklist 0155). A poller with
+             * nothing else runnable on its CPU is simply re-selected and
+             * comes straight back. Kept because polling a global lock with
+             * no yield is worth not doing regardless.
+             */
+            sys::thread_yield();
             continue;
+        }
         if (!sys::native::ok(result))
             return -1;
         if (status != nullptr)

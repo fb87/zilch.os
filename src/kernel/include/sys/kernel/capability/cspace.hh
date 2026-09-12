@@ -75,18 +75,52 @@ namespace sys::kernel::capability
             __atomic_store_n(&record.active, 0U, __ATOMIC_RELEASE);
     }
 
+    /*
+     * A ticket lock, not a test-and-set one.
+     *
+     * Fairness here is a correctness requirement rather than a nicety. This
+     * kernel has no blocking wait -- process_wait and notification_poll both
+     * return `busy` and expect the caller to poll again (see their ABI
+     * comments, which explain why adding a blocking scheduler state was not
+     * on the table) -- and every one of those polls resolves a capability,
+     * which takes the global authority lock. Under an unfair exchange, the
+     * polling CPU re-acquires a cache line it already holds exclusively and
+     * wins essentially every race, so it starves the very thread it is
+     * polling for. It is worse under QEMU's MTTCG, where a vCPU runs a long
+     * translation block before yielding to another.
+     *
+     * Measured as the shell wedging on an external command: the child ran,
+     * produced its output, and could never finish exiting, because the
+     * parent's waitpid() poll monopolized the lock the child's exit path and
+     * the VFS server it was mid-call to both needed. A yield syscall does not
+     * fix that -- a poller with nothing else runnable on its CPU is simply
+     * re-selected and goes straight back to the lock. FIFO order does fix it:
+     * the poller takes a fresh ticket behind every existing waiter each time
+     * round, which bounds every other CPU's wait.
+     *
+     * The two counters are packed into the single word every lock in this
+     * kernel already is, so no lock changes size or layout: halves[0] is the
+     * ticket now being served, halves[1] the next one to hand out. Equal
+     * halves mean unlocked, so a zero-initialized word is still an unlocked
+     * one and the initializers elsewhere need no change. Indexing the halves
+     * as an array rather than by bit position keeps this endianness-neutral;
+     * nothing reads the word as a whole u32. Tickets wrap at 65536, far above
+     * maximum_cpu_count concurrent waiters, and the wait is an equality test
+     * on the wrapped value, so rollover is harmless.
+     */
     inline void spin_lock(volatile u32& value, lock_order::rank order) noexcept {
-        while (__atomic_exchange_n(&value, 1U, __ATOMIC_ACQUIRE) != 0U) {
-            while (__atomic_load_n(&value, __ATOMIC_RELAXED) != 0U) {
-                arch::cpu::relax();
-            }
+        auto* const halves = reinterpret_cast<u16*>(const_cast<u32*>(&value));
+        const u16 ticket = __atomic_fetch_add(&halves[1], static_cast<u16>(1U), __ATOMIC_RELAXED);
+        while (__atomic_load_n(&halves[0], __ATOMIC_ACQUIRE) != ticket) {
+            arch::cpu::relax();
         }
         lock_order::acquired(order, &value);
     }
 
     inline void spin_unlock(volatile u32& value, lock_order::rank order) noexcept {
         lock_order::released(order, &value);
-        __atomic_store_n(&value, 0U, __ATOMIC_RELEASE);
+        auto* const halves = reinterpret_cast<u16*>(const_cast<u32*>(&value));
+        (void)__atomic_add_fetch(&halves[0], static_cast<u16>(1U), __ATOMIC_RELEASE);
     }
 
     inline void lock(cspace_t& cspace) noexcept {
@@ -277,8 +311,18 @@ namespace sys::kernel::capability
         return error_t::no_memory;
     }
 
+    /*
+     * `cspace.lock` is deliberately NOT reset here, and resetting it would
+     * be a bug now that spin_lock() is a ticket lock. Zeroing a
+     * test-and-set word was a force-unlock, which is why this was harmless
+     * before; zeroing a ticket word instead rewinds the queue, so a CPU
+     * already holding ticket N waits for a counter that will never reach it
+     * again. A lock word needs no reset in any case: a released lock is
+     * already unlocked (both halves equal), and these live in
+     * statically zero-initialized storage, so a first-time initialize()
+     * finds an unlocked word too.
+     */
     inline void initialize(cspace_t& cspace) noexcept {
-        cspace.lock = 0U;
         cspace.registry_index = maximum_registered_cspaces;
         cspace.guard = 0U;
         cspace.allocation_hint = 0U;
