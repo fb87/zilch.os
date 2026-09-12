@@ -60,10 +60,25 @@ namespace sys::abi::v1
     inline constexpr word_t block_service_ready_badge = 1U << 7U;
     inline constexpr word_t vfs_service_ready_badge = 1U << 8U;
     inline constexpr word_t control_plane_health_magic = 0x4845414cU;
+    /*
+     * Bits 9 upward, and that base is load-bearing rather than arbitrary.
+     *
+     * These used to start at bit 8, which put the FIRST role's exit badge on
+     * the same bit as vfs_service_ready_badge. Root would have read a
+     * process-role exit as "VFS is ready", and a VFS readiness signal as
+     * "the process role exited" -- in a shared notification word where both
+     * are accumulated. It went unnoticed because root observed only the
+     * failure badge and never looked at exit badges at all (USR-033), so the
+     * collision had nothing to collide with in practice. The static_asserts
+     * below keep every class disjoint by construction now that root does
+     * read them.
+     */
+    inline constexpr word_t control_plane_exit_badge_base = 9U;
+
     inline constexpr word_t control_plane_exit_badge(word_t role) noexcept {
         const word_t first = static_cast<word_t>(control_plane_role::process);
         return role >= first && role < first + control_plane_role_count
-                   ? word_t{1U} << (8U + role - first)
+                   ? word_t{1U} << (control_plane_exit_badge_base + role - first)
                    : 0U;
     }
     inline constexpr word_t control_plane_ready_badge(word_t role) noexcept {
@@ -72,4 +87,38 @@ namespace sys::abi::v1
                    ? word_t{1U} << (role - first)
                    : 0U;
     }
+
+    /*
+     * Every badge class shares one notification word, so they must be
+     * disjoint. Checked here rather than trusted: the exit badges silently
+     * overlapped vfs_service_ready_badge until root started reading them.
+     *
+     * 1U << 15U is native::failure_badge, which this header cannot include
+     * (the personality includes this one), so it is written out.
+     */
+    inline constexpr word_t control_plane_ready_badge_mask =
+        ((word_t{1U} << control_plane_role_count) - 1U) | memory_service_ready_badge |
+        serial_service_ready_badge | block_service_ready_badge | vfs_service_ready_badge;
+    inline constexpr word_t control_plane_exit_badge_mask =
+        ((word_t{1U} << control_plane_role_count) - 1U) << control_plane_exit_badge_base;
+
+    static_assert((control_plane_ready_badge_mask & control_plane_exit_badge_mask) == 0U,
+                  "exit badges must not overlap readiness badges");
+    static_assert((control_plane_ready_badge_mask & (word_t{1U} << 15U)) == 0U,
+                  "readiness badges must not overlap the failure badge");
+    static_assert((control_plane_exit_badge_mask & (word_t{1U} << 15U)) == 0U,
+                  "exit badges must not overlap the failure badge");
+    /*
+     * The upper 16 bits of this word are reserved: the certification
+     * harness treats any badge set there as an unexpected-badge failure
+     * (`badges & 0xffff0000`). That was an implicit contract this header did
+     * not know about, and placing the exit badges at bit 16 tripped it
+     * immediately -- userspace_control_plane_graph failed outright. Named
+     * and asserted here so the next badge class cannot repeat it.
+     */
+    inline constexpr word_t control_plane_badge_reserved_mask = 0xffff0000U;
+    static_assert((control_plane_exit_badge_mask & control_plane_badge_reserved_mask) == 0U,
+                  "badge classes must stay inside the low 16 bits");
+    static_assert((control_plane_ready_badge_mask & control_plane_badge_reserved_mask) == 0U,
+                  "badge classes must stay inside the low 16 bits");
 } // namespace sys::abi::v1

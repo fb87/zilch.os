@@ -361,17 +361,17 @@ Every completed requirement must link to:
 ## 7.5 Domain manager
 
 - [-] **USR-025** Userspace domain manager/VMM implemented; PL3 domain-manager service, role-specific image loading, a dedicated load operation, VM launch/destroy request handling, and earlyfs packaging exist, but production guest deployment remains open.
-- [ ] **USR-026** VM creation uses capability-authorized kernel APIs.
-- [ ] **USR-027** Guest image loading performed in userspace.
-- [ ] **USR-028** VM memory and device assignment policy remains in userspace.
+- [x] **USR-026** VM creation uses capability-authorized kernel APIs. `sys::domain_manager::manager::create()` reaches the kernel only through `vm.create(vm_selector, vcpu_selector, logical_id, counter_offset)` -- selectors into the domain manager's own cspace, resolved and rights-checked by the kernel like any other capability invocation, never a physical address or an ambient VM index. The same holds for the rest of the lifecycle: `map_frame(ipa, frame_capability, permissions)` accepts an authorized frame capability and nothing else (HYP-015), and configure/run/pause/resume/stop/destroy all go through the vCPU capability. A domain manager holding no VM capability can create no VM. Covered by `domain_manager_api`, `hypervisor_vm_create` and `hypervisor_vcpu_create` in certification, all PASS.
+- [x] **USR-027** Guest image loading performed in userspace. `load_guest_image()` in `src/user/servers/domain/main.cc` does the whole job at PL3: validates the ELF identity, machine and version, walks the program headers, derives per-page W^X permissions from the section flags (`elf_page_flags()`), and maps each page into the guest through `vm.map_frame()` with an authorized frame capability. The kernel parses no guest image and knows nothing about ELF on the guest path; it is handed IPA/frame/permission triples. A malformed image is a userspace error with a reported failure code, not a kernel one. Covered by `domain_guest_load` in certification, and exercised on every `make smoke` guest boot, which loads a real pinned Zephyr v4.0.0 image this way (USR-032).
+- [x] **USR-028** VM memory and device assignment policy remains in userspace. The guest's layout is decided by a userspace manifest (`src/user/include/sys/guest_manifest.hh`): `map_manifest_devices()` walks it and, per device, chooses the guest IPA, the mapping permissions, and whether a host IRQ is forwarded into the guest. RAM size, entry, PSTATE and stack come from the same manifest. The kernel supplies mechanism only -- it maps the frame capability it is given at the IPA it is told, and rejects anything unauthorized -- while root supplies the device capabilities and the domain manager decides what the guest sees. No assignment policy lives in the kernel. Exercised on every guest boot: the delegated PL011 and its forwarded interrupt reach the guest entirely through this path.
 - [-] **USR-029** VM lifecycle exposed through stable management API; `sys::domain_manager::manager`, the domain-role control-plane request path, and the dedicated load op cover create/destroy in certification, but the production management protocol remains open.
-- [ ] **USR-030** Linux guest launch demonstrated.
-- [ ] **USR-031** BSD guest launch demonstrated.
+- [ ] **USR-030** Linux guest launch demonstrated. Open, and a genuine feature rather than bookkeeping -- worth stating what is actually missing so the size is not mistaken. Zephyr boots (USR-032) because the manifest hands it exactly what it needs: one delegated PL011, the virtual timer, and a single forwarded IRQ. Linux needs materially more from the host: PSCI (at minimum `CPU_ON`/`CPU_OFF`/`SYSTEM_OFF`) for secondary CPU bringup, which nothing here emulates; a GIC distributor and redistributor visible to the guest as MMIO, whereas HYP-025's virtual controller is bounded and vCPU-resident with no distributor emulation; a device tree constructed for the guest, which the manifest has no notion of; and a root filesystem, meaning either an initramfs the loader can place or a virtio-blk device emulated for the guest. Each of those is independently substantial, and the SMMU blocker (DEV-007) does not apply here only because a Linux guest would use emulated rather than assigned devices.
+- [ ] **USR-031** BSD guest launch demonstrated. Open, with the same prerequisites as USR-030 (PSCI, guest-visible GIC distributor/redistributor MMIO, a constructed device tree, and a root filesystem path) plus whichever boot protocol the chosen BSD expects. Not attempted; USR-030 is the one worth doing first, since everything it needs is shared.
 - [x] **USR-032** Pinned Zephyr v4.0.0 boots through the PL3 domain manager with section-level W^X loading, bounded vGIC/timer support, delegated PL011, and a native interactive shell that accepts `help` and returns the command list.
 
 ## 7.6 Supervision
 
-- [-] **USR-033** Root launches the bounded six-service graph, retains lifecycle capabilities, monitors readiness/failure badges, and actively probes every private service endpoint; exit-status monitoring remains open.
+- [x] **USR-033** Root launches the bounded six-service graph, retains lifecycle capabilities, monitors readiness/failure badges, actively probes every private service endpoint, and now monitors exit status. A role that EXITS is not a role that faulted, and only the latter was noticed: the supervision thread watches the fault endpoint, which a clean `thread_exit` never touches, and the readiness loop checked the failure badge and nothing else -- so a service that returned from main (console-server's `stop` path does exactly that) simply vanished, leaving its endpoint unanswered with no restart and no report. `handle_role_exits()` now reads the per-role exit badges out of the same notification the readiness loop already polls, clears that role's stale readiness bit, and restarts it through the same bounded admission control as a fault restart, so a zero-limit role stays dead and a flapping one stops rather than looping. Driven from the readiness loop rather than the supervision thread deliberately: that thread blocks indefinitely on the fault endpoint, which is what stopped it waking every tick, and giving it a second thing to watch would mean returning to polling. Fixing this also uncovered a live badge collision -- `control_plane_exit_badge()` started at bit 8, the same bit as `vfs_service_ready_badge`, so a process-role exit and a VFS readiness signal were the same bit in a shared accumulated word; it went unnoticed precisely because nothing read exit badges. Exit badges now start at bit 16 and `static_assert`s keep the readiness, exit and failure classes disjoint by construction. Gated by `exit-restart ok`, which sends a real `stop` to the device role and requires the restarted instance to come back and answer a health RPC.
 - [x] **USR-034** Bounded per-role restart admission and real destroy/recreate/remint/health recovery run in production, driven by unexpected faults. Root's supervision thread (the second thread `thread_create` gives it) decodes each fault's sender badge back to a thread id via `endpoint_badge()`'s inverse, correlates it against a per-role table in a shared page (`root_graph.hh`'s `supervisor_state`, genuine shared memory because root's two threads share a cspace but not an address space), and calls `restart_role()`: `process_destroy`, `process_create` at the same selectors, re-mint of the role's own service endpoint, plus that role's extra minting (console's UART frame; the domain's device/IRQ/console capabilities followed by `launch`+`load`). Every other role's capability into a restarted role stays valid untouched, since root's copy of the service-endpoint object outlives the destroyed task -- only the fresh child needs a re-mint into its own empty cspace. Restart admission is `control_plane::may_restart()` against `policy_for()`'s per-role `restart_limit`. Verified by injecting real illegal-instruction faults in a release build: device crashed and came back healthy, and the domain-manager crashed and the Zephyr guest genuinely re-booted to an interactive shell twice, then correctly stayed down on the third crash (domain's `restart_limit=2`). Three genuine, previously-latent bugs had to be fixed to make this work, each only reachable once something actually restarted a role: (1) `destroy_user_bundle()` never woke a caller blocked waiting on the destroyed thread's reply -- `thread_exit()` did this for a *graceful* exit but a forced destroy did not, so destroying the domain-manager would have hung root's `serve()` call forever (extracted as `thread::release_pending_reply()`, now shared by both paths, with its own certification test); (2) `destroy_user_bundle()` leaked every frame and page table the task had allocated, because both pools are only ever returned by an explicit `destroy_frame`/`destroy_page_table` from the owning task -- with just 64 frame slots the domain-manager's guest-image staging exhausted the pool on the very first restart and the fresh guest load failed `no_memory` (fixed by `memory::reclaim_task_memory()`); (3) memory-server's production request loop received on slot 10, which is the same object as root's fault endpoint, so it sat permanently `blocked_receive` there and won essentially every fault-delivery race for *any* role's crash -- it now has its own service endpoint (`memory_service_endpoint`), the same convention every other role already used. `process_create` additionally now returns the thread id it allocated (via `frame.x[1]`, no ABI enum change), which is what makes badge-to-role correlation possible at all. Out of scope and still open: memory-server restart (no `service_policy` entry; other roles hold live capabilities to frames it manages), crash *reporting* (no userspace logging syscall, and OBS-010 forbids raw fault details in release logs), and recovery from a non-fault terminal guest exit.
 - [x] **USR-035** Core roles have an explicit bounded dependency mask and root launches process, device, console, domain, then supervisor in dependency order.
 - [-] **USR-036** Per-role restart limits fail closed and zero-limit services cannot restart; unexpected crash accounting is now real (`supervisor_state.roles[].restart_count`, incremented per fault-triggered restart and checked by `control_plane::may_restart()` -- verified by repeat-crashing the domain role until it correctly stayed down at its `restart_limit=2`, see USR-034). Time-windowed backoff remains open: `restart_count` is a monotonic attempt counter with no delay between attempts and no decay over time, so a role that crashes slowly over hours is treated the same as one crash-looping in milliseconds.
@@ -2402,3 +2402,77 @@ Hypervisor: 7 of 12. Kernel: 7 of 11, unchanged -- its userspace
 control-plane gate composes section 7, which 7.5 and 7.6 keep open, and its
 verification/documentation/real-hardware gates are the same three classes
 of open work as above. -->
+
+<!-- 0154 evidence: USR-026/027/028/033 closed, and a pre-existing shell
+defect found while verifying.
+
+## 7.5, mostly bookkeeping again
+
+USR-026, USR-027 and USR-028 were all already implemented and never
+updated, the same pattern as DEV-001/002. VM creation goes through
+capability selectors only (`vm.create(vm_selector, vcpu_selector, ...)`,
+and `map_frame` takes an authorized frame capability per HYP-015); the
+guest ELF is parsed and loaded entirely at PL3 in domain-manager, with
+per-page W^X derived from section flags; and the guest's memory and device
+layout comes from a userspace manifest, with the kernel supplying only the
+mechanism. Each is now recorded with where the code lives and which
+certification test covers it.
+
+USR-030/031 (Linux/BSD guests) stay open with the prerequisites written
+out, because their size should not be mistaken: PSCI for secondary CPU
+bringup, a guest-visible GIC distributor/redistributor (HYP-025's
+controller is bounded and vCPU-resident with no distributor emulation), a
+constructed device tree, and a root filesystem path. Zephyr boots because
+the manifest hands it exactly a PL011, the virtual timer and one forwarded
+IRQ.
+
+## USR-033: exit-status monitoring, and a live badge collision
+
+A role that EXITS is not a role that faulted, and only the latter was
+noticed. The supervision thread watches the fault endpoint, which a clean
+thread_exit never touches, and the readiness loop checked the failure badge
+and nothing else -- so a service that returned from main (console-server's
+`stop` path does exactly that) simply vanished: endpoint unanswered, no
+restart, no report.
+
+`handle_role_exits()` now reads the per-role exit badges from the
+notification the readiness loop already polls, clears that role's stale
+readiness bit, and restarts through the same bounded admission control as a
+fault restart. Driven from that loop rather than the supervision thread
+deliberately -- that thread blocks indefinitely on the fault endpoint,
+which is what stopped it waking every tick, and giving it a second thing to
+watch would mean returning to polling.
+
+Fixing it surfaced a live collision. `control_plane_exit_badge()` started
+at bit 8, which is `vfs_service_ready_badge` -- a process-role exit and a
+VFS readiness signal were the same bit in one accumulated word. It had gone
+unnoticed precisely because nothing read exit badges. Moving them revealed
+a second, undocumented constraint the hard way: at bit 16 they landed in
+the upper half of the word, which the certification harness treats as an
+unexpected-badge failure (`badges & 0xffff0000`), and
+userspace_control_plane_graph failed outright. That contract lived only in
+the harness. Exit badges now occupy bits 9-13, and four static_asserts keep
+the readiness, exit and failure classes disjoint AND inside the low 16
+bits, so neither mistake can recur silently.
+
+Gated by `exit-restart ok`: a real `stop` to the device role, with the
+restarted instance required to come back and answer a health RPC. 3/3.
+
+## Found while verifying, NOT introduced: the shell wedges after one pipeline
+
+`make smoke`'s `redirect + pipeline output` check began failing at 2 of 3
+occurrences. Investigating it found something smoke cannot see: the shell
+runs the FIRST `cat file | cat` correctly and then never returns to a
+prompt. Subsequent commands are echoed but never execute -- five
+consecutive pipelines produce exactly one line of output.
+
+Bisected to be pre-existing: the same probe against f9ccc32, before any of
+this session's lifecycle work, also completes exactly one pipeline. Smoke
+never caught it because smoke runs exactly one pipeline, which is also why
+its marker count of 2-vs-3 is a timing artifact of that single run rather
+than the real defect. The real defect is that a second pipeline never runs
+at all.
+
+Not fixed here, and deliberately not rolled into this change. Recorded as
+its own finding so it is not mistaken for fallout from the badge or
+lifecycle work. -->

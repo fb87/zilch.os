@@ -1209,6 +1209,95 @@ namespace sys::root_graph
     [[nodiscard]] inline bool restart_role(supervisor_state& state, word_t index) noexcept;
 
     /*
+     * Restarts any role whose exit badge appears in `badges`.
+     *
+     * A role that EXITS is not a role that faulted, and root noticed only
+     * the latter. The supervision thread watches the fault endpoint, which a
+     * clean thread_exit never touches, and the readiness loop checked the
+     * failure badge and nothing else -- so a service that returned from main
+     * (console-server's `stop` path does exactly that) simply vanished,
+     * leaving its endpoint unanswered with no restart and no report. That is
+     * the exit-status monitoring USR-033 recorded as open.
+     *
+     * Driven from the readiness loop rather than the supervision thread on
+     * purpose: that thread blocks indefinitely on the fault endpoint, which
+     * is what stopped it waking every tick, and giving it a second thing to
+     * watch would mean going back to polling. The loop already polls the
+     * notification these badges arrive on.
+     *
+     * Restart goes through the same admission control as a fault restart, so
+     * a zero-limit role stays dead and a flapping one stops being restarted
+     * rather than looping forever.
+     */
+    inline void handle_role_exits(supervisor_state& state, word_t badges, word_t& ready) noexcept {
+        const word_t exits = badges & abi::v1::control_plane_exit_badge_mask;
+        if (exits == 0U)
+            return;
+        for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
+            const word_t role = static_cast<word_t>(abi::v1::control_plane_role::process) + index;
+            if ((exits & abi::v1::control_plane_exit_badge(role)) == 0U)
+                continue;
+            // Its readiness is stale the moment it exits: clear the bit so a
+            // restarted instance has to signal ready again, and so the graph
+            // does not look complete while a role is missing.
+            ready &= ~abi::v1::control_plane_ready_badge(role);
+            native::text::packed(serial_service_endpoint, "root: role exited index=");
+            native::text::hex(serial_service_endpoint, index);
+            const bool restarted = restart_role(state, index);
+            native::text::packed(serial_service_endpoint,
+                                 restarted ? " restarted\r\n" : " not restartable\r\n");
+        }
+    }
+
+#if CONFIG_FAULT_INJECTION
+    /*
+     * Proves exit-status monitoring end to end: tell a role to stop, and
+     * confirm root sees the exit, restarts it, and gets a healthy service
+     * back.
+     *
+     * `stop` is the real production shape of a clean exit -- the role replies
+     * and then calls thread_exit with its own exit badge -- so this needs no
+     * injected fault, unlike verify_restart_on_fault(). The device role
+     * deliberately: it is restart-covered, it is not the console this
+     * reports through, and it is not the domain role hosting a guest.
+     *
+     * Feeds whatever it polls into handle_role_exits(), the same function
+     * the readiness loop uses, so this exercises the production handler
+     * rather than a copy of its logic.
+     */
+    [[nodiscard]] inline bool verify_restart_on_exit(supervisor_state& state,
+                                                     word_t& ready) noexcept {
+        const word_t success = static_cast<word_t>(error_t::success);
+        const abi::v1::ipc_timeout timeout{.ticks = 64U, .enabled = true};
+        if (ipc_call(endpoint_base + device_index,
+                     static_cast<word_t>(abi::v1::control_plane_operation::stop), 0U, 0U, 0U, {},
+                     timeout)
+                .status != success)
+            return false;
+        constexpr word_t attempts = 100000U;
+        for (word_t attempt = 0U; attempt < attempts; ++attempt) {
+            word_t badges = 0U;
+            if (control_result1(badges, abi::v1::control_operation::notification_poll,
+                                root_notification) != success)
+                return false;
+            if ((badges & abi::v1::control_plane_exit_badge_mask) == 0U) {
+                ready |= badges & ~abi::v1::control_plane_exit_badge_mask;
+                continue;
+            }
+            handle_role_exits(state, badges, ready);
+            // The restarted role must come back and answer, not merely be
+            // recreated -- that is the whole point of monitoring the exit.
+            return await_service_ready(abi::v1::control_plane_ready_badge(
+                                           static_cast<word_t>(abi::v1::control_plane_role::device)),
+                                       ready) &&
+                   healthy(device_index);
+        }
+        return false;
+    }
+#endif
+
+
+    /*
      * map_supervisor_state_self() must run before this thread ever touches
      * shared state -- see create_supervisor_state()'s comment for why root
      * doesn't map the second half itself. A failure here is treated as
@@ -1962,7 +2051,33 @@ namespace sys::root_graph
                 report_badges("root: role FAILED ready=");
                 return 3;
             }
-            ready |= badges;
+            /*
+             * A role that EXITS is not a role that faulted, and until now
+             * root noticed only the latter. The supervision thread watches
+             * the fault endpoint, which a clean thread_exit never touches,
+             * and this loop checked the failure badge and nothing else -- so
+             * a service that returned from main (console-server's `stop`
+             * path does exactly that) simply vanished, leaving its endpoint
+             * unanswered with no restart and no report. That is the
+             * exit-status monitoring USR-033 recorded as open.
+             *
+             * Handled here rather than in the supervision thread on
+             * purpose: that thread blocks indefinitely on the fault
+             * endpoint, which is what stopped it waking every tick, and
+             * giving it a second thing to watch would mean going back to
+             * polling. This loop is already polling the notification these
+             * badges arrive on.
+             *
+             * Restart goes through the same admission control as a fault
+             * restart, so a zero-limit role (supervisor) stays dead and a
+             * flapping one stops being restarted rather than looping.
+             */
+            handle_role_exits(state, badges, ready);
+            // Exit bits deliberately excluded: `ready` is a readiness set,
+            // and folding an exit into it would leave a bit set that no
+            // `expected` mask names and that a restarted role can never
+            // clear.
+            ready |= badges & ~abi::v1::control_plane_exit_badge_mask;
             if ((ready & expected) != expected && !readiness_stall_reported &&
                 ++readiness_iterations >= readiness_stall_iterations) {
                 readiness_stall_reported = true;
@@ -2075,6 +2190,8 @@ namespace sys::root_graph
                      * exercises it again from a known-good state rather
                      * than from whatever the failed assignment left.
                      */
+                    report(verify_restart_on_exit(state, ready) ? "exit-restart ok\n"
+                                                               : "exit-restart FAILED\n");
                     report(verify_assignment_rollback() ? "assign-rollback ok\n"
                                                         : "assign-rollback FAILED\n");
                     // Restart coverage for the services outside the fixed
