@@ -1758,6 +1758,41 @@ namespace sys::kernel::memory
         unlock_mappings();
     }
 
+    /*
+     * Drops every mapping of one frame, across whatever address spaces hold
+     * them -- the inverse of unmap_all(), which drops every mapping of one
+     * space.
+     *
+     * Exists for revocation. Revoking a device frame capability used to
+     * remove only the cspace entry, leaving the MMIO page still mapped in
+     * the old owner's address space: it could no longer NAME the device but
+     * could still drive it, which is not revocation (DEV-002). Callers
+     * restrict this to device frames deliberately -- an ordinary shared
+     * frame legitimately has several holders, and tearing the mapping out
+     * from under the others would be wrong.
+     */
+    inline void release_frame_mappings(frame& source) noexcept {
+        lock_mappings();
+        for (auto& mapping : source.mappings) {
+            if (!mapping.valid)
+                continue;
+            object::header_t* header = object::resolve(mapping.address_space);
+            if (header != nullptr && header->type == object::type_t::address_space) {
+                auto& target = *reinterpret_cast<space::address_space*>(header);
+                const error_t result = target.unmap_page(mapping.address);
+                // not_found means the translation is already gone, which is
+                // the state being aimed for; anything else leaves the record
+                // alone so the mapping database stays truthful.
+                if (result != error_t::success && result != error_t::not_found)
+                    continue;
+            }
+            mapping = {};
+            if (source.mapping_count != 0U)
+                --source.mapping_count;
+        }
+        unlock_mappings();
+    }
+
     [[nodiscard]] inline bool mapping_database_valid() noexcept {
         bool valid = true;
         lock_mappings();

@@ -649,6 +649,27 @@ namespace sys::kernel::capability
         return result;
     }
 
+    /*
+     * Called once per revoked capability, AFTER every cspace lock is
+     * released, so the handler is free to take the locks a device teardown
+     * needs. Installed by a layer that can see both this file and the
+     * device objects; this one cannot reach them (interrupt.hh and
+     * memory/manager.hh both include cspace.hh, so the dependency only runs
+     * one way).
+     *
+     * It exists because revoking a capability used to remove only the NAME.
+     * The authority survived: a revoked interrupt stayed bound to its old
+     * owner's notification and unmasked, so the device kept firing into a
+     * driver that no longer owned it. Severing the name without severing
+     * the authority is not revocation.
+     */
+    inline void (*revoked_object_hook)(const object::reference_t&) noexcept = nullptr;
+
+    inline void install_revoked_object_hook(void (*hook)(const object::reference_t&) noexcept)
+        noexcept {
+        __atomic_store_n(&revoked_object_hook, hook, __ATOMIC_RELEASE);
+    }
+
     inline u32 revoke_descendants_locked(derivation_id_t ancestor) noexcept {
         if (ancestor == 0U)
             return 0U;
@@ -661,6 +682,12 @@ namespace sys::kernel::capability
          * derivation graph, and only then invalidate slots and records.
          */
         static u8 revoke_marks[maximum_registered_cspaces][cspace_slot_count]{};
+        // Shared scratch like revoke_marks above, and safe for the same
+        // reason: both callers of this function hold the authority lock, so
+        // passes are serialised against each other.
+        constexpr u32 maximum_revoked_reported = 64U;
+        static object::reference_t revoked_objects[maximum_revoked_reported]{};
+        u32 revoked_count = 0U;
         cspace_t* locked_spaces[maximum_registered_cspaces];
         u32 locked_count = 0U;
         u32 removed = 0U;
@@ -704,6 +731,18 @@ namespace sys::kernel::capability
                 if (revoke_marks[space_index][slot_index] == 0U)
                     continue;
                 slot_t& slot = slot_at(*cspace, slot_index);
+                /*
+                 * Remember what was revoked so the device side can be torn
+                 * down once the locks are gone. Bounded and best-effort: if
+                 * more capabilities are revoked at once than the buffer
+                 * holds, the excess simply is not reported. Nothing depends
+                 * on this for correctness of the revoke itself -- it only
+                 * drives the hook below -- and a revoke that large is a
+                 * whole-task teardown, which severs device authority by its
+                 * own path anyway.
+                 */
+                if (revoked_count < maximum_revoked_reported)
+                    revoked_objects[revoked_count++] = slot.object;
                 deactivate_derivation(slot.derivation);
                 slot = {};
                 mark_free(*cspace, slot_index);
@@ -715,6 +754,14 @@ namespace sys::kernel::capability
         for (u32 index = locked_count; index > 0U; --index)
             unlock(*locked_spaces[index - 1U]);
         spin_unlock(cspace_registry_lock, lock_order::rank::capability_registry);
+
+        // Only now, with every cspace lock dropped: the hook takes device
+        // locks that rank below these and would invert the order if called
+        // from inside the sweep above.
+        const auto hook = __atomic_load_n(&revoked_object_hook, __ATOMIC_ACQUIRE);
+        if (hook != nullptr)
+            for (u32 index = 0U; index < revoked_count; ++index)
+                hook(revoked_objects[index]);
         return removed;
     }
 

@@ -460,9 +460,9 @@ Every completed requirement must link to:
 
 ## 9.1 Device resource model
 
-- [ ] **DEV-001** Device ownership represented by capabilities.
-- [ ] **DEV-002** MMIO regions delegated safely.
-- [ ] **DEV-003** IRQs delegated and revoked safely.
+- [x] **DEV-001** Device ownership represented by capabilities. A device is owned by holding capabilities to it and by nothing else: the MMIO page is a `frame` object with `device=true`, created only by a root task (`device_frame_create`) and exclusivity-checked so only one live device frame may exist per physical page; the line is an `interrupt` object created only by a root task (`interrupt_create`) and registered against a single IRQ number. Neither is reachable by a task that does not hold the capability — `map_frame` and `interrupt_bind` both resolve through the holder's cspace with the required rights — and both are delegated by `capability_mint` and withdrawn by `capability_revoke`, with revocation now severing the device's live effects as well as its name (DEV-003). There is no ambient device registry a task can address by number instead.
+- [x] **DEV-002** MMIO regions delegated safely. Delegation was already sound: an MMIO page is reachable only through a root-created `device_frame_create` capability, exclusivity-checked so two callers cannot both be granted the same physical page, minted onward with explicit rights, and mapped only with device memory attributes that `memory::valid_attributes()` enforces for any frame carrying the device flag. Revocation was the hole, exactly as for IRQs: clearing the cspace slot left the page still MAPPED in the old owner's address space, so it could no longer name the device but could still drive it. `memory::release_frame_mappings()` now drops every mapping of the frame across whatever spaces hold them — the inverse of `unmap_all()`, which drops every mapping of one space — driven by the same post-revoke hook as DEV-003. Restricted to device frames deliberately: an ordinary shared frame (VFS's client buffer, the block driver's payload page) legitimately has several holders, and revoking one holder's capability must not unmap it from the others, whereas a device frame is exclusivity-checked to a single live owner so reclaiming it means precisely this.
+- [x] **DEV-003** IRQs delegated and revoked safely. Delegation was already real (root-gated `interrupt_create`, `capability_mint` into the owner, `interrupt_bind` to the owner's own notification, `interrupt_ack` after servicing), and `irq_ownership_delegation` has covered it. Revocation was NOT: `revoke_descendants()` cleared the cspace slot and nothing else, so the interrupt object stayed bound to the old owner's notification and stayed unmasked — the device kept firing into a driver that no longer held a capability to it. The name was revoked; the authority was not. Capability revocation now runs a hook (`interrupt::on_capability_revoked`) that masks the line at the controller, drops any in-flight delivery, and unbinds it, so re-delegation starts from a clean state via `bind()`. The hook is invoked after every cspace lock is released, because the device teardown it performs takes locks that rank below them and would otherwise invert the order; `cspace.hh` deliberately does not know which object types own hardware, so the type filter lives in `interrupt.hh`. `irq_ownership_delegation` now asserts the severed state (masked, not active, unbound) rather than only that the capability lookup fails.
 - [ ] **DEV-004** Device reset requirement documented per device.
 - [ ] **DEV-005** Assignment rollback implemented.
 
@@ -2165,3 +2165,59 @@ release-of-mapped-page firings.
 VFS has a descriptor on the same path but is not exercised; VFS restart is
 not what this item names, and adding a third restart to the one profile
 that also hosts a guest buys little for the boot time it costs. -->
+
+<!-- 0150 evidence: DEV-001/002/003 closed. Revocation severs device
+authority, not just the capability naming it.
+
+The device-assignment mechanism was largely already there -- root-gated
+device_frame_create with per-physical-page exclusivity, root-gated
+interrupt_create, capability_mint to delegate, capability_revoke to
+withdraw -- and irq_ownership_delegation already proved the delegation
+half. What none of it did was make revocation mean anything to the
+hardware.
+
+revoke_descendants() cleared the cspace slot and stopped. So after root
+revoked a driver's capabilities:
+
+  - the interrupt object stayed bound to that driver's notification and
+    stayed unmasked, and the device kept firing into a driver that no
+    longer held a capability to it;
+  - the MMIO page stayed mapped in that driver's address space, so it
+    could no longer name the device but could still drive it.
+
+The name was revoked; the authority was not. For a capability system that
+is not a gap in a device feature, it is a soundness bug.
+
+Revocation now runs a hook per revoked capability. Interrupts are masked at
+the controller, any in-flight delivery is dropped, and the line is unbound,
+so re-delegation starts clean through bind(). Device frames have every
+mapping dropped across whatever spaces hold them, via a new
+memory::release_frame_mappings() -- the inverse of unmap_all(), which drops
+every mapping of one space rather than every mapping of one frame.
+
+Three structural points, each load-bearing:
+
+  - The hook fires only after every cspace lock is released. The device
+    teardown takes memory_mapping (rank 40) while the sweep holds cspace
+    (rank 50), so calling it inline would invert the order. The revoked
+    objects are collected during the sweep and handled afterwards, which is
+    the same two-phase shape revoke already used for its own mark/sweep.
+  - cspace.hh does not know which object types own hardware, and should
+    not. It calls an installed hook; the type filter lives in the thread
+    layer, which is the one place that can see both interrupt.hh and
+    memory/manager.hh (each of those includes cspace.hh, so neither can
+    reach the other).
+  - Frame unmapping is restricted to DEVICE frames. An ordinary shared
+    frame legitimately has several holders -- VFS's client buffer, the
+    block driver's payload page -- and revoking one holder's capability
+    must not unmap it from the others. A device frame is exclusivity-
+    checked to a single live owner, so reclaiming it means exactly this.
+
+irq_ownership_delegation now asserts the severed state (masked, not
+active, unbound) rather than only that the capability lookup fails --
+the old assertion passed whether or not the line was still live, which is
+how this survived.
+
+Verified: certification [ACCEPTANCE] result=PASS failures=0
+failure_mask=0 transport=PASS with all five irq_* tests passing, and
+make smoke PASS on all three profiles. -->

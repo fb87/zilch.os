@@ -211,6 +211,43 @@ namespace sys::kernel::interrupt
         return error_t::success;
     }
 
+    /*
+     * Severs a line from its owner: masked at the controller, unbound, and
+     * with any in-flight delivery dropped.
+     *
+     * Revoking an interrupt capability used to remove only the cspace entry.
+     * The interrupt object stayed bound to the old owner's notification and
+     * stayed unmasked, so the device kept firing into a driver that no
+     * longer owned it -- the name was revoked, the authority was not, which
+     * is not revocation at all (DEV-003). Root re-delegating the line calls
+     * bind() again, which re-arms it.
+     *
+     * Idempotent, and safe on a line that was never bound: every step is a
+     * store to a known value or a controller operation that tolerates
+     * repetition.
+     */
+    inline void release_ownership(interrupt_t& value) noexcept {
+        platform::interrupt::mask(value.irq);
+        __atomic_store_n(&value.masked, true, __ATOMIC_RELEASE);
+        if (__atomic_exchange_n(&value.active, false, __ATOMIC_ACQ_REL))
+            platform::interrupt::deactivate(value.irq);
+        value.notification = {};
+        __atomic_store_n(&value.stormed, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&value.window_count, 0U, __ATOMIC_RELEASE);
+    }
+
+    /*
+     * Installed into the capability layer so a revoke severs device
+     * authority, not just the name. Filters by type here rather than there:
+     * cspace.hh has no business knowing which object types own hardware.
+     */
+    inline void on_capability_revoked(const object::reference_t& reference) noexcept {
+        object::header_t* header = object::resolve(reference);
+        if (header == nullptr || header->type != object::type_t::interrupt)
+            return;
+        release_ownership(*reinterpret_cast<interrupt_t*>(header));
+    }
+
     [[nodiscard]] inline error_t acknowledge(interrupt_t& value) noexcept {
         bool expected = true;
         if (!__atomic_compare_exchange_n(&value.active, &expected, false, false, __ATOMIC_ACQ_REL,

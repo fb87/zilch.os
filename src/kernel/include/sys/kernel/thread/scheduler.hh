@@ -137,6 +137,34 @@ namespace sys::kernel::thread
     // lifecycle it belongs with; installed here because this runs first.
     [[nodiscard]] inline bool page_mapped_by_live_space(paddr_t address) noexcept;
 
+    /*
+     * Severs device authority when the capability naming it is revoked.
+     * Lives here because it is the one layer that can see both device kinds:
+     * interrupt.hh and memory/manager.hh each include capability/cspace.hh,
+     * so neither can reach the other, and cspace.hh has no business knowing
+     * which object types own hardware.
+     *
+     * Device frames only, for frames. An ordinary shared frame legitimately
+     * has several holders -- VFS's client buffer, the block driver's payload
+     * page -- and revoking one holder's capability must not unmap it from
+     * the others. A device frame is exclusivity-checked to a single live
+     * owner, so reclaiming it means exactly this.
+     */
+    inline void on_capability_revoked(const object::reference_t& reference) noexcept {
+        object::header_t* header = object::resolve(reference);
+        if (header == nullptr)
+            return;
+        if (header->type == object::type_t::interrupt) {
+            interrupt::release_ownership(*reinterpret_cast<interrupt::interrupt_t*>(header));
+            return;
+        }
+        if (header->type == object::type_t::frame) {
+            auto& target = *reinterpret_cast<memory::frame*>(header);
+            if (target.device)
+                memory::release_frame_mappings(target);
+        }
+    }
+
     [[nodiscard]] inline error_t initialize_user_threads() noexcept {
         /*
          * Arm the page allocator's "is this page still mapped?" barrier
@@ -144,6 +172,13 @@ namespace sys::kernel::thread
          * recycling is left behind. See page_mapped_by_live_space().
          */
         memory::install_live_mapping_probe(&page_mapped_by_live_space);
+        /*
+         * And make revocation sever device authority rather than only the
+         * capability naming it -- see interrupt::on_capability_revoked().
+         * Armed here for the same reason as the probe above: before any
+         * capability exists to revoke.
+         */
+        capability::install_revoked_object_hook(&on_capability_revoked);
 
         error_t bootstrap_result = bootstrap::initialize_objects();
         if (bootstrap_result != error_t::success)

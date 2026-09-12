@@ -144,6 +144,16 @@ namespace sys::kernel::tests::interrupt
             delegated_cspace, child, object::type_t::interrupt, capability::right_t::write, header);
         if (revoked != 1U || (lookup != error_t::denied && lookup != error_t::not_found))
             return error_t::invalid_argument;
+        /*
+         * Revocation must sever the AUTHORITY, not just the name. Before
+         * this was enforced, the line stayed bound to the old owner's
+         * notification and stayed unmasked, so a device kept firing into a
+         * driver that no longer held a capability to it -- the delegation
+         * was safe and the revocation was not.
+         */
+        if (!irq.masked || irq.active ||
+            irq.notification.type != object::type_t::none)
+            return error_t::invalid_argument;
         (void)capability::delete_capability(root.cspace, 30U);
         kernel::interrupt::unregister_irq(irq);
         kernel::interrupt::unregister_irq(level_irq);
