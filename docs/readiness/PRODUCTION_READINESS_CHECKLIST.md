@@ -658,18 +658,18 @@ gates above.
 
 The hypervisor may be called **production-ready** only when all of these gates are complete:
 
-- [ ] Hypervisor object/lifecycle gate
-- [ ] Stage-2 translation gate
-- [ ] Real multi-vCPU execution gate
-- [ ] Production virtual interrupt gate
-- [ ] Production virtual timer gate
-- [ ] Concurrent multi-VM gate
-- [ ] Userspace VMM/domain-manager gate
-- [ ] Device assignment and SMMU gate
-- [ ] Guest fault-containment gate
-- [ ] Security and teardown gate
-- [ ] Stress, fuzz, and soak gate
-- [ ] Real hardware ARM64 certification gate
+- [x] Hypervisor object/lifecycle gate — composes 8.1 (HYP-001..007, all complete). Certification: `hypervisor_vm_create`/`vm_destroy`/`vm_stale`/`vm_reuse`/`vm_parent_busy`, `hypervisor_vcpu_create`/`vcpu_destroy`/`vcpu_stale`, `hypervisor_dynamic_lifecycle` — all PASS.
+- [x] Stage-2 translation gate — composes 8.2 (HYP-008..015, all complete), whose evidence is recorded per requirement; exercised in certification through `hypervisor_control_model_0_4`/`_0_5`/`_0_6` and the real-execution tests below, which cannot run without stage-2 descriptors being populated correctly.
+- [x] Real multi-vCPU execution gate — composes 8.3 (HYP-016..022, all complete). Certification: `hypervisor_real_single_vcpu`, `hypervisor_real_smp_execution` — both PASS.
+- [x] Production virtual interrupt gate — composes 8.4 (HYP-025..033, all complete), whose evidence is recorded per requirement; the real guest additionally takes virtual IRQ 33 through this path on every `make smoke` guest profile boot (`guest alive via vpl011`).
+- [x] Production virtual timer gate — composes 8.5 (HYP-034..040, all complete). Certification: `virtual_timer_lifecycle result=PASS expirations=1 cancellations=1 generations=3`, plus `timer_database_invariants`.
+- [x] Concurrent multi-VM gate — composes HYP-023 and HYP-024. Certification: `hypervisor_real_multivm_isolation result=PASS`.
+- [x] Guest fault-containment gate — composes 8.6 (HYP-041..047, all complete) and HYP-024. Certification: `hypervisor_negative_fuzz` and `hypervisor_real_multivm_isolation` — both PASS.
+- [ ] Userspace VMM/domain-manager gate — NOT met: section 7.5 has 5 open and 2 partial requirements. `domain_manager_api`, `domain_guest_load` and `domain_guest_run` pass, and the guest profile boots a real Zephyr guest to an interactive shell, but the section's own requirements are not complete.
+- [ ] Device assignment and SMMU gate — NOT met: 9.1 is complete and DEV-006 (discovery) is done, but DEV-007..018 are blocked on this platform. See DEV-007 for the blocker — QEMU's virt SMMUv3 fronts the PCIe root complex only, and this kernel's devices are virtio-mmio, so there is nothing behind the SMMU to translate for.
+- [ ] Security and teardown gate — NOT met: 10.1, 10.2 and 10.3 are complete and HYP-007 covers teardown serialization, but 10.4 still carries 2 partial requirements.
+- [ ] Stress, fuzz, and soak gate — NOT met: 12.3 has 2 open and 4 partial, and 12.4 (long-duration certification) has 5 open. `hypervisor_negative_fuzz`, `root_created_smp_fuzz`, `cross_cspace_transfer_fuzz` and `rt_logical_time_soak` pass, which is not the same as the section being complete.
+- [ ] Real hardware ARM64 certification gate — NOT met, and not reachable from this environment: every result in this document comes from QEMU. This needs the kernel booted on physical ARM64 hardware.
 
 ## Final release evidence
 
@@ -2350,3 +2350,55 @@ point at it.
 Verified: make smoke PASS on all three profiles; certification
 failures=0 failure_mask=0 transport=PASS with zero barrier firings; both
 SMMU-present and SMMU-absent boots reach `graph ready`. -->
+
+<!-- 0153 evidence: 7 of the 12 hypervisor gates recorded as complete. This
+is composition and bookkeeping, NOT new proof, and the distinction matters
+enough to state plainly.
+
+## What was actually found
+
+Every one of HYP-001 through HYP-047 was already complete, each with its
+own recorded evidence, and HYP-EXEC-GATE with it. Sections 8.1 through 8.6
+are at 47 of 47. The twelve gate lines beneath them were all still
+unchecked -- they have no criteria of their own, they compose their
+sections, and nobody had gone back to tick them as the sections finished.
+
+So the work here was to verify the composition rather than trust the gate
+names: count each section's requirements, confirm none is open or partial,
+and re-run the certification suite to confirm the hypervisor evidence still
+holds today rather than only when it was first recorded.
+
+It does. The suite executes the hypervisor tests in the certification
+profile (CONFIG_HYPERVISOR_SELFTEST and CONFIG_GUEST_TEST_ARM64 are both
+set there), and all of them pass: vm/vcpu create, destroy, stale, reuse and
+parent-busy; dynamic lifecycle; real single-vCPU and real SMP execution;
+real multi-VM isolation; negative fuzz; the three control-model cases;
+virtual timer lifecycle; domain manager API, guest load and guest run. 144
+PASS overall, with the only failures being the wall-clock latency gates
+that need a quiet host (0137).
+
+## What this is not
+
+Checking a gate whose sub-items are ticked is exactly the trap this
+document warns about elsewhere -- a gate that looks closed and proves
+nothing. Two guards against that here: each gate line now names the
+section it composes AND the certification tests that exercise it, so the
+claim is auditable rather than asserted; and where a section is not
+complete the gate stays open even though its tests pass, which is the case
+for the userspace VMM gate (7.5 has 5 open, 2 partial) and the stress/soak
+gate (12.3 has 2 open and 4 partial, 12.4 has 5 open). Passing tests are
+not the same as a complete section, and the five open gates say so
+explicitly.
+
+Two gates are open for reasons no amount of work in this environment
+changes: device assignment and SMMU, blocked by the platform (DEV-007 --
+nothing sits behind QEMU virt's SMMUv3 that this kernel drives), and real
+hardware ARM64 certification, which needs the kernel booted on physical
+hardware when every result in this document comes from QEMU.
+
+## Status of the two 1.0 gates
+
+Hypervisor: 7 of 12. Kernel: 7 of 11, unchanged -- its userspace
+control-plane gate composes section 7, which 7.5 and 7.6 keep open, and its
+verification/documentation/real-hardware gates are the same three classes
+of open work as above. -->
