@@ -2642,27 +2642,35 @@ evidence does not implicate.
 Not fixed. Deliberately not patched around either: adding a poll to
 rx_main would paper over whichever of the two mechanisms is real.
 
-## Second, separate defect: `| wc` poisons the next pipeline
+## NOT a second defect: `| wc` was a red herring
 
-`cat /tmp/smoke.txt | cat` works. `cat /tmp/smoke.txt | wc` produces
-nothing AND leaves the following pipeline producing nothing, while the
-shell itself stays interactive (it answered 6/6 bare newlines afterwards
-in the same run). Reordering smoke's commands so `| wc` runs third made
-the previously-passing `redirect + pipeline output` gate fail at 2 of 3
-occurrences; restoring the order made it pass at 3 again. So the damage is
-ordered and caused by that command, not by command count.
+Worth recording as a wrong turn, because the evidence for it looked
+strong. `cat /tmp/smoke.txt | wc` produced nothing and left the FOLLOWING
+pipeline producing nothing too; reordering smoke's commands so `| wc` ran
+third made the previously-passing `redirect + pipeline output` gate drop
+to 2 of 3 occurrences, and restoring the order made it pass at 3 again.
+That looked like ordered damage caused by one command.
 
-cat's `stream()` and wc's `count_stream()` are structurally identical
-read loops, so stdin handling is not the difference; what differs is only
-wc's closing `printf("%7ld %7ld %7ld\n", ...)`. The printf implementation
-in libc/stdio.cc does handle width-plus-`l` correctly on inspection, so
-this is not yet explained and the next step is to determine whether the
-vfs-server is what wedges.
+It is not. Two isolating runs settle it:
 
-The `| wc` probe stays in smoke.sh, reported and NOT gated, so the signal
-survives without turning `make smoke` red for an unexplained defect that
-the assertion cannot itself diagnose. Promote it to a hard gate when this
-closes.
+  - `wc /tmp/a.txt` standalone works and prints `1 1 6 /tmp/a.txt`, so
+    the image, its role binding, the `%7ld` printf and VFS file reads are
+    all sound.
+  - `echo`, then `cat /tmp/a.txt | cat` (works, "hello" and a prompt),
+    then `wc /tmp/.pipe0` -- which wedges. And in the other run, `echo`,
+    then `wc /tmp/a.txt` (works), then `cat /tmp/a.txt | wc` -- wedges.
+
+In both, the THIRD command failed, whichever command it was. The
+all-`cat` probes fail at position three or four with no wc anywhere. So
+position is what predicts the failure, not the command, and there is one
+remaining defect here rather than two: commands stop working after a
+variable number of them, which is the console/RX stall above.
+
+The `| wc` probe stays in smoke.sh, reported and NOT gated, because the
+assertion is still the right one -- it is the only thing that can tell a
+working pipeline from a producer whose redirection silently failed -- but
+it sits late enough in the sequence to be measuring the stall instead.
+Promote it to a hard gate once the stall closes.
 
 ## Correction to 0135
 
@@ -2677,3 +2685,55 @@ latencies where 0/6 was previously typical, but a later run on the same
 build reported 0/6 again, so this is better and still variable. It stays
 ungated, now for an honest reason: the measurement is unstable, not
 demonstrably external. -->
+
+<!-- 0157 evidence: two SMP-width defects, one fixed latently and one
+recorded as the reason it cannot be exercised.
+
+## fork placed children on CPUs that may not exist
+
+fork_user_bundle() chose its child's CPU with
+
+    (parent.pinned_cpu + 1U) % maximum_cpu_count
+
+maximum_cpu_count is the COMPILE-TIME maximum (4), not the number of CPUs
+actually online. At any narrower width the child is pinned to a CPU that
+was never brought up, where it is never scheduled and never runs -- the
+parent then polls process_wait forever on a child that cannot start.
+
+Now searches for the next ONLINE CPU (arch::smp::is_online) and falls back
+to the parent's own CPU when nothing else is up, which is the only option
+on a uniprocessor and is survivable there now that the authority lock is
+fair (0155) and thread_yield exists.
+
+Stated precisely, because it matters for how much this is worth: at the
+width every profile here boots, all four CPUs are online, the first
+candidate is `parent + 1`, and the behaviour is IDENTICAL to the old
+expression. So this is a latent-correctness fix. It repairs no observed
+symptom and none should be attributed to it. `make smoke` PASS and
+certification PASS after it are evidence of no regression, not evidence
+the fix does anything at this width.
+
+## Why it cannot be exercised: the kernel requires full SMP width
+
+Trying to validate the above found the harder limitation. Booting with
+CPUS=1 or CPUS=2 does not reach userspace at all:
+
+    [INFO] smp: boot CPU online
+    [ERR] secondary CPU startup failed=-1
+
+after which kernel.hh halts. Secondary startup is driven from the
+compile-time maximum rather than from what firmware reports, so anything
+short of four CPUs is a hard boot failure rather than a narrower
+configuration. Every profile in this tree boots at exactly four, which is
+why neither this nor the fork-placement bug above was ever noticed.
+
+Not fixed here -- making SMP width configurable means reconciling
+maximum_cpu_count, platform::firmware::boot_info.cpu_count and the
+secondary-startup expectation, and then re-validating the pinning table,
+the per-CPU timeout queues and the per-CPU tick counters against a width
+they have never run at. That is real work, not a one-line bound change,
+and it should not be bundled into a lock fix.
+
+Worth knowing for readiness purposes regardless: "runs on arm64" in this
+tree currently means "runs on a 4-CPU arm64", and no evidence exists for
+any other width. -->

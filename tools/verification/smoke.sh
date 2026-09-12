@@ -212,15 +212,18 @@ run_shell_profile() {
     # silently failed, because both put the same text on the console. `| wc`
     # can, since wc reports what it actually READ out of the pipe file.
     #
-    # Why it is NOT gated: it currently fails, and it fails for a reason of
-    # its own rather than for the reason it was written to detect -- running
-    # it also stops the FOLLOWING pipeline from producing anything, while
-    # leaving the shell itself interactive. That is an open, separately
-    # recorded defect (checklist 0156), not the producer-redirection failure
-    # this check is aiming at, so gating on it now would turn `make smoke`
-    # red for something this assertion cannot actually diagnose. Runs last
-    # so its fallout cannot reach the assertions above it, and is reported
-    # so the signal is not lost. Promote to a hard gate once 0156 closes.
+    # Why it is NOT gated: commands stop working after a variable number of
+    # them (checklist 0156, open and pre-existing -- probes of the identical
+    # binary completed 0, 3, 5, 5 and 6 of six commands), so a command this
+    # late in the sequence is measuring that stall rather than the pipeline.
+    # Gating here would turn `make smoke` red for a defect this assertion
+    # cannot diagnose. It runs last so the stall cannot reach the assertions
+    # above it, and is reported so the signal is not lost.
+    #
+    # Note for whoever picks this up: `| wc` failing here is NOT evidence
+    # against wc. `wc FILE` standalone works, and a plain non-pipeline
+    # command in the same position wedges identically -- position predicts
+    # the failure, not the command. Promote to a hard gate once 0156 closes.
     #
     # No flags: bin/wc parses none at all, so `wc -l` would open `-l` as a
     # filename and print nothing. Asserting the line/word columns rather

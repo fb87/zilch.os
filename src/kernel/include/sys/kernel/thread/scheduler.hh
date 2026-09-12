@@ -1,6 +1,7 @@
 #pragma once
 #include <sys/arch/cpu.hh>
 #include <sys/arch/irq.hh>
+#include <sys/arch/smp.hh>
 #include <sys/arch/space/address_space.hh>
 #include <sys/arch/thread/entry.hh>
 #include <sys/kernel/boot/bootinfo.hh>
@@ -737,17 +738,35 @@ namespace sys::kernel::thread
         thread& target = user_threads[id];
         task::initialize(owner, static_cast<space_id_t>(id));
         /*
-         * The child lands on the next CPU rather than its parent's.
+         * The child lands on the next ONLINE CPU rather than its parent's.
          *
-         * There is no yield syscall here, so a parent waiting on a child
-         * spins through process_wait -- and every capability operation takes
-         * a global authority lock, so a parent spinning on its child's own
-         * CPU starves exactly the thread it is waiting for. Keeping POSIX's
-         * usual affinity would make the common fork-then-wait pattern
-         * livelock rather than merely run slowly.
+         * Spreading it off the parent's CPU is deliberate: a parent waiting
+         * on a child polls process_wait, and every capability operation takes
+         * the global authority lock, so a parent polling on its child's own
+         * CPU contends with exactly the thread it is waiting for. (That lock
+         * is now fair -- see cspace.hh's spin_lock -- and thread_yield
+         * exists, so this is no longer the difference between working and
+         * livelocking that it once was, but there is still no reason to pile
+         * a fork-then-wait pair onto one CPU.)
+         *
+         * The `% maximum_cpu_count` this used to be is wrong at any width
+         * below the compile-time maximum: maximum_cpu_count is 4, so booting
+         * with fewer CPUs placed every forked child on a CPU that does not
+         * exist, where it was never scheduled and never ran. Nothing caught
+         * it because every profile here boots at full width. Searching for
+         * the next online CPU instead degrades correctly, and falls back to
+         * the parent's own CPU on a uniprocessor -- where sharing is the only
+         * option available.
          */
-        const cpu_id_t child_cpu =
-            static_cast<cpu_id_t>((parent.pinned_cpu + 1U) % maximum_cpu_count);
+        cpu_id_t child_cpu = parent.pinned_cpu;
+        for (u32 step = 1U; step <= maximum_cpu_count; ++step) {
+            const auto candidate =
+                static_cast<cpu_id_t>((parent.pinned_cpu + step) % maximum_cpu_count);
+            if (arch::smp::is_online(candidate)) {
+                child_cpu = candidate;
+                break;
+            }
+        }
         /*
          * Role 0 with no fuzz seed: initialize_user() would load role 0's
          * image, which fork must not do, so the image it loads is discarded
