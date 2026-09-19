@@ -3108,3 +3108,73 @@ pl011 and GIC tracepoints -- rather than more guest-side instrumentation,
 which has now been pushed as far as it usefully goes: every guest-side
 observation either reproduces the stall without explaining it, or perturbs
 timing enough to hide it. -->
+
+<!-- 0165 evidence: 0156 seen from the emulator side. The mechanism is now
+observed rather than inferred; the cause is still open.
+
+## Tooling
+
+`run.sh` gained a `QEMU_EXTRA` pass-through (unset by default, so no
+profile changes behaviour). With it, `-trace enable=pl011_* -trace
+enable=gicv3_dist_set_irq -D <file>` gives the RX path from outside the
+guest, which is where the question had moved.
+
+Tracing perturbs: the full pl011 set (~4100 events, each a synchronous file
+write) hid the stall across six runs. Cutting to `pl011_can_receive`,
+`pl011_receive` and `gicv3_dist_set_irq` (~1170 events) still reproduces.
+Trace output goes to stderr unless `-D` is given, and mixing it into the
+console log silently breaks any exact-line detector reading that log.
+
+## The observed mechanism
+
+At a stall, with bytes still buffered in the device:
+
+    pl011_can_receive  RX FIFO used 4/16, can_receive 12 chars
+    pl011_receive      recv 1 chars
+    pl011_can_receive  RX FIFO used 5/16, can_receive 11 chars
+    pl011_receive      recv 1 chars
+    pl011_can_receive  RX FIFO used 6/16, can_receive 10 chars
+    pl011_receive      recv 1 chars
+    gicv3_dist_set_irq interrupt 33 level changed to 0
+    (nothing, ever)
+
+**The PL011 interrupt line drops to 0 while its receive FIFO still holds
+data, and never rises again.** QEMU keeps accepting input the whole time --
+`can_receive` stays positive and bytes keep landing in the FIFO -- so the
+host and the emulator are both healthy. The guest is healthy too (0164:
+the driver drains correctly and its acknowledge succeeds). What fails is
+the interrupt line itself.
+
+The same signature appears with the FIFO one byte deep, so this is not a
+FIFO-depth artefact.
+
+## A theory raised and refuted
+
+The one-byte handshake looked like the answer. QEMU's chardev removes its
+host read source when the front end reports it cannot accept a character
+and re-adds it when the guest's DR read calls
+`qemu_chr_fe_accept_input()`; with a one-deep FIFO those happen on nearly
+every byte, and the first traces showed the poll missing from exactly the
+cycle that stalled.
+
+So the driver was changed to enable FIFOs (LCR_H FEN, plus RTIM, since with
+a FIFO a short line raises the receive-timeout interrupt rather than the
+level interrupt). The change verifiably took effect -- QEMU reports `used
+0/16` instead of `0/1`, and trace volume fell from 1170 events to 480 --
+and it did NOT fix the stall: interleaved A/B, five pairs, 122/150
+completed with 1/5 stalled at HEAD versus 96/150 and 2/5 with the fix.
+Reverted. Enabling FIFOs is still the more correct configuration for real
+hardware and cuts the interrupt rate, but it is not this bug and was not
+kept on a claim it could not support.
+
+## What is left
+
+The line goes low with data pending. In QEMU's model the RX interrupt is
+raised when the fill level reaches the trigger and cleared when a read
+takes it below, which is real PL011 behaviour -- and real hardware covers
+the remainder with the receive-timeout interrupt. Whether QEMU implements
+that timeout, and what the effective trigger level is in each FIFO mode,
+decides whether this is a QEMU modelling limitation or a driver
+configuration this platform cannot use. That is the next thing to
+establish, and it is answerable by reading QEMU's pl011 source rather than
+by more runs. -->

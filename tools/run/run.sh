@@ -40,7 +40,13 @@ if [ -z "${QEMU_CPUSET:-}" ] && command -v taskset >/dev/null 2>&1; then
         QEMU_CPUSET="$((host_cpus - cpus))-$((host_cpus - 1))"
     fi
 fi
+# QEMU_EXTRA appends raw arguments to the emulator command line, word-split
+# on purpose. Added for `-trace` during the 0156 investigation, where the
+# question had moved outside the guest and guest-side instrumentation could
+# not answer it. Unset by default, so no profile changes behaviour.
 run_arm64_qemu() {
+    # shellcheck disable=SC2086
+    set -- "$@" ${QEMU_EXTRA:-}
     if [ -n "${QEMU_CPUSET:-}" ] && [ "${QEMU_CPUSET}" != "-" ]; then
         exec taskset -c "$QEMU_CPUSET" qemu-system-aarch64 "$@"
     fi
