@@ -3038,3 +3038,73 @@ armed timeout receives neither its notification nor its timeout. Fixing
 bounded receive first is the prerequisite: until a timeout reliably fires,
 the driver has no recovery path to test, and the stall cannot be
 distinguished from a permanently lost wakeup. -->
+
+<!-- 0164 evidence: 0156 localized. Still not fixed, but the driver is now
+provably innocent and there is a reproducer.
+
+## A reproducer, kept as a tool
+
+`tools/verification/stall_repro.sh`. Thirty short commands at 0.6s spacing
+rather than eight at three seconds, so one run contains far more input
+events; it reproduces roughly half of runs where the earlier probes managed
+about one in five. It reports "completed: N/30" rather than pass/fail,
+because the stall point varies and a graded number is what makes an A/B
+meaningful.
+
+Most stalls now land on the FIRST command, so this is largely a race in the
+startup window rather than something that wears out after N commands.
+
+## The driver is not at fault
+
+Marker tracing through a caught stall gives the complete sequence:
+
+    $ [D] <N d k K
+
+read_byte_wait arrived and found the ring empty so the reply was deferred
+(`[D]`); the bound notification fired (`<N`); drain_rx was entered (`d`);
+its loop completed WITHOUT spinning (`k`, and no spin markers -- an earlier
+theory that drain_rx looped forever on a stuck FR is disproved); and
+interrupt_ack RETURNED SUCCESS (`K`).
+
+So the driver did everything correctly. The drain simply found no byte, so
+the deferred reply stayed owed, the thread went back to ipc_receive, and no
+further interrupt ever arrived while the host kept sending.
+
+The remaining question is therefore narrow: why does the PL011 stop raising
+RX interrupts after a drain that found nothing, when the guest side has
+acknowledged and unmasked correctly?
+
+## Ruled out this round
+
+  - `route_to_current_cpu()` in the acknowledge path. Rewriting GICD_IROUTER
+    for an interrupt that may be pending is UNPREDICTABLE per the GICv3
+    spec, which made it a strong candidate. Removing it changes nothing:
+    interleaved A/B, five pairs, HEAD 60/150 completed with 3/5 stalled
+    versus 64/150 and 3/5. Reverted.
+  - drain_rx spinning forever. No spin markers ever appeared; the loop
+    completes.
+  - interrupt_ack failing or hanging. It returns success.
+
+## Two experiments that are invalid -- do not repeat them
+
+  - Bounding the TXFF spin in the driver's putc. It reports 6/6 stalls, but
+    writing DR while the transmit FIFO is full garbles output, and the
+    detector greps for exact lines, so it manufactures the very failure it
+    claims to measure.
+  - Feeding QEMU stdin through a pty via `script -qfc`, intended to test
+    whether the fifo transport is implicated. It reports 6/6 stalls with
+    0/30 completed every time, which is the signature of input never being
+    delivered at all rather than of a worse stall rate. The wrapper breaks
+    input; the transport question remains open and needs a different
+    method.
+
+## Where this now points
+
+The guest acknowledges, unmasks, and waits; the device stops delivering.
+That is either a QEMU PL011/chardev flow-control state the guest can reach
+and not escape, or a GIC-level pending/mask interaction that survives the
+acknowledge. Distinguishing them needs visibility QEMU-side -- its own
+pl011 and GIC tracepoints -- rather than more guest-side instrumentation,
+which has now been pushed as far as it usefully goes: every guest-side
+observation either reproduces the stall without explaining it, or perturbs
+timing enough to hide it. -->
