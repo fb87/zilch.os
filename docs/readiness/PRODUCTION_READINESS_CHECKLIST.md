@@ -557,7 +557,7 @@ Every completed requirement must link to:
 
 - [x] **TST-001** Portable capability and scheduling-context logic builds and executes as a native host test independently of the freestanding kernel image.
 - [x] **TST-002** Host capability tests exhaustively verify all 64 bounded rights masks for attenuation and empty-slot rejection; runtime certification supplies derivation, revoke, race, and reuse coverage.
-- [ ] **TST-003** IPC state-machine unit tests implemented.
+- [x] **TST-003** IPC state-machine unit tests implemented. `tests/.../ipc/state_machine.hh` pins the reply-authority contracts (one slot per server thread, unconditional overwrite, non-zero unique nonce, caller identified by id AND generation) and notification badge-set semantics (repeat signals collapse, distinct badges accumulate, consume is destructive); `ipc/badge_delivery.hh` covers badge capture and post-accept revocation; integration-level race coverage is TST-018 `ipc_lifecycle_races`. Contracts documented in `CAPABILITY_IPC_SEMANTICS.md`.
 - [x] **TST-004** Native scheduling tests cover 65,536 deterministic charge/replenish operations, invariants, donation, inheritance, and unwind in addition to runtime sporadic certification.
 - [ ] **TST-005** VM lifecycle unit tests implemented.
 - [ ] **TST-006** Stage-2 table unit tests implemented.
