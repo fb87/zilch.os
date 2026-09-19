@@ -2957,3 +2957,84 @@ while 0156 is open, which is an argument for fixing 0156 ahead of adding
 more gates that sit downstream of console input. Left gated rather than
 downgraded to a NOTE deliberately: it does detect a real defect, and
 hiding it would remove the last automated pressure to fix the stall. -->
+
+<!-- 0163 evidence: 0156 attacked directly. NOT fixed. A second real defect
+found underneath it, and one measurement discipline failure worth recording.
+
+## What was ruled out this round
+
+Earlier entries eliminated fork lifetime, burst/FIFO overrun, the storm
+detector, and `| wc`. Added here:
+
+  - NOT a lost RX interrupt with a byte stranded in the device. A 100 ms
+    bounded receive was added to rx_main so every timeout re-drained the
+    UART and reported `{LOST}` if the drain produced bytes the interrupt
+    path had failed to deliver. Across many runs including a stalled one,
+    `{LOST}` never fired once.
+  - NOT the PL011 FIFO trigger level. Neither the kernel console
+    (`platform::console::initialize()` is empty) nor the driver ever writes
+    LCR_H, so FEN keeps QEMU's reset value of 0 and the holding register is
+    one byte deep. The RXIM-without-RTIM gap is therefore not reachable on
+    this platform, though enabling RTIM would still be correct on hardware
+    that boots with FIFOs on.
+  - NOT the shell or console-server failing to ask. In the caught stall the
+    shell printed its prompt and the driver was parked with a reply owed.
+
+## The state at a stall
+
+The RX thread is blocked in `ipc_receive` with a deferred reply owed, an
+armed 100 ms timeout, and no wakeup ever arriving -- neither the interrupt
+notification nor the timeout. The UART has no pending RX data across the
+whole stall. No kernel [WARN]/[ERR]. Output continues to work.
+
+## The second defect: bounded receive is not bounded
+
+Measured directly by marking every timeout firing: a thread asking for a
+100 ms timeout got **8 wakeups in a ~30 second run where roughly 300 were
+due**, and in a run where the console stalled it got **zero**. So the one
+mechanism a driver has to recover from a lost wakeup does not run.
+
+Cause identified: the hardware timer is only ever (re)programmed from the
+timer interrupt itself, using whatever the timeout queue held at that
+moment (`arch.cc`, `next_timer_deadline`). `arm_ipc_timeout()` queues a
+deadline and returns without touching the timer, so a timeout armed after
+that point is invisible until the already-programmed deadline arrives --
+and for an idle CPU that is a full second out.
+
+A fix was written (reprogram from `arm_ipc_timeout` when the new deadline
+is the earliest queued) and measurably works: firings went 8 -> 32. It is
+NOT committed, because it is unvalidated on latency, for the reason below.
+
+## Measurement discipline failure, recorded deliberately
+
+Two certification runs with that fix reported ipc_latency 2021861 and
+1449290 against a 620000 bound, and I was about to record it as a
+regression. Re-running the CLEAN baseline immediately afterwards produced
+1341088 -- also failing. The host had picked up an unrelated ~100% CPU load
+(Firefox), and all three numbers were noise-dominated.
+
+This is the same error as 0158's first three attempts, in a different
+costume: comparing against a baseline measured under different conditions.
+The rule that keeps being relearned here is that on this host a latency
+comparison is only meaningful when both sides are measured back to back,
+and that an absolute number against a fixed bound is worthless without a
+same-session control.
+
+So: the timer-reprogram fix is neither validated nor refuted. It should be
+re-measured on an idle host before anyone concludes anything about it.
+
+## Where a next attempt should start
+
+The bug resists observation: driver-level markers still reproduce it, but
+console-server instrumentation (three extra IPC round-trips per byte) and
+per-CPU kernel tick markers (a few characters of UART output per second)
+BOTH make it vanish entirely across six or more runs. Anything that adds
+UART traffic hides it, which is itself the sharpest clue available and
+points at the interaction between TX activity and RX wakeup rather than at
+the RX path alone.
+
+The concrete open question is why a thread blocked in `ipc_receive` with an
+armed timeout receives neither its notification nor its timeout. Fixing
+bounded receive first is the prerequisite: until a timeout reliably fires,
+the driver has no recovery path to test, and the stall cannot be
+distinguished from a permanently lost wakeup. -->
