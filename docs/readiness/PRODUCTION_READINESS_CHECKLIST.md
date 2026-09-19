@@ -2737,3 +2737,63 @@ and it should not be bundled into a lock fix.
 Worth knowing for readiness purposes regardless: "runs on arm64" in this
 tree currently means "runs on a 4-CPU arm64", and no evidence exists for
 any other width. -->
+
+<!-- 0158 evidence: OPEN. The interrupt storm detector has never worked,
+and switching it on costs more than the gate allows.
+
+## The defect
+
+record_delivery() timestamps its window with
+platform::timer::ticks(arch::cpu::current_id()) -- whichever CPU took the
+interrupt, and acknowledge()'s route_to_current_cpu() moves that around --
+while recover_stormed() is always called with CPU 0's counter (arch.cc).
+platform::timer::ticks() is PER-CPU and the counters genuinely diverge:
+tick_count[cpu] advances by that CPU's own programmed_delta, so a CPU
+idling on a long deadline jumps while a busy one steps by one.
+
+So `now - window_start` subtracts two unrelated clocks. When CPU 0 lags,
+the unsigned subtraction underflows to an enormous value that always
+clears storm_window_ticks, which resets the window on essentially every
+delivery and means window_count never approaches storm_threshold. The
+one-second/64-interrupt window the constants describe has therefore never
+been in force, and the detector is inert.
+
+That also explains an earlier null result: raising storm_threshold from 64
+to 1000000 changed nothing, because the threshold was never being reached
+either way.
+
+## Why it is not fixed here
+
+Pinning both ends to one clock (`storm_clock()` returning
+platform::timer::ticks(0U)) makes the window real -- and regresses
+certification. Measured back-to-back on the same host, one run at a time
+(the previous three attempts at this comparison were invalid: the
+certification image never exits on its own, so three runs had been
+overlapping and starving each other -- one "control" booted in 483s):
+
+    baseline (HEAD)   acceptance at guest 2.6s   ipc_latency 367951   PASS
+    with storm_clock  acceptance at guest 5.1s   ipc_latency 628661   FAIL
+
+against limit_ticks=620000, with scheduler_latency_bounds and
+kernel_lifetime_invariants failing alongside. Boot roughly doubles.
+
+Two causes, both real. The detector starts actually suppressing: 64
+interrupts per second is far below legitimate device rates (a PL011 at
+115200 baud is ~11500 bytes/sec, one interrupt each), so real traffic gets
+masked for up to a second at a time. And storm_clock() puts an atomic load
+of CPU 0's counter on every interrupt dispatch on every CPU, which is
+cross-CPU cache-line traffic on the hot path -- with the threshold raised
+to 1000000 so suppression cannot fire, latency was still 999619, so the
+load alone is not free either.
+
+Fixing this properly means choosing storm_threshold from measured
+interrupt rates rather than from the current placeholder, and finding a
+window clock that does not serialize every dispatch through one cache
+line -- arch::timer::counter() is a genuine global monotonic source and is
+the obvious candidate, but it is in different units and converting it
+touches the ABI's tick-based timeout contract. That is its own piece of
+work.
+
+Recorded rather than shipped. The status quo is a detector that does
+nothing, which is at least honest about its behaviour once written down
+here; a half-fix that doubles boot time is not an improvement. -->
