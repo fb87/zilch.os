@@ -2933,3 +2933,27 @@ agree on what time it is. The same shape would hide the same bug in the IPC
 timeout queues, which do read one clock consistently today -- see
 CAPABILITY_IPC_SEMANTICS.md, where that is now written down as a
 requirement rather than left as an accident. -->
+
+<!-- 0162 evidence: 0156 makes `make smoke` itself intermittently red.
+
+Observed directly: two consecutive `make smoke` runs on the same binary,
+the first reporting
+
+    MISSING : redirect + pipeline output (seen 2 time(s), need >= 3)
+    smoke: FAIL (1 problem(s))
+
+and the second reporting `smoke: PASS` with every gate green. Nothing
+changed between them. The marker count reaches 2 instead of 3 when the
+console stall happens to land on the third command, which is exactly the
+distribution 0156 records.
+
+This matters for how a smoke failure should be read. A single red run
+whose ONLY failure is the marker count is not evidence of a regression --
+re-run before investigating. Any other gate failing, or this one failing
+repeatedly, is.
+
+It also means the pipeline gate cannot be trusted as a regression signal
+while 0156 is open, which is an argument for fixing 0156 ahead of adding
+more gates that sit downstream of console input. Left gated rather than
+downgraded to a NOTE deliberately: it does detect a real defect, and
+hiding it would remove the last automated pressure to fix the stall. -->
