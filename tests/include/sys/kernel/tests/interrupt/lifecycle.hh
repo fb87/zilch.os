@@ -86,6 +86,15 @@ namespace sys::kernel::tests::interrupt
          *
          * Fixed ticks rather than the real clock so both the "still inside
          * the window" and "window has elapsed" cases are decidable.
+         *
+         * That choice is right for testing the state machine and it is also
+         * this test's blind spot, so do NOT cite it as evidence that storm
+         * containment works in production. Supplying one clock to both
+         * record_delivery() and recover_stormed() is exactly what the real
+         * call sites fail to do: deliveries stamp the window from whichever
+         * CPU took the interrupt while the sweep always reads CPU 0, and
+         * platform::timer::ticks() is per-CPU. The state machine below is
+         * correct; the wiring around it is not. See checklist 0158.
          */
         constexpr u64 storm_at = 10U;
         for (u32 event = 0U; event <= kernel::interrupt::storm_threshold; ++event)

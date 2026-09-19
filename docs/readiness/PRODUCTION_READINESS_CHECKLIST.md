@@ -2901,3 +2901,35 @@ designated CPU, or a rate limit so the drain runs at most once per N idle
 entries, or a dedicated low-priority kernel thread if one is ever added.
 The record format and the ring are sound; only the call site is wrong.
 The diff is recoverable from this entry's description if picked up again. -->
+
+<!-- 0161 evidence: 0158 addendum -- how the inert storm detector passed its
+own test for so long.
+
+`irq_storm_recovery` (tests/.../interrupt/lifecycle.hh) exercises the
+containment state machine thoroughly: threshold crossing, that acknowledge
+does not clear the storm, that a sweep inside the window leaves it
+contained, that a sweep past the window re-arms, and that the line is
+genuinely usable afterwards rather than merely flagged clean. It passes,
+and it is right to pass -- the state machine is correct.
+
+It is also structurally incapable of catching 0158, and its own comment
+says why without realising the implication: "Fixed ticks rather than the
+real clock so both the 'still inside the window' and 'window has elapsed'
+cases are decidable." The test hands the SAME clock value to
+record_delivery() and recover_stormed(). That is precisely the property
+production does not have -- deliveries stamp the window from whichever CPU
+took the interrupt, the sweep always reads CPU 0, and those counters
+diverge.
+
+So the defect is not in the tested unit at all. It is in the wiring between
+two call sites, which no unit test of either one can see. Recorded because
+"there is a passing test for storm containment" is otherwise a reasonable
+thing to conclude from this tree, and it is wrong. A comment now says so at
+the test itself, where someone would actually look.
+
+The general lesson is worth keeping: a unit test that injects a clock
+proves the logic and says nothing about whether the production callers
+agree on what time it is. The same shape would hide the same bug in the IPC
+timeout queues, which do read one clock consistently today -- see
+CAPABILITY_IPC_SEMANTICS.md, where that is now written down as a
+requirement rather than left as an accident. -->
