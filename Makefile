@@ -14,7 +14,7 @@ endif
 include src/kernel/kernel.mk
 include mk/checks.mk
 
-.PHONY: all run smoke clean arm64 amd64 debug certification release FORCE
+.PHONY: all run smoke boot-repeat clean arm64 amd64 debug certification release FORCE
 all: userspace kernel image
 
 arm64:
@@ -36,6 +36,11 @@ run: $(KERNEL_ELF)
 # replaces init's main(), so it structurally cannot exercise supervise().
 smoke:
 	@ARCH=$(ARCH) PLATFORM=$(PLATFORM) $(SRCTREE)/tools/verification/smoke.sh
+
+# Cold-boots the service graph repeatedly. A single boot cannot see a
+# timing-dependent stall; see the script header.
+boot-repeat:
+	@ARCH=$(ARCH) PLATFORM=$(PLATFORM) $(SRCTREE)/tools/verification/boot_repeat.sh
 
 clean:
 	@rm -rf $(OBJTREE)

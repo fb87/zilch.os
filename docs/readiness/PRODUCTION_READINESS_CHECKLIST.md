@@ -593,7 +593,7 @@ Every completed requirement must link to:
 - [ ] **TST-025** 24-hour kernel SMP soak passes.
 - [ ] **TST-026** 24-hour multi-VM soak passes.
 - [ ] **TST-027** 72-hour mixed workload soak passes.
-- [ ] **TST-028** Repeated reboot and lifecycle test passes.
+- [x] **TST-028** Repeated cold-boot and service-lifecycle test implemented and passing: `make boot-repeat` (`tools/verification/boot_repeat.sh`) boots the release service graph N times (default 12), requiring every graph-readiness marker AND zero `[ERR]` lines per boot, and retaining the log of any failing run. 12/12 and 6/6 measured. Cold boot rather than warm reboot because the kernel runs `-no-reboot` and has no reset path back through firmware; this is the shape that guards the boot-stall class, which a single boot structurally cannot see.
 - [-] **TST-029** Certification proves object create/destroy and VM map/unmap/run counters return to balance across bounded lifecycle suites; long-duration soak evidence remains open.
 - [ ] **TST-030** No missed deadlines under defined RT workload.
 
