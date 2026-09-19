@@ -621,7 +621,7 @@ Every completed requirement must link to:
 - [x] **DOC-008** EL1, PL3, guest, capability, stage-2, firmware, root-policy, and device trust boundaries are documented.
 - [ ] **DOC-009** Capability and IPC semantics documented formally enough for independent implementation.
 - [x] **DOC-010** Lock, atomic publication, emergency/audit ring, page-table/TLBI, MMIO, and reclamation ordering rules are documented.
-- [-] **DOC-011** Kernel lock ordering and major object/user-thread/VM teardown protocols are documented; IRQ and device teardown protocols remain open.
+- [x] **DOC-011** Kernel lock ordering, acquisition discipline, and object/user-thread/VM/IRQ/device teardown protocols are documented. `LOCKING_PROTOCOL.md` covers rank order plus the ticket-lock fairness requirement and the never-rewind-a-lock-word rule; `INTERRUPT_LIFECYCLE.md` covers ownership teardown, revocation severing device authority, and orphan takeover on rebind, and states plainly that storm containment is not currently in force (0158).
 - [ ] **DOC-012** Hypervisor guest-visible architecture documented.
 - [ ] **DOC-013** Userspace server APIs documented.
 - [x] **DOC-014** Semantic release classes, ABI/diagnostic compatibility, deprecation, migration, and mandatory release gates are documented.
