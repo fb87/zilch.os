@@ -2836,3 +2836,68 @@ than written out per event, would record the handshake without adding IPC
 to it. Failing that, qemu-side chardev tracing would answer directly
 whether bytes are still reaching the PL011 at the stall -- the question
 0156's register dump raised and could not settle from inside the guest. -->
+
+<!-- 0160 evidence: OBS-003 attempted and reverted. The deferred-record
+drain works; running it from the idle loop regresses the gate.
+
+## What was built
+
+`printk::defer()` writes structured records into the emergency ring, and
+nothing ever formatted them to a live console -- that ring is post-mortem
+storage a debugger reads after a crash. This is why a `pr_info()` added to
+the timer interrupt path during the 0156 investigation produced no output
+at all: `printk()` takes the console lock with bounded attempts and gives
+up rather than spinning, and formatting busy-waits on the UART transmit
+FIFO, which an interrupt handler must not do.
+
+The implementation gave deferred console records a ring of their own --
+deliberately NOT the emergency ring, which takes an unconditional record on
+every exception entry and would bury anything useful under syscall traffic
+-- and drained it from `sys_kernel_user_idle()`, the one context in this
+kernel that is at EL1, outside any exception handler, with interrupts
+enabled and nothing else to run.
+
+It works. Verified end-to-end: the pre-existing `defer(event::irq, cpu, 1)`
+call in arch.cc, which had never produced output in the life of this tree,
+now prints
+
+    [INFO] deferred: cpu=0 seq=1 kind=6 a0=0 a1=1 a2=0 a3=0 a4=0
+
+and a temporary second producer confirmed sequences drain in order with no
+drops. A direct release run boots the whole graph normally with it in.
+
+## Why it is reverted anyway
+
+`make smoke` fails with it, reproducibly, and passes without it:
+
+    with the change      FAIL  7 problems
+    with the change      FAIL 13 problems   (after adding a read-only fast path)
+    baseline, stashed    PASS              at loadavg 6.59
+    with the change      FAIL 11 problems   at loadavg 4.77
+
+The last pair is the decisive one -- the failing run was on a LESS loaded
+host than the passing baseline, so this is not the host-contention effect
+that has confounded other measurements in this session. The guest profile
+fails hardest, going from all eight gates to none.
+
+A first attempt used a compare-exchange in the drain's fast path. That is a
+genuine mistake worth recording: every CPU runs the idle loop and spins
+between events, so an exclusive line acquisition there ping-pongs
+constantly between CPUs. Replacing it with two plain loads of
+produced/drained totals was strictly better and still failed, so contention
+on that one line is not the whole story.
+
+The remaining suspect is the cost or stack depth of running the console
+formatter on the idle path at all: `printk` disables interrupts, takes the
+console lock, and busy-waits on the UART, and `sys_kernel_user_idle` runs
+on the kernel idle stack, which `arch::stack::observe()` polices. Not
+isolated, and guessing further without isolating it is how unvalidated
+fixes get shipped.
+
+## What a real fix looks like
+
+Drain somewhere that is not on every CPU's hot idle path -- a single
+designated CPU, or a rate limit so the drain runs at most once per N idle
+entries, or a dedicated low-priority kernel thread if one is ever added.
+The record format and the ring are sound; only the call site is wrong.
+The diff is recoverable from this entry's description if picked up again. -->
