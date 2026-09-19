@@ -614,7 +614,7 @@ Every completed requirement must link to:
 - [ ] **DOC-001** `arch_design.md` reflects implemented architecture.
 - [ ] **DOC-002** `detail_design.md` reflects implemented mechanisms.
 - [x] **DOC-003** Every mandatory requirement has a stable ID in this checklist.
-- [ ] **DOC-004** Every requirement maps to implementation and tests.
+- [-] **DOC-004** Now measured and enforced rather than asserted: `tools/doc/check_evidence_matrix.sh` (wired into `make doc-check`) expands the matrix's range/list notations, ignores historical batch tables the matrix itself declares superseded, and reports every checklist requirement with no current evidence row — separating COMPLETE-but-unmapped, which is the case this item exists to prevent. Measured: 340 requirements, 251 mapped, 89 unmapped of which 32 are marked COMPLETE. Rows added this session for IPC-001..016/IPC-GATE, DEV-001/002/003/005/006, USR-024/026/027/028/033, DOC-009/011/012/013, TST-003/028. Open until the remaining 32 complete-but-unmapped requirements have verified rows; the checker fails closed so the gap cannot widen silently.
 - [-] **DOC-005** Model-only runtime results now use `HV-MODEL` and `hypervisor_control_model`; legacy profile documents still require complete renaming and archival.
 - [x] **DOC-006** Unsupported 1.0 kernel and platform features are explicitly documented with non-partial-mutation rules.
 - [x] **DOC-007** Kernel threat model and excluded physical, firmware, timing, and pre-SMMU DMA threats are documented.

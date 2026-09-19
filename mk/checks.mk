@@ -75,3 +75,4 @@ doc:
 doc-check:
 	@python3 $(SRCTREE)/tools/doc/collect.py --root $(SRCTREE)/src --output $(DOC_OUT)/zilch_design.md --index $(DOC_OUT)/module_index.json >/dev/null
 	@$(SRCTREE)/tools/doc/check_layout.sh $(SRCTREE)
+	@$(SRCTREE)/tools/doc/check_evidence_matrix.sh
