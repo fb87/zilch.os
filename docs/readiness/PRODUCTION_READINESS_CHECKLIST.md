@@ -623,7 +623,7 @@ Every completed requirement must link to:
 - [x] **DOC-010** Lock, atomic publication, emergency/audit ring, page-table/TLBI, MMIO, and reclamation ordering rules are documented.
 - [x] **DOC-011** Kernel lock ordering, acquisition discipline, and object/user-thread/VM/IRQ/device teardown protocols are documented. `LOCKING_PROTOCOL.md` covers rank order plus the ticket-lock fairness requirement and the never-rewind-a-lock-word rule; `INTERRUPT_LIFECYCLE.md` covers ownership teardown, revocation severing device authority, and orphan takeover on rebind, and states plainly that storm containment is not currently in force (0158).
 - [ ] **DOC-012** Hypervisor guest-visible architecture documented.
-- [ ] **DOC-013** Userspace server APIs documented.
+- [x] **DOC-013** Userspace server APIs documented in `docs/readiness/USERSPACE_SERVER_APIS.md`: the shared control-plane operations every role serves, and the console, serial, block and VFS wire protocols with their per-operation message-register conventions, plus the capability-slot convention that stands in for name lookup. Verified against the ABI headers rather than written from memory.
 - [x] **DOC-014** Semantic release classes, ABI/diagnostic compatibility, deprecation, migration, and mandatory release gates are documented.
 
 ---
