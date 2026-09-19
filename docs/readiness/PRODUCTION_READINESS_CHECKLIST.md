@@ -2797,3 +2797,42 @@ work.
 Recorded rather than shipped. The status quo is a detector that does
 nothing, which is at least honest about its behaviour once written down
 here; a half-fix that doubles boot time is not an improvement. -->
+
+<!-- 0159 evidence: 0156 addendum -- the stall will not hold still to be
+measured.
+
+Step taken: instrumented console-server's stdin thread (the layer above
+the serial driver, which earlier tracing had already cleared) to emit a
+marker before read_byte_wait, another on its return, and a third after the
+reply. The three outcomes were meant to split the remaining space --
+markers stopping entirely means the shell stopped asking, `w` with no `r`
+means the RX thread never answered, full cycles continuing means the shell
+is not advancing on bytes it did receive.
+
+It produced none of them, because with the instrumentation applied the
+stall does not happen. Three runs of eight commands each completed all
+twenty-four; the same probe without instrumentation stalls within three to
+six. Three extra IPC round-trips per input byte in the stdin thread are
+enough to make it disappear, which is itself the most informative result
+here: this is a narrow timing race in the RX handshake, not a state
+machine stuck somewhere findable by inspection. It also retroactively
+explains why the earlier driver-level tracing runs survived longer than
+the uninstrumented ones.
+
+Also recorded so it is not repeated: the host-side check bundled into the
+same probe -- write 200KB into the console fifo and see whether it blocks,
+as a test of whether qemu had stopped consuming input -- is INVALID. The
+guest reads one byte per IPC round trip through shell -> console-server ->
+serial-driver, so it cannot drain 200KB within any sensible budget and the
+pipe fills whether or not qemu is healthy. It reported BLOCKED on a run
+where all eight commands had just succeeded. Any future version has to
+measure whether a SMALL number of bytes is consumed, not whether a large
+write completes.
+
+What a next attempt should do differently: observe without perturbing. A
+fixed-size in-memory marker ring inside the serial driver, dumped on
+demand (a new serial_operation, or from the existing failure path) rather
+than written out per event, would record the handshake without adding IPC
+to it. Failing that, qemu-side chardev tracing would answer directly
+whether bytes are still reaching the PL011 at the stall -- the question
+0156's register dump raised and could not settle from inside the guest. -->
