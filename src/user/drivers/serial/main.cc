@@ -186,11 +186,45 @@ namespace
         auto* icr = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + icr_offset);
         auto* flags = reinterpret_cast<volatile sys::u32*>(uart_scratch_address + flag_offset);
         sys::u8 value = 0U;
-        do {
-            *icr = icr_rxic;
+        /*
+         * NEVER clear the RX latch while the FIFO still holds data.
+         *
+         * The rule comes from how the interrupt is regenerated. In the
+         * PL011 model this platform runs against, the receive interrupt is
+         * raised on exactly one event -- the receive count going from empty
+         * to one -- and is cleared either by draining back to empty or by
+         * any write to ICR, which drops the latch unconditionally no matter
+         * what the FIFO contains. There is no receive-timeout interrupt to
+         * fall back on; it is simply not implemented there.
+         *
+         * So clearing the latch with a byte still buffered is
+         * unrecoverable. The line goes low, the byte stays put, and because
+         * the device is then full it refuses further input -- so the
+         * empty-to-one transition that would re-raise the interrupt can
+         * never happen again. Console input stops permanently with every
+         * component healthy: that is checklist 0156, and it is why no
+         * amount of guest-side instrumentation ever found it. The old order
+         * cleared ICR at the top of each pass, before reading anything, and
+         * lost the race whenever the drain that followed failed to observe
+         * the byte the clear had just disarmed.
+         *
+         * Draining to empty FIRST and only then clearing inverts that. The
+         * post-clear re-check is what keeps the previously documented
+         * hazard closed: a byte landing between the emptiness test and the
+         * clear has its own latch wiped, so the loop must look again rather
+         * than trust the pass it just did. Either way the invariant on exit
+         * is the one that matters -- the FIFO is empty, so a cleared latch
+         * costs nothing and the next byte re-raises the interrupt.
+         */
+        for (;;) {
             while (try_getc(value))
                 rx_push(value);
-        } while ((*flags & receive_fifo_empty) == 0U);
+            if ((*flags & receive_fifo_empty) == 0U)
+                continue; // more arrived while draining
+            *icr = icr_rxic;
+            if ((*flags & receive_fifo_empty) != 0U)
+                break; // still empty after the clear: nothing was disarmed
+        }
         (void)sys::control(sys::abi::v1::control_operation::interrupt_ack, irq_selector);
     }
 

@@ -3178,3 +3178,72 @@ decides whether this is a QEMU modelling limitation or a driver
 configuration this platform cannot use. That is the next thing to
 establish, and it is answerable by reading QEMU's pl011 source rather than
 by more runs. -->
+
+<!-- 0166 evidence: read QEMU's pl011.c. The mechanism behind 0156 is now
+explained from source, and the driver's drain order is fixed accordingly.
+The fix is NOT proven to close 0156 -- see the validation note.
+
+## What the model actually does
+
+Three facts from hw/char/pl011.c, and together they are the whole story:
+
+  - The receive interrupt is raised on exactly one event:
+    `if (s->read_count == s->read_trigger) { s->int_level |= INT_RX; ... }`
+    in pl011_fifo_rx_put. Equality, not "at or above".
+  - `read_trigger` is ALWAYS 1. pl011_set_read_trigger has the
+    FIFO-threshold calculation present but `#if 0`'d out, with a comment
+    noting that Linux only reads the FIFO in response to an interrupt, so
+    triggering whenever the FIFO is non-empty "seems to make things work".
+    IFLS is accepted and ignored.
+  - Any write to ICR clears the latch unconditionally:
+    `case 17: s->int_level &= ~value; pl011_update(s);` -- it does not
+    consult the FIFO at all.
+
+And there is no receive-timeout interrupt. INT_RT is defined and appears in
+the mask table, but nothing ever sets it. On real hardware that interrupt
+is what rescues a partially filled FIFO; here there is no rescue.
+
+## Why that is fatal to the old drain order
+
+drain_rx() wrote ICR at the top of every pass, BEFORE reading anything. If
+the read that followed then failed to observe the byte the clear had just
+disarmed, the resulting state is terminal:
+
+  - the FIFO holds a byte, so the device reports itself full and refuses
+    further input;
+  - the latch is clear, so the line is low;
+  - the only event that can re-raise it is the receive count going from
+    zero to one, which cannot happen while the count is stuck at one.
+
+Console input stops permanently with the host, the emulator and the guest
+all healthy -- exactly what 0164 and 0165 measured and could not explain.
+It also explains why every guest-side instrument either reproduced it
+without insight or perturbed the timing enough to hide it.
+
+## The change
+
+drain_rx() now drains to empty FIRST and clears the latch only once the
+FIFO is observed empty, then re-checks. The invariant is simply that the
+latch is never cleared while data is pending. The post-clear re-check keeps
+the hazard 0136 documented closed: a byte landing between the emptiness
+test and the clear has its own latch wiped, so the loop looks again rather
+than trusting the pass it just did.
+
+## Validation, stated honestly
+
+Builds, `make smoke` PASS, certification `failures=0 failure_mask=0
+transport=PASS` with ipc_latency 430440 against a 620000 bound. So it does
+not regress.
+
+It is NOT proven to fix 0156. The defect stopped reproducing partway
+through this session: an interleaved A/B gave 150/150 completed and 0/5
+stalled in BOTH arms, and HEAD stayed clean for three further runs with CPU
+pinning disabled and six busy loops on an eight-core host. With no failures
+in the control arm there is nothing to compare against.
+
+So this ships as a correctness fix with a mechanism derived from the
+emulator's source, not as a demonstrated repair. 0156 stays OPEN until it
+is observed surviving conditions that previously broke it. If it
+reproduces again, `tools/verification/stall_repro.sh` plus the QEMU_EXTRA
+tracing hook are the tools, and the first question is whether the line
+still goes low with data pending. -->
