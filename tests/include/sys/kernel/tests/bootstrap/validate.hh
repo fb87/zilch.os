@@ -35,6 +35,7 @@
 #include <sys/kernel/tests/interrupt/lifecycle.hh>
 #include <sys/kernel/tests/ipc/badge_delivery.hh>
 #include <sys/kernel/tests/ipc/state_machine.hh>
+#include <sys/kernel/tests/hypervisor/stage2_tables.hh>
 #include <sys/kernel/tests/memory/physical_region_layout.hh>
 #include <sys/kernel/tests/object/generation.hh>
 #include <sys/kernel/tests/scheduling/donation.hh>
@@ -111,6 +112,9 @@ namespace sys::kernel::tests::self_test
         if (result != error_t::success)
             return result;
         result = tests::ipc::run_state_machine();
+        if (result != error_t::success)
+            return result;
+        result = tests::hypervisor_stage2::run();
         if (result != error_t::success)
             return result;
 
