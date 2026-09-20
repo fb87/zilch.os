@@ -38,6 +38,7 @@
 #include <sys/kernel/tests/hypervisor/stage2_tables.hh>
 #include <sys/kernel/tests/hypervisor/vm_lifecycle.hh>
 #include <sys/kernel/tests/scheduling/configure_fuzz.hh>
+#include <sys/kernel/tests/hypervisor/virtual_irq_storm.hh>
 #include <sys/kernel/tests/memory/physical_region_layout.hh>
 #include <sys/kernel/tests/object/generation.hh>
 #include <sys/kernel/tests/scheduling/donation.hh>
@@ -123,6 +124,9 @@ namespace sys::kernel::tests::self_test
         if (result != error_t::success)
             return result;
         result = tests::scheduling_configure::run();
+        if (result != error_t::success)
+            return result;
+        result = tests::virtual_irq_storm::run();
         if (result != error_t::success)
             return result;
 
