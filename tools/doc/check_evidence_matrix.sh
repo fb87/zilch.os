@@ -115,9 +115,9 @@ if (@unmapped) {
     # `make doc-check` permanently red and so enforce nothing at all. What
     # must not happen is the gap WIDENING -- a requirement marked complete
     # with no evidence row is exactly what DOC-004 exists to prevent -- so
-    # the baseline is the number measured when this check was written, and
+    # the baseline is the lowest count yet achieved, and
     # exceeding it fails. Lower it whenever rows are added; never raise it.
-    my $baseline = 32;
+    my $baseline = 27;
     my $done_count = scalar @done;
     if ($done_count > $baseline) {
         printf "\n  evidence-matrix: FAIL -- %d complete requirements lack an\n", $done_count;
