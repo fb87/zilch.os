@@ -21,6 +21,20 @@ namespace sys::kernel::emergency
         ipc = 8U,
         vm_exit = 9U,
         user_fault = 10U,
+        /*
+         * Device assignment and its withdrawal (OBS-008). Recorded here
+         * rather than in the hypervisor audit ring because that ring is
+         * VM-scoped, and a device in this system is assigned to a driver
+         * PROCESS -- root mints its MMIO frame and interrupt line -- not to
+         * a VM. Filing them against a vmid would mean inventing one.
+         *
+         * Uses append() rather than trace(), so these survive a release
+         * build: who was handed a device, and when it was taken back, is
+         * exactly what a post-mortem needs and is far too low-volume to
+         * cost anything.
+         */
+        device_assign = 11U,
+        device_revoke = 12U,
     };
 
     struct record {

@@ -4,6 +4,7 @@
 #include <sys/arch/memory.hh>
 #include <sys/kernel/boot/fdt.hh>
 #include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/emergency.hh>
 #include <sys/kernel/lock/order.hh>
 #include <sys/kernel/memory/object.hh>
 #include <sys/kernel/object/table.hh>
@@ -1154,6 +1155,10 @@ namespace sys::kernel::memory
                 mapping = {};
             __atomic_store_n(&target->in_use, false, __ATOMIC_RELEASE);
         }
+        else {
+            // OBS-008: an MMIO window handed to a driver process.
+            emergency::append(emergency::event::device_assign, address);
+        }
         return result;
     }
 
@@ -1782,6 +1787,10 @@ namespace sys::kernel::memory
      * from under the others would be wrong.
      */
     inline void release_frame_mappings(frame& source) noexcept {
+        // OBS-008: a revoked device frame losing its mappings is the
+        // withdrawal half of assignment -- the name going away is not.
+        if (source.device)
+            emergency::append(emergency::event::device_revoke, source.physical_address);
         lock_mappings();
         for (auto& mapping : source.mappings) {
             if (!mapping.valid)

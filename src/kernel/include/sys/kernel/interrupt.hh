@@ -2,6 +2,7 @@
 
 #include <sys/arch/cpu.hh>
 #include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/emergency.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/object.hh>
 #include <sys/kernel/object/table.hh>
@@ -208,6 +209,8 @@ namespace sys::kernel::interrupt
         __atomic_store_n(&value.window_count, 0U, __ATOMIC_RELEASE);
         __atomic_store_n(&value.masked, false, __ATOMIC_RELEASE);
         platform::interrupt::unmask(value.irq);
+        // OBS-008: a device line changing hands is an assignment event.
+        emergency::append(emergency::event::device_assign, value.irq);
         return error_t::success;
     }
 
@@ -234,6 +237,8 @@ namespace sys::kernel::interrupt
         value.notification = {};
         __atomic_store_n(&value.stormed, false, __ATOMIC_RELEASE);
         __atomic_store_n(&value.window_count, 0U, __ATOMIC_RELEASE);
+        // OBS-008: authority withdrawn, whether by revoke or teardown.
+        emergency::append(emergency::event::device_revoke, value.irq);
     }
 
     /*
