@@ -585,7 +585,7 @@ Every completed requirement must link to:
 - [-] **TST-020** Partially implemented. `tests/.../scheduling/configure_fuzz.hh` fuzzes the operation a migration goes through: 4096 generated configurations (848 accepted, 3248 rejected in the recorded run) assert that acceptance matches the contract derived independently, that a rejection moves not one field, and that an acceptance leaves no stale consumed budget, donated ticks, donation depth or replenishment behind. That is the all-or-nothing property `scheduling_configure`'s suspension requirement depends on — control.hh's stated reason for it is that a remote scheduler tick must never observe a partially rewritten context. Open: racing an actual migration against a running thread across CPUs. The existing four-CPU root fuzz cannot host it, because its workers are deliberately non-root and hold no thread-control capability to migrate with, so this needs either a privileged fuzz worker or a kernel-side driver.
 - [x] **TST-021** Deterministic VM lifecycle stress forces VMID rollover with a live bootstrap VM, refreshes it, then passes real guest execution, teardown, reuse, and concurrent lifecycle models.
 - [x] **TST-022** Virtual interrupt storm test implemented, matched to how this controller actually defends itself. There is no rate limiter to exercise: pending/active/masked/level are single bits in a 64-bit word, so repeated injection saturates rather than queues and cannot overflow. `tests/.../hypervisor/virtual_irq_storm.hh` pins that — 4096 repeat injections yield one pending bit and one counted injection; storming an already-active line never re-pends it, so a guest cannot nest an interrupt into itself by injecting harder; level-triggered lines re-pend on deactivate while asserted and edge-triggered ones do not; all 64 lines saturate simultaneously and drain to exactly empty with nothing stuck in `active`; out-of-range injection is rejected rather than shifting by 64. Deliberately **not** modelled on the physical storm detector, which counts deliveries against a window that 0158 showed is not in force — a virtual counterpart shaped like it would inherit the same blind spot.
-- [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, twenty-way fragmentation/coalescing, metadata reuse, 32 repeated quota-exhaustion/reclaim cycles covering 512 frame lifecycles, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; full allocator exhaustion and multi-CPU pressure remain open.
+- [-] **TST-023** Certification exercises allocation/accounting, nested extent split/retype/reclaim, twenty-way fragmentation/coalescing, metadata reuse, 32 repeated quota-exhaustion/reclaim cycles covering 512 frame lifecycles, balanced release, multi-map cleanup, attributes, and MMIO lifecycle; allocator exhaustion is now covered by `tests/.../memory/allocator_exhaustion.hh`: a bounded 512-page real burst asserting every allocation is aligned, distinct and accounted for and that release balances exactly, plus the at-empty contract (fails closed with `no_memory` specifically, since callers branch on it, returns no address, and the allocator is usable again afterwards). The empty state is reached by snapshotting and marking the bitmap full rather than by allocating 64k pages, because `allocate_physical_page` rescans every region from page zero on each call -- taking n pages costs O(n^2), which is a real property of the allocator recorded in 0167 rather than a limitation of the test. Multi-CPU pressure remains open.
 - [-] **TST-024** Attribute/mapping rejection and injected extent-split metadata failure verify transactional rollback with before/after invariant signatures; systematic injection at object registration, capability installation, frame/page-table allocation, and teardown remains open.
 
 ## 12.4 Long-duration certification
@@ -3247,3 +3247,30 @@ is observed surviving conditions that previously broke it. If it
 reproduces again, `tools/verification/stall_repro.sh` plus the QEMU_EXTRA
 tracing hook are the tools, and the first question is whether the line
 still goes low with data pending. -->
+
+<!-- 0167 evidence: the physical page allocator is linear per allocation.
+
+Noticed while writing the TST-023 exhaustion test, and recorded because it
+is a property of the allocator rather than of the test.
+
+`allocate_physical_page()` walks `physical_regions` from the first region,
+and within each region from page zero, until it finds a clear bitmap bit.
+There is no allocation hint and no free list. So the nth allocation scans
+roughly n pages, and taking every page on a machine managing ~64,000 of
+them costs on the order of 2x10^9 iterations -- which is why the test
+reaches the empty state by snapshotting and filling the bitmap instead of
+allocating its way there.
+
+This is not currently a problem and is not being changed on that basis.
+Allocation here is rare and bursty: address spaces, stage-2 tables, frames
+and the libc heap, none of them on a measured hot path, and certification's
+latency bounds pass comfortably. A rotating hint like the one
+`capability::allocate` already uses for CSpace slots would fix it cheaply
+if that ever stops being true.
+
+What the test does cover, given that: a bounded 512-page burst proving
+allocations are aligned, mutually distinct and exactly accounted, that
+release balances the counter precisely, and that at empty the allocator
+fails closed with `no_memory` specifically -- callers branch on that code,
+and a quota-exhausted task is expected to degrade on it rather than fault
+-- hands back no address, and remains usable afterwards. -->
