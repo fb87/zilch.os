@@ -11,6 +11,9 @@
 #include <sys/kernel/thread/scheduler.hh>
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/timer.hh>
+#if CONFIG_TESTS
+#include <sys/kernel/tests/memory/revoke_race.hh>
+#endif
 
 extern "C" void sys_arch_link_anchor() noexcept {}
 
@@ -95,6 +98,12 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                 const sys::kernel::object::read_guard object_read_guard{};
                 sys::kernel::hypervisor::test::service_real_smp_job(sys::arch::cpu::current_id());
             }
+#endif
+#if CONFIG_TESTS
+            // TST-019: the map/unmap side of the concurrent revocation race.
+            // Same work lane as the SMP job above, and inert unless that test
+            // has armed it.
+            sys::kernel::tests::revoke_race::service_job(sys::arch::cpu::current_id());
 #endif
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
