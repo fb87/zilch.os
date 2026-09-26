@@ -223,6 +223,12 @@ namespace sys::root_graph
     struct role_entry final {
         volatile u32 thread_id{};
         volatile u32 restart_count{};
+        /*
+         * Consecutive supervision-loop iterations this role has been
+         * continuously ready. Feeds the restart-budget decay below; reset
+         * whenever the role is not ready and whenever it is restarted.
+         */
+        volatile u32 healthy_iterations{};
     };
 
     struct supervisor_state final {
@@ -266,6 +272,7 @@ namespace sys::root_graph
         for (auto& entry : supervisor_state_ptr()->roles) {
             entry.thread_id = 0U;
             entry.restart_count = 0U;
+            entry.healthy_iterations = 0U;
         }
         return true;
     }
@@ -1200,6 +1207,20 @@ namespace sys::root_graph
      */
     inline constexpr word_t fault_poll_ticks = 1U;
 
+    /*
+     * Supervision-loop iterations of continuous readiness that refund one
+     * restart attempt (USR-036).
+     *
+     * Iterations rather than seconds because userspace has no clock. The
+     * loop was measured at roughly 700 iterations per second on the
+     * reference QEMU profile, so 8192 is on the order of ten seconds there
+     * -- deliberately far longer than a crash-looping role survives, and
+     * far shorter than the intervals that made a healthy service exhaust
+     * its budget. The rate varies with host speed under TCG, so treat this
+     * as an order of magnitude rather than a duration.
+     */
+    inline constexpr u32 restart_decay_iterations = 8192U;
+
     // Defined below, next to the fault-endpoint constants they depend on.
     // The default preserves every existing call site's bounded-yield
     // behavior exactly; only supervision_thread_entry() overrides it.
@@ -1784,6 +1805,9 @@ namespace sys::root_graph
 
         state.roles[index].thread_id = static_cast<u32>(new_id);
         state.roles[index].restart_count = static_cast<u32>(attempts + 1U);
+        // A restart is the opposite of sustained health: the decay counter
+        // starts again from zero, so a role must earn its budget back.
+        state.roles[index].healthy_iterations = 0U;
         return true;
     }
 
@@ -2078,6 +2102,46 @@ namespace sys::root_graph
             // `expected` mask names and that a restarted role can never
             // clear.
             ready |= badges & ~abi::v1::control_plane_exit_badge_mask;
+
+            /*
+             * Restart-budget decay (USR-036).
+             *
+             * restart_count used to be monotonic: a role that crashed once
+             * an hour eventually exhausted its limit and stayed down for
+             * good, indistinguishable from one crash-looping in
+             * milliseconds. The limit is meant to stop a flapping service,
+             * not to cap a long-lived one's lifetime failures.
+             *
+             * Sustained readiness is the signal used to give budget back,
+             * because it is the only periodic one root has: there is no
+             * clock available to userspace at all, and this loop is the
+             * only thing that runs regularly. A role continuously ready for
+             * restart_decay_iterations gets one attempt refunded; any
+             * interruption -- a fault, a clean exit, or a restart -- puts
+             * the counter back to zero, so a crash-looper can never reach
+             * the threshold and stays bounded exactly as before.
+             */
+            for (word_t index = 0U; index < abi::v1::control_plane_role_count; ++index) {
+                const word_t role =
+                    static_cast<word_t>(abi::v1::control_plane_role::process) + index;
+                const word_t bit = abi::v1::control_plane_ready_badge(role);
+                if (bit == 0U)
+                    continue;
+                auto& entry = state.roles[index];
+                if ((ready & bit) == 0U) {
+                    entry.healthy_iterations = 0U;
+                    continue;
+                }
+                const u32 seen = entry.healthy_iterations + 1U;
+                if (seen < restart_decay_iterations) {
+                    entry.healthy_iterations = seen;
+                    continue;
+                }
+                entry.healthy_iterations = 0U;
+                const u32 attempts = entry.restart_count;
+                if (attempts != 0U)
+                    entry.restart_count = attempts - 1U;
+            }
             if ((ready & expected) != expected && !readiness_stall_reported &&
                 ++readiness_iterations >= readiness_stall_iterations) {
                 readiness_stall_reported = true;
