@@ -260,6 +260,164 @@ namespace sys::printk
         unlock();
         return result;
     }
+
+    /*
+     * Asynchronous draining of deferred records (OBS-003).
+     *
+     * printk() drops the message entirely when the console lock stays
+     * contended for 4096 attempts, leaving only a bare printk_contention
+     * marker in the ring. That was the whole of the deferral: the record was
+     * written and nothing ever read it back, so every dropped line was
+     * invisible until someone attached a debugger and walked the buffers by
+     * hand, and the ring wrapped, so the evidence expired on its own too.
+     *
+     * This formats `emergency::deferred` -- the dedicated reportable-record
+     * ring, not the per-CPU trace buffers. See emergency.hh for why the
+     * trace buffers cannot serve: under CONFIG_TRACE they wrap hundreds of
+     * times a second and a printk_contention record never survives long
+     * enough to be printed.
+     */
+    [[nodiscard]] inline const char* event_name(kernel::emergency::event kind) noexcept {
+        switch (kind) {
+            case kernel::emergency::event::printk_contention:
+                return "printk-contention";
+            case kernel::emergency::event::fatal_exception:
+                return "fatal-exception";
+            case kernel::emergency::event::stack_corruption:
+                return "stack-corruption";
+            case kernel::emergency::event::user_fault:
+                return "user-fault";
+            case kernel::emergency::event::device_assign:
+                return "device-assign";
+            case kernel::emergency::event::device_revoke:
+                return "device-revoke";
+            default:
+                return "other";
+        }
+    }
+
+    // How far the deferred ring has been formatted. Only the drain writes
+    // these, and the drain runs on one CPU, so they need no atomics.
+    inline u64 drained{};
+    inline u64 drain_lost{};
+    inline u64 drain_lost_reported{};
+    inline volatile u32 drain_active{};
+
+    inline void drain_deferred() noexcept {
+        /*
+         * Bounded per call: this runs off the timer interrupt, and a fault
+         * storm must not turn one tick into an unbounded console write.
+         * Whatever is left stays in the ring for the next tick.
+         */
+        constexpr u32 budget = 4U;
+
+        /*
+         * Never even attempt the console while it is busy.
+         *
+         * This runs off the timer interrupt, so it can interrupt the console
+         * lock holder ON ITS OWN CPU -- and then no amount of spinning can
+         * win, because the holder cannot run to release it until this handler
+         * returns. printk()'s 4096-attempt bailout keeps that from being a
+         * hang, but the cost is 4096 wasted spins inside an interrupt for a
+         * line that is dropped anyway. Measured first: with an unconditional
+         * printk here the drain was called and produced no output at all.
+         *
+         * Reading the lock word first turns that into a cheap skip. If it is
+         * free, this CPU is not the holder and the CAS below will take it
+         * uncontended; if another CPU grabs it in between, printk returns -1
+         * and the record waits for the next tick rather than being lost.
+         */
+        if (__atomic_load_n(&raw_lock, __ATOMIC_ACQUIRE) != 0U)
+            return;
+
+        // Re-entrancy guard. The drain calls printk, which on failure appends
+        // its own contention record; without this a nested drain could chase
+        // records it is itself producing.
+        u32 expected = 0U;
+        if (!__atomic_compare_exchange_n(&drain_active, &expected, 1U, false, __ATOMIC_ACQUIRE,
+                                         __ATOMIC_RELAXED))
+            return;
+
+        const u64 produced =
+            __atomic_load_n(&kernel::emergency::deferred_sequence, __ATOMIC_ACQUIRE);
+        u64 cursor = drained;
+
+        /*
+         * Records older than the ring depth are gone. Say how many rather
+         * than silently resuming at the oldest survivor: a gap in the record
+         * stream is itself a finding, and one that only appears under exactly
+         * the load that makes the records matter.
+         */
+        if (produced - cursor > kernel::emergency::deferred_capacity) {
+            drain_lost += produced - cursor - kernel::emergency::deferred_capacity;
+            cursor = produced - kernel::emergency::deferred_capacity;
+        }
+
+        const u64 limit = (produced - cursor > budget) ? cursor + budget : produced;
+        while (cursor < limit) {
+            const u64 wanted = cursor + 1U;
+            const kernel::emergency::record& slot =
+                kernel::emergency::deferred[wanted % kernel::emergency::deferred_capacity];
+
+            if (__atomic_load_n(&slot.sequence, __ATOMIC_ACQUIRE) != wanted) {
+                // Reserved by a concurrent append but not yet published.
+                break;
+            }
+
+            const kernel::emergency::event kind = slot.kind;
+            const auto cpu = static_cast<unsigned>(slot.cpu);
+            const u64 argument0 = slot.argument[0];
+            const u64 argument1 = slot.argument[1];
+            const u64 argument2 = slot.argument[2];
+            const u64 argument3 = slot.argument[3];
+
+            /*
+             * Re-read the sequence after copying. A wrap that landed on this
+             * slot mid-copy would otherwise be reported as a real record with
+             * fields from two different events spliced together, which is
+             * worse than reporting nothing.
+             */
+            if (__atomic_load_n(&slot.sequence, __ATOMIC_ACQUIRE) != wanted) {
+                ++drain_lost;
+                ++cursor;
+                continue;
+            }
+
+            const int written =
+                printk("[DEFER] cpu=%u seq=%llu kind=%s a0=0x%llx a1=0x%llx a2=0x%llx "
+                       "a3=0x%llx\n",
+                       cpu, static_cast<unsigned long long>(wanted), event_name(kind),
+                       static_cast<unsigned long long>(argument0),
+                       static_cast<unsigned long long>(argument1),
+                       static_cast<unsigned long long>(argument2),
+                       static_cast<unsigned long long>(argument3));
+
+            /*
+             * The console was busy. Leave the cursor where it is so the
+             * record is retried rather than dropped -- dropping it here would
+             * reproduce the exact bug this drain exists to fix.
+             */
+            if (written < 0)
+                break;
+
+            ++cursor;
+        }
+
+        drained = cursor;
+
+        /*
+         * Report the gap once per change rather than per lost record: the
+         * condition that loses records is the one where console bandwidth is
+         * already the bottleneck, so a line per loss would deepen the hole it
+         * is reporting.
+         */
+        if (drain_lost != drain_lost_reported) {
+            if (printk("[DEFER] lost=%llu\n", static_cast<unsigned long long>(drain_lost)) >= 0)
+                drain_lost_reported = drain_lost;
+        }
+
+        __atomic_store_n(&drain_active, 0U, __ATOMIC_RELEASE);
+    }
 } // namespace sys::printk
 
 #define printk(...) ::sys::printk::printk(__VA_ARGS__)

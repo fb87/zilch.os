@@ -71,6 +71,13 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
                 if (sys::arch::cpu::current_id() == 0U) {
                     sys::kernel::interrupt::recover_stormed(
                         sys::platform::timer::ticks(sys::arch::cpu::current_id()));
+                    /*
+                     * Same reasoning as the sweep above, and the same CPU:
+                     * the drain reads every CPU's ring, so running it on four
+                     * of them would just be four CPUs contending for one
+                     * console lock to print the same records (OBS-003).
+                     */
+                    sys::printk::drain_deferred();
                 }
                 if (ticks == 1U && sys::arch::cpu::current_id() == 0U) {
                     sys::printk::defer(sys::kernel::emergency::event::irq,

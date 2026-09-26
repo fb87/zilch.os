@@ -62,6 +62,49 @@ namespace sys::kernel::emergency
     inline volatile u64 next_sequence[cpu_count]{};
     inline crash_record preserved_crash __attribute__((section(".noinit")));
 
+    /*
+     * Records that a human is meant to read back asynchronously, as opposed
+     * to the high-volume trace kinds that exist to be walked in a debugger
+     * after the fact (OBS-003).
+     */
+    [[nodiscard]] inline bool reportable(event kind) noexcept {
+        switch (kind) {
+            case event::printk_contention:
+            case event::fatal_exception:
+            case event::stack_corruption:
+            case event::user_fault:
+            case event::device_assign:
+            case event::device_revoke:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /*
+     * A dedicated ring for the reportable kinds, separate from the per-CPU
+     * trace buffers above (OBS-003).
+     *
+     * The per-CPU rings cannot carry these. They are 32 records deep and, in
+     * a CONFIG_TRACE build, every IRQ, IPC and context switch lands in them:
+     * measured, they wrap several hundred times per second, which is orders
+     * of magnitude faster than a drain running once per timer tick and
+     * limited by console bandwidth can consume. Draining them directly was
+     * tried and reported nothing but its own loss counter -- a printk
+     * contention record was always already overwritten by trace traffic
+     * before anything could format it.
+     *
+     * Mirroring the reportable kinds here costs a predictable-branch and a
+     * handful of stores on paths that are rare by construction (a dropped
+     * console line, a fault, a device handover), and gives the drain a ring
+     * whose occupancy tracks diagnostics rather than trace volume. One ring
+     * rather than one per CPU, so the sequence numbers order the records
+     * against each other across CPUs.
+     */
+    inline constexpr u32 deferred_capacity = 64U;
+    inline record deferred[deferred_capacity]{};
+    inline volatile u64 deferred_sequence{};
+
     inline void append(event kind, u64 argument0 = 0U, u64 argument1 = 0U, u64 argument2 = 0U,
                        u64 argument3 = 0U, u64 argument4 = 0U) noexcept {
         const cpu_id_t cpu = arch::cpu::current_id();
@@ -79,6 +122,22 @@ namespace sys::kernel::emergency
         destination.argument[3] = argument3;
         destination.argument[4] = argument4;
         __atomic_store_n(&destination.sequence, sequence, __ATOMIC_RELEASE);
+
+        if (!reportable(kind))
+            return;
+
+        const u64 slot = __atomic_fetch_add(&deferred_sequence, 1U, __ATOMIC_RELAXED) + 1U;
+        record& mirror = deferred[slot % deferred_capacity];
+        mirror.version = record_format_version;
+        mirror.reserved = 0U;
+        mirror.kind = kind;
+        mirror.cpu = cpu;
+        mirror.argument[0] = argument0;
+        mirror.argument[1] = argument1;
+        mirror.argument[2] = argument2;
+        mirror.argument[3] = argument3;
+        mirror.argument[4] = argument4;
+        __atomic_store_n(&mirror.sequence, slot, __ATOMIC_RELEASE);
     }
 
     inline void trace(event kind, u64 argument0 = 0U, u64 argument1 = 0U, u64 argument2 = 0U,
