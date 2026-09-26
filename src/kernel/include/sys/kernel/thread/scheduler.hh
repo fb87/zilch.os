@@ -2160,8 +2160,17 @@ namespace sys::kernel::thread
         thread& value = current();
         ++value.faults;
         verification::mark_fault_ipc();
-        emergency::trace(emergency::event::user_fault, value.id, syndrome, fault_address,
-                         frame.instruction_pointer);
+        /*
+         * append(), not trace(): a user fault is exactly what a
+         * post-mortem needs, and trace() compiles away under CONFIG_TRACE=0
+         * -- so a release build recorded nothing asynchronously at all, and
+         * the only account of a fault was whatever its pager chose to do
+         * synchronously (USR-037). Faults are exceptional, and the ring is
+         * bounded per CPU, so a fault storm costs at most the eviction of
+         * older records rather than unbounded work.
+         */
+        emergency::append(emergency::event::user_fault, value.id, syndrome, fault_address,
+                          frame.instruction_pointer);
 #if CONFIG_VERBOSE_DIAGNOSTICS
         pr_warn("user fault delivered thread=%llu cpu=%u esr=%llx far=%llx pc=%llx pager=%llu\n",
                 static_cast<unsigned long long>(value.id), static_cast<unsigned int>(cpu),
