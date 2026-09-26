@@ -34,7 +34,15 @@ namespace sys::kernel::tests::device_quiesce
         constexpr u32 offset = 0x070U; // virtio Status
         constexpr u32 stride = 0x200U; // one transport
         constexpr u32 count = 8U;      // every transport in a granted page
-        constexpr u32 sentinel = 0xa5a5a5a5U;
+        /*
+         * A fully negotiated virtio status: ACKNOWLEDGE|DRIVER|FEATURES_OK|
+         * DRIVER_OK. This is the state that leaks (DEV-017) -- a transport
+         * left here is one the device considers owned and driveable, with
+         * its virtqueue live. Using the real bit pattern rather than an
+         * arbitrary sentinel so the "before" state is the one that actually
+         * occurs when a driver dies mid-service.
+         */
+        constexpr u32 negotiated = 1U | 2U | 8U | 4U;
         constexpr u32 quiesced = 0U;
 
         const auto word_at = [](u32 byte_offset) noexcept -> volatile u32& {
@@ -42,13 +50,13 @@ namespace sys::kernel::tests::device_quiesce
         };
 
         /*
-         * Poison every target first. Reading back zero is only evidence if
+         * Seed every target first. Reading back zero is only evidence if
          * something other than zero was there to begin with -- the page is
          * statically zero-initialised, so without this the test would pass
          * just as well if the write loop never ran at all.
          */
         for (u32 index = 0U; index < count; ++index)
-            word_at(offset + index * stride) = sentinel;
+            word_at(offset + index * stride) = negotiated;
 
         memory::frame probe{};
         probe.physical_address = reinterpret_cast<paddr_t>(&scratch_page[0]);
@@ -113,7 +121,7 @@ namespace sys::kernel::tests::device_quiesce
         }
 
         pr_info("[TEST] name=device_revocation_quiesce result=PASS transports=%u stride=0x%x "
-                "neighbours_untouched=1 rejected=%u\n",
+                "next_owner_sees_reset=1 neighbours_untouched=1 rejected=%u\n",
                 count, stride, static_cast<u32>(sizeof(rejected) / sizeof(rejected[0])));
         return error_t::success;
     }
