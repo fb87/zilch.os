@@ -84,15 +84,12 @@ run_profile() {
     local make_args=(ARCH="$arch" PLATFORM="$platform" BUILD_VARIANT="$variant"
                      KCONFIG_DEFCONFIG="$repo_root/$defconfig")
 
-    # Force the Kconfig regeneration. mk/config.mk's rule depends on the
-    # defconfig as a FILE, not on which defconfig was selected, so pointing
-    # it at a different one does not invalidate an already-newer generated
-    # config -- the tree silently keeps whatever config it was last built
-    # with. Since this script deliberately builds several profiles into
-    # different trees, it has to drop the generated config each time.
-    local objtree="$repo_root/out/build/$arch/$platform/$variant"
-    rm -f "$objtree/.config" "$objtree/include/generated/auto.conf" \
-          "$objtree/include/generated/autoconf.h"
+    # No manual Kconfig cleanup needed: mk/config.mk records which defconfig
+    # produced the generated config and regenerates when the selection
+    # changes (PRD-020). This script used to drop those files by hand
+    # because the rule depended on the defconfig as a FILE rather than on
+    # which one was chosen, so a tree silently kept whatever profile it was
+    # last built with.
 
     if ! make "${make_args[@]}" all >"$log" 2>&1; then
         echo "  BUILD FAILED"
@@ -149,9 +146,6 @@ run_shell_profile() {
     local variant=release
     local make_args=(ARCH="$arch" PLATFORM="$platform" BUILD_VARIANT="$variant"
                      KCONFIG_DEFCONFIG="$repo_root/configs/release_defconfig")
-    local objtree="$repo_root/out/build/$arch/$platform/$variant"
-    rm -f "$objtree/.config" "$objtree/include/generated/auto.conf" \
-          "$objtree/include/generated/autoconf.h"
 
     if ! make "${make_args[@]}" all >"$log" 2>&1; then
         echo "  BUILD FAILED"

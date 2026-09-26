@@ -14,8 +14,15 @@ ifeq ($(filter $(BUILD_VARIANT),$(VALID_BUILD_VARIANTS)),)
 $(error BUILD_VARIANT=$(BUILD_VARIANT) is invalid; expected one of $(VALID_BUILD_VARIANTS))
 endif
 
-# development and certification remain transitional aliases for debug until CI
-# and historical commands migrate to explicit Kconfig defconfigs.
+# BUILD_VARIANT names an OUTPUT TREE, not a profile. Which profile is built
+# is decided solely by the selected defconfig -- guest_defconfig is a release
+# build despite smoke.sh placing it in the `development` tree, and that is
+# fine precisely because the variant carries no profile meaning.
+#
+# BUILD_PROFILE survives only to pick a DEFAULT defconfig when none is given,
+# so `make debug` still means configs/debug_defconfig. It is a convenience
+# mapping rather than a competing mechanism, now that selecting a different
+# defconfig reliably regenerates the config (see KCONFIG_STAMP below).
 BUILD_PROFILE ?= $(if $(filter release,$(BUILD_VARIANT)),release,debug)
 VALID_BUILD_PROFILES := debug release
 ifeq ($(filter $(BUILD_PROFILE),$(VALID_BUILD_PROFILES)),)
@@ -50,9 +57,28 @@ KCONFIG_AUTO_CONF := $(OBJTREE)/include/generated/auto.conf
 KCONFIG_AUTOCONF_H := $(OBJTREE)/include/generated/autoconf.h
 KCONFIG_SOURCES := $(SRCTREE)/Kconfig $(SRCTREE)/src/kernel/Kconfig $(SRCTREE)/src/user/Kconfig $(SRCTREE)/samples/guests/Kconfig
 
-$(KCONFIG_CONFIG) $(KCONFIG_AUTO_CONF) $(KCONFIG_AUTOCONF_H): $(KCONFIG_SOURCES) $(KCONFIG_DEFCONFIG) $(SRCTREE)/tools/config/generate.py
+# Which defconfig produced the generated config, recorded so that SELECTING a
+# different one regenerates it.
+#
+# The rule below depends on $(KCONFIG_DEFCONFIG) as a FILE, so pointing it at
+# a different defconfig does not invalidate an already-newer generated config
+# -- the tree silently keeps whatever profile it was last built with. That is
+# not hypothetical: building a tree with configs/release_defconfig and then
+# rebuilding it with configs/debug_defconfig left CONFIG_TESTS unset, and
+# tools/verification/smoke.sh carries a manual rm of the generated files to
+# work around exactly this. The stamp is rewritten only when the selection
+# actually changes, so its timestamp moves on a switch and on nothing else.
+KCONFIG_STAMP := $(OBJTREE)/include/generated/defconfig.stamp
+
+$(KCONFIG_CONFIG) $(KCONFIG_AUTO_CONF) $(KCONFIG_AUTOCONF_H): $(KCONFIG_SOURCES) $(KCONFIG_DEFCONFIG) $(KCONFIG_STAMP) $(SRCTREE)/tools/config/generate.py
 	@python3 $(SRCTREE)/tools/config/generate.py --root $(SRCTREE) --defconfig $(KCONFIG_DEFCONFIG) \
 		--config $(KCONFIG_CONFIG) --auto-conf $(KCONFIG_AUTO_CONF) --autoconf-h $(KCONFIG_AUTOCONF_H)
+
+$(KCONFIG_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@printf "%s\n" "$(KCONFIG_DEFCONFIG)" > $@.new
+	@cmp -s $@.new $@ || mv $@.new $@
+	@rm -f $@.new
 
 -include $(KCONFIG_AUTO_CONF)
 
