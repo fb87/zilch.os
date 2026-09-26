@@ -12,6 +12,7 @@
 #include <sys/platform/interrupt.hh>
 #include <sys/platform/timer.hh>
 #if CONFIG_TESTS
+#include <sys/kernel/tests/ipc/lifecycle_race.hh>
 #include <sys/kernel/tests/memory/revoke_race.hh>
 #endif
 
@@ -104,6 +105,7 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             // Same work lane as the SMP job above, and inert unless that test
             // has armed it.
             sys::kernel::tests::revoke_race::service_job(sys::arch::cpu::current_id());
+            sys::kernel::tests::lifecycle_race::service_job(sys::arch::cpu::current_id());
 #endif
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
