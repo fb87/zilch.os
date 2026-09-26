@@ -42,6 +42,7 @@
 #include <sys/kernel/tests/interrupt/device_audit.hh>
 #include <sys/kernel/tests/memory/device_quiesce.hh>
 #include <sys/kernel/tests/ipc/lifecycle_race.hh>
+#include <sys/kernel/tests/memory/allocator_race.hh>
 #include <sys/kernel/tests/memory/revoke_race.hh>
 #include <sys/kernel/tests/observability/deferred_drain.hh>
 #include <sys/kernel/tests/memory/allocator_exhaustion.hh>
@@ -138,6 +139,9 @@ namespace sys::kernel::tests::self_test
         if (result != error_t::success)
             return result;
         result = tests::device_audit::run();
+        if (result != error_t::success)
+            return result;
+        result = tests::allocator_race::run();
         if (result != error_t::success)
             return result;
         result = tests::lifecycle_race::run();
