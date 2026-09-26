@@ -37,6 +37,28 @@ namespace sys::kernel::memory
         bool allocated{};
         bool device{};
         bool in_use{};
+        /*
+         * MMIO writes the kernel performs when this device frame is revoked,
+         * declared by whoever created the frame (DEV-004).
+         *
+         * The kernel has no business knowing what a virtio status register
+         * is, so it does not: the creator supplies offset, value, and a
+         * repeat, and the kernel only guarantees the writes happen on
+         * revocation even when the owning driver died without cleaning up.
+         * Mechanism here, device knowledge in userspace.
+         *
+         * The repeat exists because a granted page is not always one device.
+         * The virtio-mmio grant covers eight transports at 0x200 stride, and
+         * root cannot know which one is populated -- that is what the driver
+         * probes for and reports back, long after the frame was created. The
+         * whole page was granted to this one driver, so quiescing all eight
+         * is both correct and the only thing root can express up front.
+         */
+        bool quiesce_declared{};
+        u32 quiesce_offset{};
+        u32 quiesce_value{};
+        u32 quiesce_count{};
+        u32 quiesce_stride{};
         mapping_record mappings[maximum_mappings_per_frame]{};
     };
 

@@ -349,8 +349,19 @@ namespace sys::kernel::syscall
                 if (current.owner == nullptr)
                     result = error_t::denied;
                 else
-                    result = memory::create_device_frame(*current.owner,
-                                                         static_cast<capability_id_t>(a1), a2);
+                    /*
+                     * a3/a4/a5 declare the revocation quiesce (DEV-004):
+                     * offset, value, and a repeat packed as
+                     * count | (stride << 16). a5 == 0 means no quiesce is
+                     * declared -- an explicit encoding rather than inferring
+                     * it from a zero offset or value, because 0 is a
+                     * legitimate offset and 0 is exactly the value virtio
+                     * wants written to Status.
+                     */
+                    result = memory::create_device_frame(
+                        *current.owner, static_cast<capability_id_t>(a1), a2, a5 != 0U,
+                        static_cast<u32>(a3), static_cast<u32>(a4),
+                        static_cast<u32>(a5 & 0xffffU), static_cast<u32>((a5 >> 16U) & 0xffffU));
                 break;
             case abi::v1::control_operation::memory_resource_delegate: {
                 if (current.owner == nullptr) {

@@ -40,6 +40,7 @@
 #include <sys/kernel/tests/scheduling/configure_fuzz.hh>
 #include <sys/kernel/tests/hypervisor/virtual_irq_storm.hh>
 #include <sys/kernel/tests/interrupt/device_audit.hh>
+#include <sys/kernel/tests/memory/device_quiesce.hh>
 #include <sys/kernel/tests/observability/deferred_drain.hh>
 #include <sys/kernel/tests/memory/allocator_exhaustion.hh>
 #include <sys/kernel/tests/memory/fault_injection.hh>
@@ -135,6 +136,9 @@ namespace sys::kernel::tests::self_test
         if (result != error_t::success)
             return result;
         result = tests::device_audit::run();
+        if (result != error_t::success)
+            return result;
+        result = tests::device_quiesce::run(root);
         if (result != error_t::success)
             return result;
         result = tests::deferred_drain::run();

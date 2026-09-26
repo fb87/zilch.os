@@ -1103,10 +1103,33 @@ namespace sys::kernel::memory
     }
 
     [[nodiscard]] inline error_t create_device_frame(task::task& owner, capability_id_t destination,
-                                                     paddr_t address) noexcept {
+                                                     paddr_t address, bool quiesce_declared = false,
+                                                     u32 quiesce_offset = 0U,
+                                                     u32 quiesce_value = 0U,
+                                                     u32 quiesce_count = 0U,
+                                                     u32 quiesce_stride = 0U) noexcept {
         if (!owner.root || destination >= capability::cspace_slot_count ||
             (address & (page_size - 1U)) != 0U || !platform::memory::valid_device_page(address))
             return error_t::denied;
+        /*
+         * Every declared write must land inside the granted page and be
+         * naturally aligned. The kernel performs these with full privilege
+         * on a path the owning driver cannot influence, so the bounds are
+         * checked once here rather than trusted at revocation: unchecked,
+         * device_frame_create would be an arbitrary-kernel-write primitive
+         * for anyone permitted to create frames. Checked against the last
+         * write rather than the first, and with the multiplication done in
+         * u64, so a large count or stride cannot wrap past the limit.
+         */
+        if (quiesce_declared) {
+            if (quiesce_count == 0U || (quiesce_offset & 3U) != 0U || (quiesce_stride & 3U) != 0U)
+                return error_t::invalid_argument;
+            const u64 last = static_cast<u64>(quiesce_offset) +
+                             static_cast<u64>(quiesce_count - 1U) *
+                                 static_cast<u64>(quiesce_stride);
+            if (last + sizeof(u32) > page_size)
+                return error_t::invalid_argument;
+        }
         /*
          * Without this, two different callers could both be granted a
          * capability to the same physical MMIO page with no coordination
@@ -1138,6 +1161,11 @@ namespace sys::kernel::memory
             target->mapping_count = 0U;
             target->allocated = true;
             target->device = true;
+            target->quiesce_declared = quiesce_declared;
+            target->quiesce_offset = quiesce_offset;
+            target->quiesce_value = quiesce_value;
+            target->quiesce_count = quiesce_count;
+            target->quiesce_stride = quiesce_stride;
             for (auto& mapping : target->mappings)
                 mapping = {};
             const capability::rights_t rights{static_cast<u32>(capability::right_t::read) |
@@ -1157,6 +1185,11 @@ namespace sys::kernel::memory
             target->mapping_count = 0U;
             target->allocated = false;
             target->device = false;
+            target->quiesce_declared = false;
+            target->quiesce_offset = 0U;
+            target->quiesce_value = 0U;
+            target->quiesce_count = 0U;
+            target->quiesce_stride = 0U;
             for (auto& mapping : target->mappings)
                 mapping = {};
             __atomic_store_n(&target->in_use, false, __ATOMIC_RELEASE);
@@ -1816,6 +1849,35 @@ namespace sys::kernel::memory
                 --source.mapping_count;
         }
         unlock_mappings();
+
+        /*
+         * Quiesce the device itself, now that nobody can reach it (DEV-004).
+         *
+         * Unmapping stops the old owner from NAMING the device; it does not
+         * stop the device. A virtio transport left with DRIVER_OK set and a
+         * programmed virtqueue keeps its DMA addresses -- and those point at
+         * pages that reclaim_task_memory() has just returned to the free
+         * pool, so a device that completes one more request writes into
+         * whatever is allocated there next. Each incoming driver does reset
+         * its own device during bring-up, which is why this has never been
+         * seen, but that is the new owner protecting itself rather than the
+         * system guaranteeing a clean device, and it does nothing about the
+         * window in between or about a device left live with no owner at all.
+         *
+         * After the unmap, not before: the old owner must not be able to
+         * re-arm the device between the write and losing its mapping.
+         */
+        if (source.device && source.quiesce_declared) {
+            for (u32 index = 0U; index < source.quiesce_count; ++index) {
+                auto* const target = reinterpret_cast<volatile u32*>(
+                    static_cast<uintptr_t>(source.physical_address) + source.quiesce_offset +
+                    static_cast<uintptr_t>(index) * source.quiesce_stride);
+                *target = source.quiesce_value;
+            }
+            arch::cpu::full_barrier();
+            emergency::append(emergency::event::device_revoke, source.physical_address,
+                              source.quiesce_offset, source.quiesce_value, source.quiesce_count);
+        }
     }
 
     [[nodiscard]] inline bool mapping_database_valid() noexcept {

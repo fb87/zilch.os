@@ -354,8 +354,20 @@ namespace sys::root_graph
     // work -- root's device frame and IRQ capabilities outlive the driver.
     [[nodiscard]] inline bool create_serial_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
+        /*
+         * Declare the revocation quiesce (DEV-004): mask every PL011
+         * interrupt at IMSC. The kernel already drops the interrupt binding
+         * on revocation, but a UART left with RXIM set keeps asserting its
+         * line into a GIC that no longer has an owner for it. The incoming
+         * driver's configure_uart() rewrites IMSC anyway; the point of doing
+         * it here is that it also happens when the driver died and there is
+         * no incoming one yet. Repeat of 1 -- one device in this page.
+         */
+        constexpr word_t uart_imsc_offset = 0x38U;
+        constexpr word_t quiesce_once = 1U; // count 1, stride 0
         if (control(abi::v1::control_operation::device_frame_create,
-                    serial_uart_root_frame_selector, console_uart_physical_address) != success)
+                    serial_uart_root_frame_selector, console_uart_physical_address,
+                    uart_imsc_offset, 0U, quiesce_once) != success)
             return false;
         return control(abi::v1::control_operation::interrupt_create, serial_irq_root_selector,
                        console_irq, 0U) == success;
@@ -439,8 +451,37 @@ namespace sys::root_graph
      */
     [[nodiscard]] inline bool create_block_resources() noexcept {
         const word_t success = static_cast<word_t>(error_t::success);
+        /*
+         * Declare the revocation quiesce (DEV-004): write 0 to Status on
+         * every transport in the granted page, which per the virtio spec
+         * resets the device and abandons its virtqueue.
+         *
+         * This is the case that matters. A virtio transport left with
+         * DRIVER_OK and a programmed queue keeps the DMA addresses its
+         * driver gave it -- and reclaim_task_memory() has just returned
+         * those pages to the free pool, so one more completed request writes
+         * into whatever gets allocated there next. The incoming driver
+         * resets the device during bring-up, which is why this has never
+         * bitten, but that is the new owner protecting itself, not the
+         * system guaranteeing a clean device, and it does nothing about the
+         * window in between or a device left live with no owner at all.
+         *
+         * All eight transports because root cannot know which one is
+         * populated: that is what the driver probes for and reports back,
+         * long after this frame was created. The whole page belongs to this
+         * one driver, and a write to an unpopulated transport is harmless.
+         */
+        constexpr word_t virtio_status_offset = abi::v1::virtio_mmio::status;
+        // Restated locally, like block_mmio_physical_address above: the ABI
+        // header carries the register layout, addresses and geometry stay
+        // with whoever grants the page.
+        constexpr word_t virtio_transports_per_page = 8U;
+        constexpr word_t virtio_transport_stride = 0x200U;
+        constexpr word_t virtio_quiesce =
+            virtio_transports_per_page | (virtio_transport_stride << 16U);
         if (control(abi::v1::control_operation::device_frame_create, block_mmio_root_frame_selector,
-                    block_mmio_physical_address) != success)
+                    block_mmio_physical_address, virtio_status_offset, 0U,
+                    virtio_quiesce) != success)
             return false;
         // Third argument non-zero selects edge triggering, matching the
         // device tree's <0 47 1>.

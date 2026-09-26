@@ -136,6 +136,16 @@ namespace sys::arch
                                              attr_device | ap_el1_rw | pxn | uxn;
             l2.entry[0x09000000ULL >> 21U] = 0x09000000ULL | descriptor_valid | access_flag |
                                              attr_device | ap_el1_rw | pxn | uxn;
+            /*
+             * The virtio-mmio window. The kernel drives neither of the
+             * devices in it, but it must be able to perform the declared
+             * quiesce write when a device frame there is revoked (DEV-004) --
+             * the whole point of that write is that it still happens when the
+             * owning driver has died and cannot do it itself. PXN|UXN and
+             * EL1-only, like the two windows above.
+             */
+            l2.entry[0x0a000000ULL >> 21U] = 0x0a000000ULL | descriptor_valid | access_flag |
+                                             attr_device | ap_el1_rw | pxn | uxn;
         }
 
         [[nodiscard]] inline bool kernel_stack_guards_valid() noexcept {
