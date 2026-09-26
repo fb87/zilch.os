@@ -211,12 +211,36 @@ namespace sys::kernel::ipc
         }
         value.retiring = true;
         const object::reference_t reference = object::reference(value.object);
-        capability::revoke_reference_locked(reference);
         authority_transaction.release();
         unlock(value);
+
+        /*
+         * Unregister BEFORE revoking the capability, and undo `retiring` if
+         * it fails. See notification::destroy() for the full reasoning; the
+         * endpoint case is the worse of the two, because the old order left
+         * a failed teardown with the capability already revoked AND
+         * `retiring` latched on. Nothing could then name the endpoint to
+         * retry, and even if something could, the retry would return busy
+         * forever on the flag it set itself -- an endpoint slot lost for
+         * the rest of the boot.
+         *
+         * `retiring` is still set before the attempt on purpose: it stops
+         * new senders arriving during teardown, which is exactly what it is
+         * for. Clearing it again on failure is the compensation that makes
+         * the whole operation leave no trace when it does not complete.
+         */
         result = object::unregister_object(reference);
-        if (result != error_t::success)
+        if (result != error_t::success) {
+            lock(value);
+            value.retiring = false;
+            unlock(value);
             return result;
+        }
+
+        {
+            capability::authority_guard revoke_transaction{};
+            capability::revoke_reference_locked(reference);
+        }
         value.object = {};
         initialize(value);
         __atomic_store_n(&value.allocated, 0U, __ATOMIC_RELEASE);

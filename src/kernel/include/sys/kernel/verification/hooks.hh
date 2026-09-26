@@ -27,7 +27,8 @@ namespace sys::kernel::verification
         capability_install = 1U,
         capability_mint = 3U,
         page_allocation = 2U,
-        site_count = 4U,
+        object_unregistration = 4U,
+        site_count = 5U,
     };
 
     inline void configure_failure(injection_site, u32) noexcept {}

@@ -106,25 +106,61 @@ namespace sys::kernel::notification
     }
 
     [[nodiscard]] inline error_t destroy(task::task& owner, capability_id_t selector) noexcept {
-        capability::authority_guard authority_transaction{};
-        object::header_t* header = nullptr;
-        error_t result = capability::lookup(owner.cspace, selector, object::type_t::notification,
-                                            capability::right_t::control, header);
+        notification* target = nullptr;
+        object::reference_t reference{};
+        {
+            capability::authority_guard authority_transaction{};
+            object::header_t* header = nullptr;
+            const error_t looked_up = capability::lookup(
+                owner.cspace, selector, object::type_t::notification,
+                capability::right_t::control, header);
+            if (looked_up != error_t::success)
+                return looked_up;
+            auto& value = *reinterpret_cast<notification*>(header);
+            if (&value < dynamic_notifications ||
+                &value >= dynamic_notifications + dynamic_notification_count)
+                return error_t::denied;
+            target = &value;
+            reference = object::reference(value.object);
+        }
+
+        /*
+         * Unregister BEFORE revoking the capability, not after.
+         *
+         * The other order leaks the notification outright whenever
+         * unregister fails, which it genuinely can -- it returns busy when
+         * another destroyer wins the table exchange. The capability was
+         * already gone by then, so nothing could name the object to try
+         * again, while the object stayed registered and `allocated`: a
+         * dynamic pool slot lost for the lifetime of the boot. Found by
+         * arming the teardown injection site (TST-024) at the first attempt.
+         *
+         * Reversed, a failed unregister changes nothing at all and the
+         * caller's retry works. Unregistering first is safe because the
+         * object table is generation-checked: a capability naming a
+         * departed object fails closed on use, so the window before the
+         * revoke grants no authority. And the revoke only scans cspaces
+         * comparing references -- it never resolves the object -- so it
+         * does not care that the object is already gone.
+         *
+         * Split into two authority transactions rather than one because
+         * unregister_object() calls synchronize_readers() and takes the
+         * table lock; the original code released the authority lock before
+         * it for exactly that reason, and the ordering constraint has not
+         * changed.
+         */
+        const error_t result = object::unregister_object(reference);
         if (result != error_t::success)
             return result;
-        auto& value = *reinterpret_cast<notification*>(header);
-        if (&value < dynamic_notifications ||
-            &value >= dynamic_notifications + dynamic_notification_count)
-            return error_t::denied;
-        const object::reference_t reference = object::reference(value.object);
-        capability::revoke_reference_locked(reference);
-        authority_transaction.release();
-        result = object::unregister_object(reference);
-        if (result != error_t::success)
-            return result;
-        value.object = {};
-        initialize(value);
-        __atomic_store_n(&value.allocated, 0U, __ATOMIC_RELEASE);
+
+        {
+            capability::authority_guard authority_transaction{};
+            capability::revoke_reference_locked(reference);
+        }
+
+        target->object = {};
+        initialize(*target);
+        __atomic_store_n(&target->allocated, 0U, __ATOMIC_RELEASE);
         return error_t::success;
     }
 

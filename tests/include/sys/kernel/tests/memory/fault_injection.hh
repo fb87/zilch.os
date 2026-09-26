@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/kernel/capability/cspace.hh>
+#include <sys/kernel/ipc/endpoint.hh>
 #include <sys/kernel/notification/notification.hh>
 #include <sys/kernel/object/table.hh>
 #include <sys/kernel/printk.hh>
@@ -96,8 +97,84 @@ namespace sys::kernel::tests::fault_injection
         if (capability::slot_at(root.cspace, probe_selector).object.type != object::type_t::none)
             return error_t::invalid_argument;
 
+        /*
+         * Teardown injection (TST-024), which the creation sites above do
+         * not reach.
+         *
+         * Teardown is the half nobody writes a recovery path for: creation
+         * failing is expected and handled, destruction failing is usually
+         * assumed away, and the object table's unregister genuinely can
+         * return busy when a concurrent destroyer wins the exchange. What
+         * must hold is that a failed teardown leaves the object still
+         * whole -- still registered, still accounted, still destroyable --
+         * rather than half-removed and unreachable, which is a permanent
+         * leak of a bounded pool slot that nothing can ever reclaim.
+         */
+        const u64 live_baseline = object::accounting.live[type_index];
+        const u32 free_baseline = memory::free_pages;
+
+        if (notification::create(root, probe_selector) != error_t::success)
+            return error_t::invalid_argument;
+
+        verification::configure_failure(injection_site::object_unregistration, 1U);
+        const error_t torn = notification::destroy(root, probe_selector);
+        verification::configure_failure(injection_site::object_unregistration, 0U);
+
+        if (torn == error_t::success)
+            return error_t::invalid_argument; // injection did not take
+        if (object::accounting.live[type_index] != live_baseline + 1U)
+            return error_t::invalid_argument; // object lost while destruction failed
+
+        /*
+         * The retry is the whole point. An object whose failed teardown
+         * left it unreachable would fail here, and that is the difference
+         * between a transient error and a leaked pool slot.
+         */
+        if (notification::destroy(root, probe_selector) != error_t::success)
+            return error_t::invalid_argument;
+        if (object::accounting.live[type_index] != live_baseline)
+            return error_t::invalid_argument;
+        if (capability::slot_at(root.cspace, probe_selector).object.type != object::type_t::none)
+            return error_t::invalid_argument;
+        if (memory::free_pages != free_baseline)
+            return error_t::invalid_argument;
+
+        /*
+         * The endpoint path had the same defect and one more on top: it
+         * latches `retiring` before tearing down, so the old order left a
+         * failed teardown with the capability revoked AND the flag set --
+         * an endpoint that could not be named, and would have answered
+         * `busy` forever to the retry even if it could. Worth its own case
+         * rather than trusting the notification result to generalise,
+         * because the compensating rollback of that flag is unique to it.
+         */
+        const auto endpoint_index = static_cast<u32>(object::type_t::endpoint);
+        const u64 endpoints_baseline = object::accounting.live[endpoint_index];
+
+        if (::sys::kernel::ipc::create(root, probe_selector) != error_t::success)
+            return error_t::invalid_argument;
+
+        verification::configure_failure(injection_site::object_unregistration, 1U);
+        const error_t endpoint_torn = ::sys::kernel::ipc::destroy(root, probe_selector);
+        verification::configure_failure(injection_site::object_unregistration, 0U);
+
+        if (endpoint_torn == error_t::success)
+            return error_t::invalid_argument; // injection did not take
+        if (object::accounting.live[endpoint_index] != endpoints_baseline + 1U)
+            return error_t::invalid_argument;
+
+        // Must recover completely: a latched `retiring` would surface here
+        // as busy rather than success.
+        if (::sys::kernel::ipc::destroy(root, probe_selector) != error_t::success)
+            return error_t::invalid_argument;
+        if (object::accounting.live[endpoint_index] != endpoints_baseline)
+            return error_t::invalid_argument;
+        if (capability::slot_at(root.cspace, probe_selector).object.type != object::type_t::none)
+            return error_t::invalid_argument;
+
         pr_info("[TEST] name=fault_injection_rollback result=PASS sites=%u targeted=1 "
-                "no_object_leak=1 no_capability_leak=1 no_page_leak=1 recovers=1\n",
+                "no_object_leak=1 no_capability_leak=1 no_page_leak=1 recovers=1 "
+                "teardown_injected=2 teardown_retry_converges=2\n",
                 injected);
         return error_t::success;
     }

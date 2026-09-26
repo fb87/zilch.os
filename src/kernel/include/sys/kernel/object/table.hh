@@ -248,6 +248,16 @@ namespace sys::kernel::object
         header_t* expected = resolve(reference);
         if (expected == nullptr)
             return error_t::not_found;
+        /*
+         * Teardown injection (TST-024). Placed before the table removal, so
+         * an injected failure models the real one this path already
+         * returns -- a concurrent destroyer winning the exchange below --
+         * and leaves the object still registered rather than half-removed.
+         * A caller that treats teardown as infallible shows up here as a
+         * leak that its own retry cannot clear.
+         */
+        if (verification::fail(verification::injection_site::object_unregistration))
+            return error_t::busy;
         if (!__atomic_compare_exchange_n(&slot.object, &expected, nullptr, false, __ATOMIC_ACQ_REL,
                                          __ATOMIC_ACQUIRE))
             return error_t::busy;

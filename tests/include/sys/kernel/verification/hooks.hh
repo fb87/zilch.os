@@ -45,7 +45,8 @@ namespace sys::kernel::verification
         capability_install = 1U,
         capability_mint = 3U,
         page_allocation = 2U,
-        site_count = 4U,
+        object_unregistration = 4U,
+        site_count = 5U,
     };
 
     inline volatile u32 injection_countdown[static_cast<u32>(injection_site::site_count)]{};
@@ -129,7 +130,8 @@ namespace sys::kernel::verification
         capability_install = 1U,
         page_allocation = 2U,
         capability_mint = 3U,
-        site_count = 4U,
+        object_unregistration = 4U,
+        site_count = 5U,
     };
     inline void configure_failure(injection_site, u32) noexcept {}
     [[nodiscard]] inline bool fail(injection_site) noexcept { return false; }
