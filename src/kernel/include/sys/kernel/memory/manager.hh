@@ -423,6 +423,12 @@ namespace sys::kernel::memory
 
     [[nodiscard]] inline error_t allocate_resource_page(resource& authority,
                                                         paddr_t& address) noexcept {
+        // TST-024: the out-of-memory path every allocating caller must
+        // already handle.
+        if (verification::fail(verification::injection_site::page_allocation)) {
+            unlock_allocator();
+            return error_t::no_memory;
+        }
         address = 0U;
         lock_allocator();
         for (u32 current = authority.extent_head; current != invalid_extent_index;

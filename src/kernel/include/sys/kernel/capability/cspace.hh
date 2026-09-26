@@ -367,6 +367,9 @@ namespace sys::kernel::capability
     [[nodiscard]] inline error_t install(cspace_t& cspace, capability_id_t selector,
                                          const object::reference_t& object,
                                          rights_t granted_rights) noexcept {
+        // TST-024: the occupied-slot / exhausted-derivation path.
+        if (verification::fail(verification::injection_site::capability_install))
+            return error_t::no_memory;
         lock_authority();
         const error_t result = install_locked(cspace, selector, object, granted_rights);
         unlock_authority();

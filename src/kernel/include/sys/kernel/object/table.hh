@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/kernel/verification/hooks.hh>
+
 #include <sys/arch/cpu.hh>
 #include <sys/kernel/lock/order.hh>
 #include <sys/kernel/object.hh>
@@ -203,6 +205,9 @@ namespace sys::kernel::object
     [[nodiscard]] inline error_t register_dynamic_object(header_t& object, type_t type) noexcept {
         if (type == type_t::none)
             return error_t::invalid_argument;
+        // TST-024: the table-full path, reachable on demand.
+        if (verification::fail(verification::injection_site::object_registration))
+            return error_t::no_memory;
         lock_table();
         for (object_id_t id = dynamic_id_base; id < table_capacity; ++id) {
             table_slot_t& slot = object_table[id];

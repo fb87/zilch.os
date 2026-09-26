@@ -31,6 +31,53 @@ namespace sys::kernel::verification
         }
     }
 
+    /*
+     * Fault-injection sites (TST-024). See the production header for why
+     * these name points that can already fail on their own.
+     *
+     * One countdown per site: configure_failure(site, n) makes the nth
+     * subsequent check at that site report a failure and then disarm, so a
+     * test injects exactly one failure into exactly one operation and the
+     * system is left armed for nothing afterwards.
+     */
+    enum class injection_site : u32 {
+        object_registration = 0U,
+        capability_install = 1U,
+        page_allocation = 2U,
+        site_count = 3U,
+    };
+
+    inline volatile u32 injection_countdown[static_cast<u32>(injection_site::site_count)]{};
+
+    inline void configure_failure(injection_site site, u32 countdown) noexcept {
+        const u32 index = static_cast<u32>(site);
+        if (index >= static_cast<u32>(injection_site::site_count))
+            return;
+        __atomic_store_n(&injection_countdown[index], countdown, __ATOMIC_RELEASE);
+    }
+
+    [[nodiscard]] inline bool fail(injection_site site) noexcept {
+        const u32 index = static_cast<u32>(site);
+        if (index >= static_cast<u32>(injection_site::site_count))
+            return false;
+        /*
+         * Relaxed for the unarmed probe, which is every call in practice.
+         * These sites sit on paths IPC transfer uses, and an acquire load
+         * (ldar) there was measurable against the certification latency
+         * bound. Nothing is ordered against an unarmed site by definition;
+         * the compare-exchange below still carries acquire-release for the
+         * arming thread.
+         */
+        u32 value = __atomic_load_n(&injection_countdown[index], __ATOMIC_RELAXED);
+        for (;;) {
+            if (value == 0U)
+                return false;
+            if (__atomic_compare_exchange_n(&injection_countdown[index], &value, value - 1U, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                return value == 1U;
+        }
+    }
+
     inline void report(const char* name, bool passed) noexcept {
         pr_info("[TEST] name=%s result=%s\n", name, passed ? "PASS" : "FAIL");
     }
@@ -76,5 +123,13 @@ namespace sys::kernel::verification
     inline void mark_bootstrap_self_tests(bool, bool, bool) noexcept {}
     inline void mark_fault_ipc() noexcept {}
     inline void report_final(u64, u64, bool) noexcept {}
+    enum class injection_site : u32 {
+        object_registration = 0U,
+        capability_install = 1U,
+        page_allocation = 2U,
+        site_count = 3U,
+    };
+    inline void configure_failure(injection_site, u32) noexcept {}
+    [[nodiscard]] inline bool fail(injection_site) noexcept { return false; }
 #endif
 } // namespace sys::kernel::verification

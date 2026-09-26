@@ -41,6 +41,7 @@
 #include <sys/kernel/tests/hypervisor/virtual_irq_storm.hh>
 #include <sys/kernel/tests/interrupt/device_audit.hh>
 #include <sys/kernel/tests/memory/allocator_exhaustion.hh>
+#include <sys/kernel/tests/memory/fault_injection.hh>
 #include <sys/kernel/tests/memory/physical_region_layout.hh>
 #include <sys/kernel/tests/object/generation.hh>
 #include <sys/kernel/tests/scheduling/donation.hh>
@@ -135,6 +136,9 @@ namespace sys::kernel::tests::self_test
         if (result != error_t::success)
             return result;
         result = tests::allocator_exhaustion::run();
+        if (result != error_t::success)
+            return result;
+        result = tests::fault_injection::run(root);
         if (result != error_t::success)
             return result;
 
