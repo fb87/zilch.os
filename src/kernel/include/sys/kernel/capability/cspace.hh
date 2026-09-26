@@ -626,6 +626,10 @@ namespace sys::kernel::capability
     [[nodiscard]] inline error_t
     mint_locked(cspace_t& destination, capability_id_t destination_selector, const cspace_t& source,
                 capability_id_t source_selector, rights_t rights_mask, badge_t badge) noexcept {
+        // TST-018: the exhausted-derivation path, reachable on demand so the
+        // batch rollback in transfer_capability can be driven.
+        if (verification::fail(verification::injection_site::capability_mint))
+            return error_t::no_memory;
         return derive_locked(destination, destination_selector, source, source_selector,
                              rights_mask, badge);
     }

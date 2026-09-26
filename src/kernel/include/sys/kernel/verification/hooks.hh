@@ -25,8 +25,9 @@ namespace sys::kernel::verification
     enum class injection_site : u32 {
         object_registration = 0U,
         capability_install = 1U,
+        capability_mint = 3U,
         page_allocation = 2U,
-        site_count = 3U,
+        site_count = 4U,
     };
 
     inline void configure_failure(injection_site, u32) noexcept {}
