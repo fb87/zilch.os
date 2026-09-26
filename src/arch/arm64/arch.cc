@@ -14,6 +14,7 @@
 #if CONFIG_TESTS
 #include <sys/kernel/tests/ipc/lifecycle_race.hh>
 #include <sys/kernel/tests/memory/allocator_race.hh>
+#include <sys/kernel/tests/scheduling/configure_race.hh>
 #include <sys/kernel/tests/memory/revoke_race.hh>
 #endif
 
@@ -108,6 +109,7 @@ extern "C" void sys_arm64_exception_handler(sys::arch::exception::frame_t* frame
             sys::kernel::tests::revoke_race::service_job(sys::arch::cpu::current_id());
             sys::kernel::tests::lifecycle_race::service_job(sys::arch::cpu::current_id());
             sys::kernel::tests::allocator_race::service_job(sys::arch::cpu::current_id());
+            sys::kernel::tests::configure_race::service_job(sys::arch::cpu::current_id());
 #endif
             if (sys::kernel::thread::user_execution_active[sys::arch::cpu::current_id()]) {
                 if (vector == 9U) {
